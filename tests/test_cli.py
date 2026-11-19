@@ -57,6 +57,8 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     assert r.returncode == 1 and "metrics.sum_radii" in json.loads(r.stdout)["problems"][0]
     r = cli("brief")
     assert r.returncode == 0 and r.stdout.startswith(f"# assay brief · {pid}")
+    r = cli("brief", "--budget", "0", "--json")
+    assert r.returncode == 1 and "budget" in json.loads(r.stdout)["problems"][0]
     lines = cli("export").stdout.strip().splitlines()
     assert json.loads(lines[0])["type"] == "project" and len(lines) > 5
     assert cli("exp", "record", "--bogus").returncode == 1

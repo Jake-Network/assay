@@ -167,15 +167,18 @@ def lead_round(lead: Ledger, rng: random.Random, n_workers: int) -> None:
 
 
 def verify_best(lead: Ledger) -> None:
-    top = lead.sql("SELECT dedup_key, config, seeds, authors, mean_value, std_value, best_value FROM v_tried"
-                   " WHERE ok_runs > 0 AND best_value IS NOT NULL ORDER BY best_value DESC LIMIT 1")["rows"]
+    top = lead.sql_internal(
+        "SELECT dedup_key, config FROM assay.v_tried WHERE project_id=%s AND code_ref=%s"
+        " AND best_value IS NOT NULL ORDER BY best_value DESC, dedup_key LIMIT 1",
+        (lead.project_id, CODE_REF))
     if not top:
         return
     t = top[0]
     exps = lead.sql_internal(
         "SELECT id, seed, author, primary_value FROM assay.experiments_valid WHERE project_id=%s AND dedup_key=%s"
-        " AND run_status='ok' ORDER BY created_at", (lead.project_id, t["dedup_key"]))
-    seeds = {e["seed"] for e in exps}
+        " AND run_status='ok' AND seed IS NOT NULL AND primary_value IS NOT NULL ORDER BY created_at, id",
+        (lead.project_id, t["dedup_key"]))
+    seeds = sorted({e["seed"] for e in exps})
     authors = {e["author"] for e in exps}
     if len(seeds) < 3 or len(authors) < 2:
         open_rep = lead.sql_internal(
@@ -189,17 +192,18 @@ def verify_best(lead: Ledger) -> None:
     lo = min(e["primary_value"] for e in exps)
     from assay.ledger import config_line
 
-    stmt = f"{config_line(t['config'])} reaches sum_radii >= {lo:.4f} on every seed"
+    tested = ", ".join(map(str, seeds))
+    stmt = f"{config_line(t['config'])}: minimum sum_radii {lo!r} across {len(seeds)} tested seeds ({tested})"
     c = lead.propose_claim("conclusion", stmt, evidence=[(e["id"], "supports") for e in exps], tags=["best"])
     status = lead.claim_status(c.id)
     ev = [e["id"] for e in exps]
     if status == "proposed":
-        lead.decide(c.id, "supported", "metric", f"{len(exps)} runs, min {lo:.4f}", ev)
+        lead.decide(c.id, "supported", "metric", f"{len(exps)} runs, observed minimum {lo!r}", ev)
         status = "supported"
     if status == "supported":
         lead.decide(c.id, "verified", "rerun",
-                    f"{len(seeds)} seeds by {len(authors)} agents, min {lo:.4f}, std {t['std_value'] or 0:.2g}", ev,
-                    oracle_detail={"seeds": sorted(seeds), "authors": sorted(authors)})
+                    f"Observed minimum {lo!r} across {len(seeds)} tested seeds by {len(authors)} agents", ev,
+                    oracle_detail={"seeds": seeds, "authors": sorted(authors)})
 
 
 def main() -> None:

@@ -4,6 +4,7 @@ All knowledge of the embedded server package lives in this module so it can be s
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import platform
@@ -16,6 +17,15 @@ logging.getLogger("pixeltable_pgserver").setLevel(logging.WARNING)
 
 EMBEDDED_PG_VERSION = 16
 EMBEDDED_DB = "assay"
+
+
+def notification_channel(project_id: str) -> str:
+    """Match the channel selected by the notify_insert trigger."""
+    slug = project_id.encode("utf-8")
+    if len(slug) <= 57:
+        return f"assay_{project_id}"
+    digest = hashlib.md5(slug, usedforsecurity=False).hexdigest()
+    return f"assay_:{digest}"
 
 
 def data_dir() -> Path:

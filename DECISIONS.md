@@ -28,12 +28,15 @@ One line per decision the spec left open or that changed during implementation. 
   `db/alembic/sql/`, so the schema stays reviewable SQL and there is no ORM. Alembic/SQLAlchemy are imported only
   when an upgrade is needed; the version check is plain SQL (keeps CLI and hook start-up fast). Forward-only. (P7, P10)
 - `task_events` has a `project_id` column (not in the spec DDL) so per-project views and export need no join.
-- Project ids are slugs (`[a-z0-9][a-z0-9_-]*`, CHECK constraint): they are used in NOTIFY channel names.
+- Project ids are slugs (`[a-z0-9][a-z0-9_-]*`, CHECK constraint). NOTIFY keeps the original channel for
+  ids up to 57 bytes and uses a hashed channel for longer ids.
 - **`assay_sql` isolation:** per-project copies of every `v_*` view live in schema `assay_q`, filtered by
   `current_setting('assay.project')`. `assay_reader` is a LOGIN role and `sql()` connects *as* it, so the session
   user is the reader and `set_config('role', ...)` cannot escalate. Fallback when a managed Postgres refuses that login
   (set `ASSAY_READER_PASSWORD`): `SET LOCAL ROLE` plus a keyword block list. Only SELECT/WITH/TABLE/VALUES are accepted.
-- **Canonical JSON:** integral floats become ints (`1.0` and `1` are the same config; JSON has one number type).
+  A server cursor bounds the rows sent to the SDK. The 4,000-token cap includes response metadata.
+- **Canonical JSON:** integral floats become ints when hashing (`1.0` and `1` match in dedup). Experiments
+  retain the original values that passed the project schema.
 - **Duplicate check includes invalidated experiments** (it is the unique index). Re-running a config after fixing an
   evaluator needs a different `code_ref` (include the evaluator version in it).
 - `is_new_best` is `outcome == 'improved'`, so it honours `improve_epsilon`; `v_best` ranks by raw value and can show
@@ -41,11 +44,12 @@ One line per decision the spec left open or that changed during implementation. 
 - **Claim graph** (§6.1 left gaps): `inconclusive` -> supported/refuted/superseded/retracted;
   `supported` -> inconclusive/superseded/retracted as well. `proposed -> verified` needs `force=True` (two decisions
   otherwise). Terminal: refuted, superseded, retracted.
-- **Rerun rule is enforced by the SDK** for `verified` with oracle `rerun`: evidence must contain valid ok experiments
-  with >= 3 distinct seeds and >= 2 distinct authors (project settings `rerun_min_seeds`, `rerun_min_authors`).
-  `force=True` bypasses. (P4)
-- `evidence_invalidated` = the claim has supporting experiment links and every one of them is invalidated. Support
-  counts exclude invalidated experiments.
+- **Rerun rule:** Verification needs valid successful runs of the same configuration and code as an original
+  run cited by a supported decision or support link. The defaults are three distinct seeds and two authors
+  (`rerun_min_seeds`, `rerun_min_authors`), including an independent author. Force applies only to graph transitions. (P4)
+- Claim transitions, experiment appends and invalidations share the project transaction lock. The latest
+  decision's evidence controls `evidence_invalidated`, with support links used when the decision has no evidence.
+  Support counts and research activity views exclude invalidated experiments.
 - Default identity is `ASSAY_AGENT`, else `human`. Unknown agent names are registered as workers on first use. (§7.4)
 - `heartbeat` succeeds while the caller is still `lease_owner` even if the lease has run out but nobody re-claimed
   the task. `complete_task` summary is capped at 1,000 characters.
@@ -54,7 +58,8 @@ One line per decision the spec left open or that changed during implementation. 
 ## Brief
 
 - Deterministic given (DB state, task, budget, agent, `now`); `compile_brief(..., now=, log=False)` is what the property
-  test uses. Minimum budget 300 tokens. Items are trimmed bottom-up, one at a time, until the text fits 105%.
+  test uses. Optional items are trimmed bottom-up and long header fields can be shortened to fit 105% of the
+  requested budget. Requests that cannot fit the required structure return a validation error.
 - "Already tried" with a task that has tags or `spec.config_space`: only items with relevance > 0 (§8.2 score); without
   them: most recent first, labelled "total".
 - "Since your last brief" lists other agents' records only (your own are not news).
@@ -67,10 +72,12 @@ One line per decision the spec left open or that changed during implementation. 
   (DNS-rebinding protection) stays on.
 - Plugin skills are namespaced: `/assay:assay-lead` when installed as a plugin, `/assay-lead` when copied by hand.
 - Worker subagent rules (§12.2) are written in English, as a faithful rendering of the spec's six rules.
-- **Hook** spools stdin to `~/.local/state/assay/spool/` and starts a detached processor, so the hook returns in
-  milliseconds (plus Python start-up) and always exits 0. Failed spool files are kept for inspection.
-- The hook captures any subagent's output that cites no existing `e:/c:/t:` id, when the session's cwd has an assay
-  project; it judges by content, not by identity (§12.3). Identical captures merge through the statement hash.
+- **Hook:** Queue entries are written atomically under `~/.local/state/assay/spool/` by database target. A detached
+  processor retries pending writes. Later hooks or `assay hook replay` resume processing after a longer outage.
+- The hook captures subagent output that cites no existing `e:/c:/t:` id. A hash of the full report provides
+  idempotence while preserving distinct reports with the same opening text.
+- stdio MCP advertises its tools before opening the project. The first ledger call opens the project, allowing
+  `assay init` in the same Claude Code session.
 
 ## Demo and bench
 
@@ -78,6 +85,9 @@ One line per decision the spec left open or that changed during implementation. 
   before summing, so the tolerance can never add score; anything larger is invalid.
 - The scripted swarm measures deadlines with `time.monotonic()`: the WSL wall clock jumped by tens of seconds during
   testing.
+- The demo's rerun claims report the observed minimum for the listed seeds.
 - `bench --dry` simulates agents with stated assumptions (drop rate 0.15, compaction at 3,000 tokens, 400 tokens per
   evaluation step). Its report is labelled as a pipeline check, not evidence. Real mode prints the `claude -p` commands
   unless `--execute` is passed (cost rule, §16.3).
+- Real runs use a common API dollar cap and separate project IDs. Evaluation receipts identify each result across
+  lead reports, files and the ledger. Token curves use reconciled usage checkpoints or a measured endpoint.

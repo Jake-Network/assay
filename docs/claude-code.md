@@ -44,13 +44,24 @@ why the manual worker file is separate.
 
 You can decide as the human from a terminal: `assay decide c:1a2b3c4d verified --oracle human --rationale "..." --evidence e:...,e:... --as human`.
 
+The stdio MCP server starts and lists tools before a project exists. If the lead runs `assay init` inside an
+open session, its next ledger call opens the newly initialized project.
+
 ## The result-capture hook
 
 When a subagent stops, `assay hook subagent-stop` reads its final message. If the message cites an existing
 experiment, claim or task id, nothing happens. Otherwise a `note` claim tagged `auto-captured` is recorded with the
-first 300 characters as its statement and the first 4,000 in `payload.text`. The hook only acts in directories
-with `.assay/config.toml`, returns immediately (the work happens in a detached process) and always exits 0;
-problems go to `~/.local/state/assay/hook.log`.
+first 300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge
+across hook events. Reports with a shared opening and different conclusions each get a record.
+
+The hook uses the project selected by `.assay/config.toml` or `ASSAY_PROJECT`. It writes the report to a local
+spool and exits 0 while a detached process handles the database write. The processor retries failures and keeps
+pending reports for the next hook. After a longer outage, run `assay hook replay` with the same database settings
+to process the pending reports. See `~/.local/state/assay/hook.log` for capture and retry status.
+
+Earlier builds placed spool files directly in `~/.local/state/assay/spool/` without recording the database target.
+To recover one, use the environment and project settings from the original session and run
+`python -m assay.hooks /path/to/spooled-entry.json` with the Python environment that has assay installed.
 
 ## Other MCP clients (Codex, ...)
 

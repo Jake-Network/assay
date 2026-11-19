@@ -2,6 +2,12 @@
 
 ## 0.1.0.dev0 (unreleased)
 
+- Bound brief and SQL output, keep invalidated experiments out of briefs, and flag claims whose evidence was invalidated.
+- Check rerun evidence against the original experiment, serialize decisions, and preserve exact validated configs.
+- Preserve distinct hook reports, retry pending captures, and let MCP start before project initialization.
+- Isolate real benchmark runs, reconcile evaluator receipts, and measure comparisons under a shared budget.
+- Cover long project IDs, escape viewer errors, and enforce install QA on supported Linux and macOS runners.
+
 - M0: embedded Postgres (pixeltable-pgserver, PG 16) with a server that outlives its starter; MCP 2.x and Claude
   Code plugin/hook formats checked; results in DECISIONS.md.
 - M1: schema (Alembic revisions running plain SQL), append-only and decision-role triggers, NOTIFY, 10 read views,

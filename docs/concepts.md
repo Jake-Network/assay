@@ -29,13 +29,14 @@ proposed ──► supported ──► verified ──► superseded / retracted
 ```
 
 `verified` requires an oracle that is not an LLM (`metric`, `rerun`, `pytest`, `lean`, `human`) and at least one
-evidence id; the database refuses anything else. `rerun` additionally needs >= 3 seeds by >= 2 agents among the
-evidence (configurable per project). An LLM judgement (`llm_judge`) can make a claim `supported`, never
-`verified`.
+evidence id. The `rerun` oracle compares successful runs of the original configuration and code. It needs
+at least three distinct seeds and a rerun by a different agent. Projects can configure the minimum number of
+seeds and authors. `llm_judge` can support a claim.
 
 An experiment's only status change is `invalidated` (an evaluator bug or exploit was found). Invalidated
-experiments stop counting everywhere: best, outcomes, "already tried", briefs. Claims that relied only on them are
-flagged `evidence_invalidated` for the lead to look at; their status does not change by itself.
+experiments are excluded from best, outcome calculation, "already tried", and recent brief activity. Claims
+that rely entirely on invalidated evidence are flagged `evidence_invalidated`. A lead or human decides whether
+to change the claim status.
 
 ## Outcomes
 

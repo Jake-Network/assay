@@ -150,7 +150,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
     """Print the context brief (markdown) for this agent."""
     from .config import load
 
-    b = ledger().brief(task_id=task, budget_tokens=budget or load().default_budget_tokens)
+    b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget)
     emit({"brief": b}, b.rstrip("\n"))
 
 

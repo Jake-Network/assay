@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp.client import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from assay import Ledger
+from assay.config import write_config
 from assay.mcp_server import build, tool_names
+from tests.conftest import make_project
 
 
 def call(mcp: Any, name: str, **args: Any) -> Any:
@@ -90,3 +97,25 @@ def test_schema_resource(project: str) -> None:
     res = asyncio.run(mcp.read_resource("assay://schema"))
     text = res[0].content if hasattr(res[0], "content") else str(res)
     assert "v_tried" in text and "columns:" in text
+
+
+def test_stdio_server_discovers_tools_before_project_init(
+    tmp_path: Path, db_url: str,
+) -> None:
+    async def check() -> None:
+        params = StdioServerParameters(command=sys.executable, args=["-m", "assay.cli", "mcp"], cwd=tmp_path,
+                                       env={"ASSAY_DATABASE_URL": db_url})
+        async with stdio_client(params) as (read, write), ClientSession(read, write, read_timeout_seconds=10) as client:
+            await client.initialize()
+            tools = await client.list_tools()
+            assert "assay_create_tasks" in {tool.name for tool in tools.tools}
+            before = await client.call_tool("assay_status", {"agent": "lead"})
+            assert before.is_error and "assay init" in before.content[0].text
+
+            project = make_project(db_url)
+            write_config(tmp_path, project)
+            result = await client.call_tool("assay_create_tasks", {"agent": "lead", "tasks": [{"title": "First task"}]})
+            assert not result.is_error
+            assert len(Ledger.open(project=project, database_url=db_url).list_tasks()) == 1
+
+    asyncio.run(check())

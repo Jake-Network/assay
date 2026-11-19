@@ -1,9 +1,11 @@
 """Shared bench pieces: the evaluation wrapper that logs every evaluator call, and the metrics."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -16,7 +18,10 @@ from assay.dedup import canonical_json  # noqa: E402
 
 SPACE = {"init": ["grid", "hex", "random", "lattice_perturb"], "optimizer": ["slsqp", "penalty"],
          "iters": [10, 30, 100, 300, 1000], "perturb": [0.0, 0.01, 0.02, 0.05]}
-CODE_REF = "packing-bench"
+SOLVER_DIR = ROOT / "examples" / "circle-packing"
+CODE_REF = "packing-" + hashlib.sha256(
+    (SOLVER_DIR / "packing.py").read_bytes() + b"\0" + (SOLVER_DIR / "evaluator.py").read_bytes()
+).hexdigest()
 
 
 @cache
@@ -43,16 +48,16 @@ class EvalLog:
     def __init__(self, path: Path) -> None:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.f = open(path, "a", encoding="utf-8")  # noqa: SIM115
+        self.f = open(path, "ab", buffering=0)  # noqa: SIM115
         self.n = 0
 
     def evaluate(self, agent: str, cfg: dict[str, Any], seed: int, tokens_so_far: int) -> dict[str, Any]:
-        res = _solve_cached(canonical_json(cfg), seed)
+        res = _solve_cached(json.dumps(cfg, sort_keys=True, allow_nan=False), seed)
         self.n += 1
-        row = {"i": self.n, "t": time.time(), "agent": agent, "config": cfg, "code_ref": CODE_REF, "seed": seed,
-               "tokens_cum": tokens_so_far, **res}
-        self.f.write(json.dumps(row) + "\n")
-        self.f.flush()
+        row = {"i": self.n, "eval_id": uuid.uuid4().hex, "t": time.time(), "finished_ns": time.monotonic_ns(),
+               "agent": agent, "config": cfg, "code_ref": CODE_REF, "seed": seed, "tokens_cum": tokens_so_far,
+               **res}
+        self.f.write((json.dumps(row, allow_nan=False) + "\n").encode())
         return row
 
     def close(self) -> None:
@@ -70,6 +75,8 @@ class RunMetrics:
     tokens_total: int
     final_best: float | None
     curve: list[tuple[int, float]]
+    cost_usd: float | None = None
+    curve_source: str = "simulated"
 
 
 def load_evals(path: Path) -> list[dict[str, Any]]:
@@ -79,10 +86,10 @@ def load_evals(path: Path) -> list[dict[str, Any]]:
 
 
 def duplicate_ratio(evals: list[dict[str, Any]]) -> float:
-    """Evaluations whose (config, code, seed) was evaluated 2+ times, over all evaluations."""
+    """Evaluations whose (config, code) was evaluated 2+ times, over all evaluations."""
     from collections import Counter
 
-    keys = [canonical_json([e["config"], e["code_ref"], e["seed"]]) for e in evals]
+    keys = [canonical_json([e["config"], e["code_ref"]]) for e in evals]
     c = Counter(keys)
     return sum(1 for k in keys if c[k] >= 2) / len(keys) if keys else 0.0
 

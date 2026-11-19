@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from functools import partial
 from typing import Any, TypeVar
 
 import anyio
@@ -23,6 +22,7 @@ INSTRUCTIONS = """assay is the shared lab notebook for this project. Results liv
 Workers: assay_next_task, then assay_brief. Before every evaluation call assay_check_tried; right after it call
 assay_record_experiment (failures too). Propose generalisable findings with assay_propose_claim and evidence ids.
 Finish with assay_complete_task and reply to the lead in at most 3 sentences plus record ids.
+If no project has been initialized, run assay init in the project directory before calling a ledger tool.
 Only the orchestrator decides (assay_decide). verified needs a non-LLM oracle and evidence."""
 
 SCHEMA_DOC = {
@@ -45,8 +45,8 @@ class Server:
     def __init__(self, project: str | None = None, toolset: str = "all") -> None:
         if toolset not in TOOLSETS:
             raise AssayError(f"toolset must be one of {TOOLSETS}")
-        self.base = Ledger.open(project=project, agent="lead")
-        self.toolset = toolset
+        self._project = project
+        self._base: Ledger | None = None
         self._agents: dict[str, Ledger] = {}
         self._lock = threading.Lock()
 
@@ -55,8 +55,13 @@ class Server:
         if not agent:
             raise AssayError("agent is required: pass your assay agent name, e.g. worker-3")
         with self._lock:
+            if self._base is None:
+                # Claude Code discovers tools before the lead skill has a chance to run assay init.
+                self._base = Ledger.open(project=self._project, agent="lead")
+            if agent == "lead":
+                return self._base
             if agent not in self._agents:
-                self._agents[agent] = self.base.as_agent(agent)
+                self._agents[agent] = self._base.as_agent(agent)
             return self._agents[agent]
 
 
@@ -167,8 +172,10 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
                                evidence_ids: list[str] | None = None,
                                oracle_detail: dict[str, Any] | None = None) -> dict[str, Any]:
             """Call when evidence settles a claim (supported|refuted|inconclusive|verified|superseded|retracted) or
-            an experiment must be invalidated. verified needs oracle metric|rerun|pytest|lean|human and evidence;
-            rerun needs >=3 seeds by >=2 agents. Orchestrator only."""
+            an experiment must be invalidated. verified needs oracle metric|rerun|pytest|lean|human and evidence.
+            For rerun, cite the original experiment in the supported decision or link it as support. Verification
+            requires valid runs of the same config and code across >=3 seeds, with a rerun by another agent.
+            Orchestrator only."""
             d = await _run(lambda: srv.lg(agent).decide(target_id, new_status, oracle, rationale,
                                                          evidence_ids or [], oracle_detail))
             return {"id": short("decision", d.id), "target": short(d.target_type, d.target_id),
@@ -204,7 +211,7 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
                   description="The v_* views assay_sql can read, with their columns. Read before assay_sql.")
     async def schema_resource() -> str:
         def build_doc() -> str:
-            rows = srv.base.sql_internal(
+            rows = srv.lg("lead").sql_internal(
                 "SELECT table_name, string_agg(column_name, ', ' ORDER BY ordinal_position) AS cols"
                 " FROM information_schema.columns WHERE table_schema='assay_q' GROUP BY table_name ORDER BY 1")
             out = ["# assay views (assay_sql)", "Each view is already filtered to the current project.", ""]
@@ -217,7 +224,7 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
     @mcp.resource("assay://brief", name="brief", mime_type="text/markdown",
                   description="The project's default brief (no task).")
     async def brief_resource() -> str:
-        return await anyio.to_thread.run_sync(partial(srv.base.brief, None, 2000))
+        return await anyio.to_thread.run_sync(lambda: srv.lg("lead").brief())
 
     return mcp
 

@@ -36,13 +36,24 @@ experiment count, duplicates blocked and the viewer URL.
 ## Benchmark (real)
 
 ```bash
-python -m bench.run --model sonnet --runs 3                 # prints the claude -p commands; check flags with claude --help
-python -m bench.run --model sonnet --runs 3 --execute       # paid run; writes bench/out/<ts>/report.md
+uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5
+uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5 --execute
 ```
 
-Expected: `report.md` with a row per configuration, `curve.png`, and the conditions block. Fill the README
-benchmark table from it. Release gate (§1): C has 0 lost results and a lower duplicate ratio than A; if C does not
-win on best-per-token, say so in the README.
+The first command creates local command previews and does not start Claude or initialize a ledger. The second
+uses the same Claude dollar cap, worker count, model, turn limit and wall-clock limit for each run. With the
+shown settings, the nine requested runs have a nominal API budget of USD 45. Use a Claude Code version that
+supports `--max-budget-usd`, `--forward-subagent-text` and `--json-schema`. Prefer a fixed model identifier
+when comparing runs across dates. Each C run gets a separate assay project.
+
+Look for `report.md` in the new output directory. It includes the conditions, measured API usage, and mean and
+sample standard deviation across runs. The plot includes intermediate usage checkpoints when the streamed
+message totals reconcile with the final Claude usage. Otherwise it includes only the measured endpoint for that
+run. A failed run, timeout, or missing evaluator log, final report or usage stops the harness and leaves its raw
+artifacts for inspection.
+
+Fill the README table from a complete comparison. The release gate in §1 requires C to have zero lost results,
+a lower duplicate ratio and a lower peak lead context than A. Report whether C meets the best-per-token target.
 
 ## Platforms not verified by hand
 

@@ -5,11 +5,14 @@ import os
 import re
 from datetime import UTC, datetime
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from assay import Ledger
 from assay.brief import compile_brief
+from assay.errors import ValidationFailed
+from assay.ids import short
 from assay.tokens import estimate_tokens
 
 from .conftest import make_project
@@ -71,6 +74,35 @@ def test_budget_trims_bottom_first(lead: Ledger, worker: Ledger) -> None:
     assert "more: assay_search" in small
     assert estimate_tokens(full) > estimate_tokens(small)
     assert "Details: assay_get" in small and "Goal:" in small
+
+
+def test_long_header_and_small_budget_fit_or_reject(db_url: str) -> None:
+    project = "brief-long-metadata"
+    Ledger.init_project(project, goal="가나다" * 1500, metric="score", direction="max", database_url=db_url)
+    lead = Ledger.open(project=project, agent="lead", database_url=db_url)
+    best = lead.record_experiment({"method": "test"}, {"score": 1})
+    [task] = lead.create_tasks([{"title": "실험" * 1000, "tags": ["긴태그" * 1000], "spec": {"long": "가" * 500}}])
+    brief = lead.brief(task, budget_tokens=160)
+    assert estimate_tokens(brief) <= 168
+    assert "Goal: 가나다" in brief and "Metric: score (max)" in brief
+    assert best.id is not None and short("experiment", best.id) in brief
+    assert f"## Your task {short('task', task)}" in brief and '"실험' in brief
+    assert "Tags: 긴태그" in brief and "Spec: {" in brief
+    assert "…" in brief and "Details: assay_get" in brief
+    with pytest.raises(ValidationFailed, match="budget_tokens: too small"):
+        lead.brief(task, budget_tokens=30)
+
+
+def test_recent_brief_excludes_invalidated_experiments(lead: Ledger, worker: Ledger) -> None:
+    lead.brief()
+    dropped = worker.record_experiment({"method": "broken"}, {"score": 99})
+    valid = worker.record_experiment({"method": "valid"}, {"score": 2})
+    assert dropped.id is not None and valid.id is not None
+    lead.decide(dropped.id, "invalidated", "human", "Broken evaluator")
+    brief = lead.brief()
+    assert "1 new experiments" in brief
+    assert short("experiment", dropped.id) not in brief
+    assert short("experiment", valid.id) in brief
 
 
 def _rand_ops() -> st.SearchStrategy:

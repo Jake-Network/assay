@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 import psycopg
 import pytest
+from psycopg import sql
 
 from assay import Ledger
+from assay.db.conn import notification_channel
 from assay.errors import InvalidTransition, LeaseLost, PermissionDenied, ValidationFailed
 
 from .conftest import make_project
@@ -135,7 +139,7 @@ def test_i3_verified_needs_oracle_and_evidence(db_url: str, lead: Ledger, worker
     assert d.new_status == "verified" and lead.claim_status(c.id) == "verified"
 
 
-def test_rerun_rule(lead: Ledger, db_url: str) -> None:
+def test_rerun_rule(lead: Ledger) -> None:
     w1 = lead.as_agent("w1", "worker")
     w2 = lead.as_agent("w2", "worker")
     ids = [w1.record_experiment({"a": 1}, {"score": 1.0}, seed=s).id for s in (0, 1)]
@@ -147,6 +151,41 @@ def test_rerun_rule(lead: Ledger, db_url: str) -> None:
     lead.decide(c.id, "verified", "rerun", "3 seeds, 2 agents", ids)  # type: ignore[arg-type]
 
 
+def test_rerun_evidence_matches_original_config_and_code(lead: Ledger, worker: Ledger) -> None:
+    other = lead.as_agent("worker-2")
+    original = worker.record_experiment({"a": 1}, {"score": 1}, seed=0, code_ref="v1").id
+    same = other.record_experiment({"a": 1}, {"score": 1}, seed=1, code_ref="v1").id
+    wrong_code = other.record_experiment({"a": 1}, {"score": 1}, seed=2, code_ref="v2").id
+    wrong_config = [other.record_experiment({"a": 2}, {"score": 1}, seed=seed, code_ref="v1").id
+                    for seed in (0, 1)]
+    wrong_config += [worker.record_experiment({"a": 2}, {"score": 1}, seed=2, code_ref="v1").id]
+    assert original and same and wrong_code and all(wrong_config)
+    c = worker.propose_claim("observation", "a=1 scores 1")
+    lead.decide(c.id, "supported", "metric", "original supporting run", [original])
+    with pytest.raises(InvalidTransition, match="same config and code reference"):
+        lead.decide(c.id, "verified", "rerun", "different code", [original, same, wrong_code], force=True)
+    with pytest.raises(InvalidTransition, match="original supporting experiment"):
+        lead.decide(c.id, "verified", "rerun", "different experiment", wrong_config)  # type: ignore[arg-type]
+    last = worker.record_experiment({"a": 1}, {"score": 1}, seed=2, code_ref="v1").id
+    assert last is not None
+    assert lead.decide(c.id, "verified", "rerun", "proper replicates", [original, same, last]).new_status == "verified"
+
+
+def test_rerun_checks_original_author_with_custom_threshold(db_url: str) -> None:
+    pid = make_project(db_url, settings={"rerun_min_seeds": 1, "rerun_min_authors": 1})
+    lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
+    worker = lead.as_agent("worker")
+    original = worker.record_experiment({"a": 1}, {"score": 1}, seed=0).id
+    assert original is not None
+    c = worker.propose_claim("observation", "a=1 scores 1", evidence=[(original, "supports")])
+    lead.decide(c.id, "supported", "metric", "there is an original run")
+    with pytest.raises(InvalidTransition, match="someone other than worker"):
+        lead.decide(c.id, "verified", "rerun", "self replication", [original])
+    independent = lead.as_agent("other").record_experiment({"a": 1}, {"score": 1}, seed=1).id
+    assert independent is not None
+    assert lead.decide(c.id, "verified", "rerun", "independent", [independent]).new_status == "verified"
+
+
 def test_state_graph(lead: Ledger, worker: Ledger) -> None:
     c = worker.propose_claim("hypothesis", "h")
     lead.decide(c.id, "refuted", "metric", "no", [])
@@ -154,6 +193,42 @@ def test_state_graph(lead: Ledger, worker: Ledger) -> None:
         lead.decide(c.id, "supported", "metric", "yes")
     lead.decide(c.id, "supported", "human", "changed my mind", force=True)
     assert lead.claim_status(c.id) == "supported"
+
+
+def test_competing_decisions_recheck_current_claim_state(db_url: str, lead: Ledger, worker: Ledger) -> None:
+    c = worker.propose_claim("hypothesis", "h")
+    evidence = worker.record_experiment({"a": 1}, {"score": 1}).id
+    assert evidence is not None
+    lead.decide(c.id, "supported", "metric", "initial support", [evidence])
+    other = lead.as_agent("other-lead", "orchestrator")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        with psycopg.connect(db_url) as blocker, psycopg.connect(db_url, autocommit=True) as observer:
+            blocker.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lead.project_id,))
+            pending = [pool.submit(writer.decide, c.id, status, "human", "concurrent decision", [evidence])
+                       for writer, status in ((lead, "verified"), (other, "refuted"))]
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                row = observer.execute(
+                    "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted"
+                    " AND classid=((hashtext(%s)::bigint >> 32) & 4294967295)::oid"
+                    " AND objid=(hashtext(%s)::bigint & 4294967295)::oid",
+                    (lead.project_id, lead.project_id)).fetchone()
+                if row == (2,):
+                    break
+                time.sleep(0.01)
+            else:
+                pytest.fail("both decisions should wait for the project writer lock")
+
+        accepted = 0
+        for result in pending:
+            try:
+                result.result(timeout=10)
+            except InvalidTransition:
+                continue
+            accepted += 1
+        assert accepted == 1
+    assert len(lead.get(c.id)["decisions"]) == 2
 
 
 # I4 ---------------------------------------------------------------------------
@@ -233,6 +308,37 @@ def test_i7_invalidated_excluded(lead: Ledger, worker: Ledger) -> None:
     assert cs["evidence_invalidated"] is True and cs["n_support"] == 0
 
 
+def test_invalidating_decision_evidence_flags_verified_claim(lead: Ledger, worker: Ledger) -> None:
+    first = worker.record_experiment({"v": 1}, {"score": 1}).id
+    second = worker.record_experiment({"v": 2}, {"score": 2}).id
+    extra = worker.record_experiment({"v": 3}, {"score": 3}).id
+    assert first and second and extra
+    c = worker.propose_claim("observation", "confirmed by a specific decision", evidence=[(extra, "supports")])
+    lead.decide(c.id, "supported", "metric", "supported", [extra])
+    lead.decide(c.id, "verified", "metric", "decision depends on different experiments", [first, second])
+    lead.decide(first, "invalidated", "human", "first invalid evidence")
+    assert lead.get(c.id)["status"]["evidence_invalidated"] is False
+    lead.decide(second, "invalidated", "human", "second invalid evidence")
+    status = lead.get(c.id)["status"]
+    assert status["status"] == "verified" and status["evidence_invalidated"] is True
+    assert status["n_support"] == 1
+    visible = lead.sql("SELECT id FROM v_activity WHERE kind='experiment'")["rows"]
+    assert visible == [{"id": str(extra)}]
+
+
+@pytest.mark.parametrize("length", [57, 58, 63])
+def test_valid_project_slugs_keep_writes_and_notifications(db_url: str, length: int) -> None:
+    pid = (uuid.uuid4().hex * 2)[:length]
+    Ledger.init_project(pid, database_url=db_url)
+    worker = Ledger.open(project=pid, agent="worker", database_url=db_url)
+    with psycopg.connect(db_url, autocommit=True) as listener:
+        listener.execute(sql.SQL("LISTEN {}").format(sql.Identifier(notification_channel(pid))))
+        recorded = worker.record_experiment({"valid": True})
+        notification = next(listener.notifies(timeout=5, stop_after=1), None)
+    assert recorded.id is not None and notification is not None
+    assert str(recorded.id) in notification.payload
+
+
 # outcome ------------------------------------------------------------------------
 def test_outcome_rules(db_url: str) -> None:
     pid = make_project(db_url, metric="loss", direction="min", epsilon=0.01)
@@ -272,6 +378,15 @@ def test_project_config_schema(db_url: str) -> None:
         w.record_experiment({"init": "grid"}, {"score": 1})
     assert "config.init" in str(ei.value)
     assert w.record_experiment({"init": "hex"}, {"score": 1}).id
+
+
+def test_validated_config_stores_original_numeric_precision(db_url: str) -> None:
+    original = 1.2345678901234
+    pid = make_project(db_url, config_schema={"properties": {"lr": {"const": original}}})
+    worker = Ledger.open(project=pid, agent="worker", database_url=db_url)
+    result = worker.record_experiment({"lr": original})
+    assert result.id is not None
+    assert worker.get(result.id)["record"]["config"] == {"lr": original}
 
 
 def test_claim_dedup_attaches_evidence(lead: Ledger, worker: Ledger) -> None:

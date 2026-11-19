@@ -1,10 +1,13 @@
 """assay_sql safety (§7.3, §18.1)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from assay import Ledger
 from assay.errors import AssayError
+from assay.tokens import estimate_tokens
 
 
 @pytest.mark.parametrize("q", [
@@ -42,3 +45,16 @@ def test_truncation(lead: Ledger, worker: Ledger) -> None:
     assert r["truncated"] and r["row_count"] == 230 and r["returned"] <= 200
     r2 = lead.sql("SELECT * FROM v_tried")
     assert r2["truncated"] and r2["returned"] < 200  # token cap (4,000) bites first on wide rows
+    assert estimate_tokens(json.dumps(r2, ensure_ascii=False)) <= 4000
+
+
+@pytest.mark.parametrize("padding", ["a" * 20000, "가" * 5000])
+def test_first_row_respects_token_limit(lead: Ledger, worker: Ledger, padding: str) -> None:
+    worker.record_experiment({"padding": padding}, {"score": 1})
+    response = lead.sql("SELECT config FROM v_best")
+    assert response == {"columns": ["config"], "rows": [], "row_count": 1, "returned": 0, "truncated": True}
+
+
+def test_empty_results_keep_column_metadata(lead: Ledger) -> None:
+    result = lead.sql("SELECT primary_value AS score FROM v_best WHERE false")
+    assert result == {"columns": ["score"], "rows": [], "row_count": 0, "returned": 0, "truncated": False}

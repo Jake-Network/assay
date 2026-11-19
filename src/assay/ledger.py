@@ -405,18 +405,25 @@ class Ledger:
     def _validate_config(self, cfg: Any) -> dict[str, Any]:
         if not isinstance(cfg, dict):
             raise ValidationFailed(["config: must be a JSON object"])
-        self.pack.validate("experiment.config", cfg, "config")
+        canonical_json(cfg)  # validates JSON values, including ignored keys
+        try:
+            encoded = json.dumps(cfg, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as e:
+            raise ValidationFailed([f"config: {e}"]) from e
+        stored: dict[str, Any] = json.loads(encoded)
+        self.pack.validate("experiment.config", stored, "config")
         problems = []
-        if depth(cfg) > self.pack.config_max_depth:
-            problems.append(f"config: nesting depth {depth(cfg)} exceeds {self.pack.config_max_depth}")
-        canon = canonical_json(cfg)  # also rejects NaN/Infinity
-        if len(canon.encode()) > self.pack.config_max_bytes:
-            problems.append(f"config: {len(canon.encode())} bytes serialised, limit {self.pack.config_max_bytes}")
+        config_depth = depth(stored)
+        if config_depth > self.pack.config_max_depth:
+            problems.append(f"config: nesting depth {config_depth} exceeds {self.pack.config_max_depth}")
+        size = len(encoded.encode("utf-8"))
+        if size > self.pack.config_max_bytes:
+            problems.append(f"config: {size} bytes serialised, limit {self.pack.config_max_bytes}")
         if problems:
             raise ValidationFailed(problems)
         if self._config_validator is not None:
-            check(self._config_validator, cfg, "config")
-        return json.loads(canon)  # type: ignore[no-any-return]
+            check(self._config_validator, stored, "config")
+        return stored
 
     def _key(self, cfg: dict[str, Any], code_ref: str | None) -> str:
         return dedup_key(cfg, code_ref, self.pack.dedup_ignore)
@@ -532,6 +539,12 @@ class Ledger:
                       evidence: Sequence[tuple[str | UUID, str]] | None = None) -> ClaimResult:
         """Propose a claim. An identical statement returns duplicate_of, and the evidence is attached to the
         existing claim instead (independent evidence counts as replication, §9.3)."""
+        return self._propose_claim(kind, statement, payload, tags, task_id, evidence)
+
+    def _propose_claim(self, kind: str, statement: str, payload: dict[str, Any] | None = None,
+                       tags: Sequence[str] | None = None, task_id: str | UUID | None = None,
+                       evidence: Sequence[tuple[str | UUID, str]] | None = None, *,
+                       _dedup_hash: str | None = None) -> ClaimResult:
         problems = []
         if kind not in self.pack.claim_kinds:
             problems.append(f"kind: {kind!r} is not one of {', '.join(self.pack.claim_kinds)}")
@@ -561,7 +574,7 @@ class Ledger:
             raise ValidationFailed(problems)
         tid = self._rid(task_id, "task")
         resolved = [(self.resolve(i), rel) for i, rel in ev]
-        h = statement_hash(statement)
+        h = _dedup_hash if _dedup_hash is not None else statement_hash(statement)
         with self._conn() as conn:
             r = conn.execute(
                 "INSERT INTO assay.claims(project_id,kind,statement,statement_hash,payload,tags,author,task_id)"
@@ -627,7 +640,7 @@ class Ledger:
                force: bool = False) -> Decision:
         """Write a status transition (orchestrator/human only, P2). Claims: §6.1 graph. Experiments:
         only 'invalidated'. 'verified' needs a non-LLM oracle and evidence (P4); oracle 'rerun' also needs
-        the replication rule (§6.1) unless force=True."""
+        the replication rule (§6.1). force=True permits a transition outside the claim state graph."""
         self._require_decider()
         problems = []
         if oracle not in ORACLES:
@@ -637,7 +650,8 @@ class Ledger:
         if problems:
             raise ValidationFailed(problems)
         tkind, tid = self.resolve(target, ["claim", "experiment"])
-        ev = [self.resolve(e)[1] for e in evidence_ids]
+        resolved = [self.resolve(e) for e in evidence_ids]
+        ev = [eid for _, eid in resolved]
         if tkind == "experiment":
             if new_status != "invalidated":
                 raise InvalidTransition("the only decision on an experiment is 'invalidated'")
@@ -650,32 +664,71 @@ class Ledger:
                                             "an LLM judgement can reach 'supported' at most (P4)")
                 if not ev:
                     raise InvalidTransition("verified needs at least one evidence id")
-            cur = self.claim_status(tid)
-            if new_status not in TRANSITIONS.get(cur, set()) and not force:
-                raise InvalidTransition(f"{cur} -> {new_status} is outside the claim state graph; pass force=True "
-                                        "if you mean it")
-            if new_status == "verified" and oracle == "rerun" and not force:
-                self._check_rerun(ev)
         with self._conn() as conn:
+            # Share the experiment writer's lock so invalidation, outcome calculation, and
+            # decision validation each observe the results of the preceding writer.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (self.project_id,))
+            last = conn.execute(
+                "SELECT new_status, created_at FROM assay.decisions"
+                " WHERE project_id=%s AND target_id=%s AND target_type=%s"
+                " ORDER BY created_at DESC, id DESC LIMIT 1", (self.project_id, tid, tkind)).fetchone()
+            if tkind == "claim":
+                cur = last["new_status"] if last else "proposed"
+                if new_status not in TRANSITIONS.get(cur, set()) and not force:
+                    raise InvalidTransition(f"{cur} -> {new_status} is outside the claim state graph; pass force=True "
+                                            "if you mean it")
+                if new_status == "verified" and oracle == "rerun":
+                    self._check_rerun(conn, tid, {eid for kind, eid in resolved if kind == "experiment"})
             r = conn.execute(
                 "INSERT INTO assay.decisions(project_id,target_type,target_id,new_status,oracle,oracle_detail,"
-                "rationale,evidence_ids,decided_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+                "rationale,evidence_ids,decided_by,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                "greatest(clock_timestamp(), %s::timestamptz + interval '1 microsecond')) RETURNING *",
                 (self.project_id, tkind, tid, new_status, oracle, Jsonb(oracle_detail or {}), rationale, ev,
-                 self.agent)).fetchone()
+                 self.agent, last["created_at"] if last else None)).fetchone()
         return Decision(**{k: r[k] for k in Decision.model_fields})
 
-    def _check_rerun(self, ev: list[UUID]) -> None:
+    def _check_rerun(self, conn: psycopg.Connection[Any], claim_id: UUID, experiment_ids: set[UUID]) -> None:
+        runs = conn.execute(
+            "SELECT dedup_key, author, seed FROM assay.experiments_valid"
+            " WHERE project_id=%s AND id=ANY(%s) AND run_status='ok'",
+            (self.project_id, list(experiment_ids))).fetchall()
+        if not runs or len(runs) != len(experiment_ids) or len({run["dedup_key"] for run in runs}) != 1:
+            raise InvalidTransition("rerun oracle needs valid successful experiment evidence with the same config "
+                                    "and code reference.")
+        original = conn.execute(
+            """WITH prior AS (
+                  SELECT evidence_ids FROM assay.decisions
+                  WHERE project_id=%(project)s AND target_id=%(claim)s
+                    AND target_type='claim' AND new_status='supported'
+                  ORDER BY created_at DESC, id DESC LIMIT 1
+                ), cited AS (
+                  SELECT e.id, e.dedup_key, e.author, e.created_at FROM assay.experiments e
+                  JOIN prior p ON e.id=ANY(p.evidence_ids)
+                  WHERE e.project_id=%(project)s AND e.run_status='ok'
+                ), original_candidates AS (
+                  SELECT * FROM cited
+                  UNION ALL
+                  SELECT e.id, e.dedup_key, e.author, e.created_at FROM assay.experiments e
+                  JOIN assay.links l ON l.project_id=e.project_id AND l.src_id=e.id
+                  WHERE e.project_id=%(project)s AND e.run_status='ok' AND l.src_type='experiment'
+                    AND l.dst_type='claim' AND l.dst_id=%(claim)s AND l.relation='supports'
+                    AND NOT EXISTS (SELECT 1 FROM cited)
+                )
+                SELECT author FROM original_candidates WHERE dedup_key=%(key)s
+                ORDER BY created_at, id LIMIT 1""",
+            {"project": self.project_id, "claim": claim_id, "key": runs[0]["dedup_key"]}).fetchone()
+        if original is None:
+            raise InvalidTransition("rerun evidence must match the config and code reference of an original "
+                                    "supporting experiment for the claim.")
         st = self.project.settings
         min_seeds, min_authors = int(st.get("rerun_min_seeds", 3)), int(st.get("rerun_min_authors", 2))
-        with self._conn() as conn:
-            r = conn.execute(
-                "SELECT count(DISTINCT seed) AS seeds, count(DISTINCT author) AS authors, count(*) AS n"
-                " FROM assay.experiments_valid WHERE id = ANY(%s) AND run_status='ok'", (ev,)).fetchone()
-        if r["seeds"] < min_seeds or r["authors"] < min_authors:
+        seeds = {run["seed"] for run in runs if run["seed"] is not None}
+        authors = {run["author"] for run in runs}
+        if len(seeds) < min_seeds or len(authors) < min_authors or not (authors - {original["author"]}):
             raise InvalidTransition(
-                f"rerun oracle needs >= {min_seeds} distinct seeds and >= {min_authors} distinct authors among "
-                f"valid ok evidence experiments; got {r['seeds']} seeds, {r['authors']} authors. "
-                "Create a replication task, or pass force=True.")
+                f"rerun oracle needs >= {min_seeds} distinct seeds and >= {min_authors} distinct authors "
+                f"including a rerun by someone other than {original['author']}; "
+                f"got {len(seeds)} seeds, {len(authors)} authors. Create a replication task.")
 
     # ------------------------------------------------------------------ reads
 
@@ -811,7 +864,23 @@ class Ledger:
                 if via_set_role:
                     conn.execute("SET LOCAL ROLE assay_reader")
                 try:
-                    cur = conn.execute(q.encode("utf-8"))
+                    # Describe the original query without fetching any rows. Experiments can contain
+                    # configurations larger than the entire SQL budget.
+                    with conn.cursor(name="assay_columns") as columns:
+                        columns.execute(q.encode("utf-8"))
+                        cols = [c.name for c in (columns.description or [])]
+                    bounded_query = psql.SQL(
+                        "SELECT CASE WHEN octet_length(convert_to(row_data, 'UTF8')) <= {}"
+                        " THEN row_data END AS row_data"
+                        " FROM (SELECT row_to_json(assay_result.*)::text AS row_data"
+                        " FROM (\n{}\n) AS assay_result) AS assay_serialized"
+                    ).format(psql.Literal(SQL_TOKEN_LIMIT * 4), psql.SQL(q))
+                    with conn.cursor(name="assay_rows", scrollable=False) as cursor:
+                        cursor.execute(bounded_query)
+                        fetched = cursor.fetchmany(SQL_ROW_LIMIT)
+                        remaining = conn.execute(
+                            psql.SQL("MOVE FORWARD ALL FROM {}").format(psql.Identifier(cursor.name))
+                        ).rowcount
                 except psycopg.errors.QueryCanceled as e:
                     raise AssayError("query exceeded the 2s statement timeout") from e
                 except psycopg.errors.InsufficientPrivilege as e:
@@ -819,25 +888,24 @@ class Ledger:
                                      ) from e
                 except psycopg.Error as e:
                     raise AssayError(f"SQL error: {e.diag.message_primary or e}") from e
-                cols = [c.name for c in (cur.description or [])]
-                rows = cur.fetchall()
         finally:
             conn.close()
-        total = len(rows)
-        out_rows: list[Any] = []
-        used = 0
-        truncated = False
-        for row in rows[:SQL_ROW_LIMIT]:
-            jr = jsonable(dict(row))
-            cost = estimate_tokens(json.dumps(jr, ensure_ascii=False, default=str))
-            if used + cost > SQL_TOKEN_LIMIT and out_rows:
-                truncated = True
+        total = len(fetched) + remaining
+        rows: list[dict[str, Any]] = []
+        response: dict[str, Any] = {"columns": cols, "rows": rows, "row_count": total, "returned": 0,
+                                    "truncated": total > 0}
+        if estimate_tokens(json.dumps(response, ensure_ascii=False)) > SQL_TOKEN_LIMIT:
+            raise AssayError("SQL column metadata exceeds the 4,000-token limit; select fewer columns")
+        for row in fetched:
+            if row["row_data"] is None:
                 break
-            used += cost
-            out_rows.append(jr)
-        truncated = truncated or total > len(out_rows)
-        return {"columns": cols, "rows": out_rows, "row_count": total, "returned": len(out_rows),
-                "truncated": truncated}
+            rows.append(json.loads(row["row_data"]))
+            response.update(returned=len(rows), truncated=len(rows) < total)
+            if estimate_tokens(json.dumps(response, ensure_ascii=False)) > SQL_TOKEN_LIMIT:
+                rows.pop()
+                response.update(returned=len(rows), truncated=True)
+                break
+        return response
 
     def _reader_conn(self) -> tuple[psycopg.Connection[Any], bool]:
         """Connect as assay_reader so the session user itself is the reader. If that is impossible

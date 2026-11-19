@@ -24,7 +24,10 @@ def test_pages(lead: Ledger, worker: Ledger) -> None:
         assert "Try hex" in client.get("/tasks").text
         r = client.get(f"/r/c:{str(c.id)[:8]}")
         assert r.status_code == 200 and "supports" in r.text
-        assert client.get("/r/e:zzzzzzzz").status_code == 404
+        bad_record = client.get("/r/invalid&record")
+        assert bad_record.status_code == 404
+        assert bad_record.headers["content-type"] == "text/plain; charset=utf-8"
+        assert "invalid&record" in bad_record.text
         part = client.get("/claims?partial=1", headers={"HX-Request": "true"})
         assert "<html" not in part.text and 'id="content"' in part.text
         assert client.get("/static/htmx.min.js").status_code == 200

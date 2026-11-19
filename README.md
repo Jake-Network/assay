@@ -40,7 +40,7 @@ assay brief
 
 <!-- Filled from bench/report.md after the real runs (MANUAL_QA.md). -->
 
-Same model, same token budget, same worker count, circle packing (n=26):
+Circle packing (n=26) with the same model, API budget, worker count, and wall-clock limit:
 
 | | lost results | duplicate evaluations | lead context (max) | best per token |
 |---|---|---|---|---|
@@ -57,7 +57,7 @@ Same model, same token budget, same worker count, circle packing (n=26):
  worker-2 ─┼──────────────────────────────►  Postgres ledger  (append-only)
  worker-3 ─┘                                       │  SQL: dedup, replicates, best, negatives
                                                    ▼
- lead  ◄── brief (≤2k tokens: best, verified claims, "already tried", open questions) + ids
+ lead  ◄── brief (2k-token budget: best, verified claims, "already tried", open questions) + ids
    └──► decide: supported / refuted / verified (non-LLM oracle + evidence only)
 ```
 
@@ -65,9 +65,9 @@ Same model, same token budget, same worker count, circle packing (n=26):
   cites no record, so even an agent that ignores the rules leaves a note.
 - **Nothing repeated.** Same config + code + seed is refused; a different seed counts as a replicate. Briefs
   list what was already tried around your task, failures included.
-- **Nothing trusted without evidence.** Workers propose; only the lead or a human decides. `verified` needs a
-  non-LLM oracle (metric, rerun with ≥3 seeds by ≥2 agents, pytest, lean, human) and evidence ids. Records are
-  never updated or deleted: a database trigger refuses it.
+- **Nothing trusted without evidence.** Workers propose claims. The lead or a human verifies them with a
+  non-LLM oracle and evidence ids. The default rerun rule requires three seeds for the same configuration
+  and code, including a rerun by a different agent. Database triggers keep records append-only.
 
 ## What it is not
 

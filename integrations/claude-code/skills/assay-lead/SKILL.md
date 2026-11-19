@@ -21,10 +21,11 @@ You are the lead (orchestrator). Use `agent="lead"` on every assay MCP call. Goa
 4. **Read the ledger.** When the round ends, do not summarise subagent messages. Read `assay_status` and
    `assay_brief`; use `assay_sql` (read `assay://schema` first) for anything else, for example the configs
    with the most failures: `SELECT config, n_failed FROM v_tried ORDER BY n_failed DESC LIMIT 5`.
-5. **Decide.** Move claims with `assay_decide` when the evidence is there. Use `verified` with oracle
-   `rerun` only when the evidence includes >= 3 seeds and >= 2 different agents; otherwise create a replication
-   task (same config, new seeds, tag `replicate`). If an evaluator bug or exploit shows up, invalidate the
-   affected experiments (`new_status="invalidated"`).
+5. **Decide.** Move claims with `assay_decide` when the evidence is there. Cite the original experiment in the
+   `supported` decision or link it to the claim with `supports`. Use `verified` with oracle `rerun` once valid
+   runs of that config and code cover at least three seeds and another agent has reproduced the result.
+   Otherwise create a replication task with the same config and code, new seeds, and tag `replicate`.
+   If an evaluator bug or exploit shows up, invalidate the affected experiments (`new_status="invalidated"`).
 6. **Next round.** Create fewer tasks where failures cluster (`v_negative`) and more around improvements
    (`v_best`, recent `improved` experiments).
 7. **Stop** at the user's budget (rounds, time or cost). Final report: best value and its id, verified claims,

@@ -5,8 +5,15 @@
 set -euo pipefail
 SRC="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 WORK="$(mktemp -d)"
+cleanup() {
+    if [[ -x "$WORK/.venv/bin/python" && -f "$WORK/pg/postmaster.pid" ]]; then
+        "$WORK/.venv/bin/python" -c "from assay.db.conn import stop_embedded; stop_embedded()" || true
+    fi
+    rm -rf -- "$WORK"
+}
+trap cleanup EXIT
 export ASSAY_DATA_DIR="$WORK/pg" XDG_STATE_HOME="$WORK/state"
-unset ASSAY_DATABASE_URL ASSAY_PROJECT
+unset ASSAY_DATABASE_URL ASSAY_PROJECT ASSAY_AGENT
 start=$(date +%s)
 cd "$WORK"
 uv venv -q .venv
@@ -15,6 +22,8 @@ mkdir repo && cd repo && git init -q
 ../.venv/bin/assay init --goal "Smoke test" --metric score --direction max
 ../.venv/bin/assay exp record --config '{"lr": 0.1}' --metrics '{"score": 0.5}'
 end=$(date +%s)
-echo "first experiment recorded in $((end - start)) s (target < 120 s)"
-"$WORK/.venv/bin/python" -c "from assay.db.conn import stop_embedded; stop_embedded()"
-rm -rf "$WORK"
+elapsed=$((end - start))
+echo "first experiment recorded in $elapsed s (target < 120 s)"
+if (( elapsed >= 120 )); then
+    exit 1
+fi

@@ -20,8 +20,8 @@ assay serve --project circle-packing-26      # other terminal; open http://127.0
 ```
 
 Some workers are deliberately careless and re-run tried configurations, so you can see duplicates being refused.
-The lead asks for replications of the best configuration and marks a claim `verified` (oracle `rerun`) once
-three seeds from two different workers agree.
+The lead asks workers to rerun the best configuration and code. After at least three seeds and a rerun by
+a different worker, it verifies the observed minimum for the tested seeds. The decision records those seeds.
 
 ## (b) A real swarm in Claude Code
 

@@ -30,21 +30,34 @@ def write_report(out: Path) -> Path:
                   "> `bench/dry.py` (message drop rate, compaction threshold, fixed cost per step). These numbers",
                   "> validate the harness pipeline; they are not evidence about assay. Real runs: `MANUAL_QA.md`.", ""]
     lines += ["| configuration | runs | evaluations | duplicate ratio | lost results | lead context max (tokens) |"
-              " tokens total | final best |", "|---|---|---|---|---|---|---|---|"]
+              " tokens total | API cost (USD) | final best | best per 1k tokens |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
     for m in modes:
         rs = [r for r in runs if r["config"] == m]
+        best_per_1k = [1000 * r["final_best"] / r["tokens_total"] for r in rs
+                       if r["final_best"] is not None and r["tokens_total"]]
         lines.append(f"| {NAMES.get(m, m)} | {len(rs)} | {_ms([r['evaluations'] for r in rs])} | "
                      f"{_ms([r['duplicate_ratio'] for r in rs])} | {_ms([r['lost_results'] for r in rs])} | "
                      f"{_ms([r['lead_context_max'] for r in rs])} | {_ms([r['tokens_total'] for r in rs])} | "
-                     f"{_ms([r['final_best'] for r in rs])} |")
+                     f"{_ms([r.get('cost_usd') for r in rs])} | {_ms([r['final_best'] for r in rs])} | "
+                     f"{_ms(best_per_1k)} |")
     lines += ["", "Values are mean ± sample standard deviation over runs.", ""]
     png = _plot(out, runs, modes)
     if png:
         lines += ["## Best-so-far vs cumulative tokens", "", f"![curve]({png.name})", ""]
+        if not cond.get("dry"):
+            detailed = sum(r.get("curve_source") == "reconciled assistant usage" for r in runs)
+            lines += [
+                f"{detailed} of {len(runs)} runs reconcile assistant-message usage with the final total. "
+                "Their steps use observed API usage checkpoints and the best evaluation completed by each "
+                "checkpoint. Other runs contribute only their measured endpoint.",
+                "",
+            ]
     lines += ["## Metric definitions", "",
-              "- duplicate ratio: evaluations whose (config, code, seed) was evaluated 2+ times / all evaluations",
+              "- duplicate ratio: evaluations whose (config, code) was evaluated at least twice / all evaluations",
               "- lost results: evaluations that ran but appear neither in the lead's final report nor in a",
-              "  persistent record (ledger for C, result files for B)",
+              "  persistent record (ledger for C, result files for B). Real runs match individual receipt IDs,",
+              "  status and evaluation data.",
               "- lead context max: largest prompt the lead saw (dry: simulated; real: max input+cache tokens of",
               "  a top-level assistant turn)", "",
               "## Conditions", "", "```json", json.dumps(cond, indent=2), "```", ""]
@@ -54,6 +67,8 @@ def write_report(out: Path) -> Path:
 
 
 def _plot(out: Path, runs: list[dict[str, Any]], modes: list[str]) -> Path | None:
+    if not any(r["curve"] for r in runs):
+        return None
     try:
         import matplotlib
 
@@ -64,11 +79,13 @@ def _plot(out: Path, runs: list[dict[str, Any]], modes: list[str]) -> Path | Non
     fig, ax = plt.subplots(figsize=(7, 4))
     colors = {"A": "#c0504d", "B": "#9b8b2e", "C": "#2f6fed"}
     for m in modes:
-        for i, r in enumerate(x for x in runs if x["config"] == m):
-            if r["curve"]:
-                xs, ys = zip(*r["curve"], strict=True)
-                ax.step(xs, ys, where="post", color=colors.get(m), alpha=0.8,
-                        label=NAMES.get(m, m) if i == 0 else None)
+        for i, r in enumerate(x for x in runs if x["config"] == m and x["curve"]):
+            xs, ys = zip(*r["curve"], strict=True)
+            style = {"color": colors.get(m), "alpha": 0.8, "label": NAMES.get(m, m) if i == 0 else None}
+            if len(xs) == 1:
+                ax.plot(xs, ys, marker="o", **style)
+            else:
+                ax.step(xs, ys, where="post", **style)
     ax.set_xlabel("cumulative tokens")
     ax.set_ylabel("best sum_radii")
     ax.legend()

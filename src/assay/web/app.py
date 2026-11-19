@@ -13,10 +13,11 @@ import psycopg
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from ..db.conn import notification_channel
 from ..errors import AssayError
 from ..ids import short
 from ..ledger import Ledger, config_line, jsonable
@@ -100,12 +101,12 @@ class Viewer:
         try:
             rec = await anyio.to_thread.run_sync(self.lg.get, request.path_params["rid"])
         except AssayError as e:
-            return HTMLResponse(f"<p>{e}</p>", status_code=404)
+            return PlainTextResponse(str(e), status_code=404)
         return self.render("record.html", request, r=rec)
 
     # ------------------------------------------------------------------ live updates
     async def events(self, request: Request) -> Response:
-        channel = f"assay_{self.lg.project_id}"
+        channel = notification_channel(self.lg.project_id)
 
         async def stream() -> AsyncIterator[bytes]:
             yield b"retry: 3000\n\n"

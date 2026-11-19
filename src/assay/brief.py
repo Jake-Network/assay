@@ -7,14 +7,18 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from .errors import ValidationFailed
 from .ids import short
 from .tokens import estimate_tokens
 
 if TYPE_CHECKING:
     from .ledger import Ledger
 
-MIN_BUDGET = 300
 TRIED_SCAN = 2000  # most recent dedup groups considered for relevance
+FOOTER = (
+    "\nDetails: assay_get(<id>). Before any evaluation call assay_check_tried; after it, "
+    "assay_record_experiment (failures too).\n"
+)
 
 
 @dataclass
@@ -68,9 +72,44 @@ def _config_line(cfg: Any, keys: list[str] | None, max_len: int = 90) -> str:
     return config_line(cfg, max_len)
 
 
+def _clip_tokens(value: str, budget: int) -> str:
+    if estimate_tokens(value) <= budget:
+        return value
+    remaining = (budget - 1) * 4  # reserve one token for the ellipsis
+    for i, char in enumerate(value):
+        remaining -= 1 if char.isascii() else 4
+        if remaining < 0:
+            return value[:i].rstrip() + "…"
+    return "…"
+
+
+def _fit_header(lines: list[tuple[str, str, str]], limit: int, best_line: str) -> list[str]:
+    """Keep the required labels, while sharing available space between their values."""
+    values = [value for _, value, _ in lines]
+    used = estimate_tokens("\n".join(prefix + suffix for prefix, _, suffix in lines) + "\n" + FOOTER)
+    available = limit - used
+    variable = sorted((estimate_tokens(value), i) for i, value in enumerate(values) if value)
+    if available < len(variable):
+        raise ValidationFailed(["budget_tokens: too small for the brief header and footer; request a larger budget"])
+    best_cost = estimate_tokens(best_line)
+    if available - best_cost >= len(variable):
+        available -= best_cost
+    else:
+        best_line = ""
+    for position, (size, i) in enumerate(variable):
+        allowance = min(size, available // (len(variable) - position))
+        values[i] = _clip_tokens(values[i], allowance)
+        available -= estimate_tokens(values[i])
+    fitted = [prefix + value + suffix for (prefix, _, suffix), value in zip(lines, values, strict=True)]
+    fitted[2] += best_line  # metric line
+    return fitted
+
+
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *,
                   now: datetime | None = None, log: bool = True) -> str:
-    budget = max(MIN_BUDGET, int(budget_tokens))
+    limit = int(budget_tokens) * 105 // 100
+    if limit < 1:
+        raise ValidationFailed(["budget_tokens: must be positive"])
     p = lg.project
     limits = {"verified": 10, "supported": 5, "tried": 8, "open_questions": 5, "recent": 3}
     limits.update({k: int(v) for k, v in lg.pack.brief_limits.items()})
@@ -112,7 +151,8 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         if last is not None:
             t0 = last["created_at"]
             since = conn.execute(
-                "SELECT (SELECT count(*) FROM assay.experiments WHERE project_id=%(p)s AND created_at > %(t)s) AS exps,"
+                "SELECT (SELECT count(*) FROM assay.experiments_valid"
+                " WHERE project_id=%(p)s AND created_at > %(t)s) AS exps,"
                 " (SELECT count(*) FROM assay.experiments_valid WHERE project_id=%(p)s AND created_at > %(t)s"
                 "   AND outcome='improved') AS bests,"
                 " (SELECT count(*) FROM assay.claims WHERE project_id=%(p)s AND created_at > %(t)s) AS claims,"
@@ -124,20 +164,35 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
                 " ORDER BY created_at DESC, id LIMIT %s", (p.id, t0, lg.agent, limits["recent"])).fetchall()
 
     # ---------------------------------------------------------------- header
-    head = [f"# assay brief · {p.id} · {now.astimezone(UTC):%Y-%m-%d %H:%MZ}", f"Goal: {p.goal}"]
+    heading = f"# assay brief · {p.id} · {now.astimezone(UTC):%Y-%m-%d %H:%MZ}"
+    header = [(heading, "", ""), ("Goal: ", p.goal, "")]
+    best_line = ""
     if p.primary_metric:
         b = (f"Best: {fmt(best['primary_value'])} ({short('experiment', best['id'])}, {best['author']}, "
              f"{age(now, best['created_at'])})") if best else "Best: none yet"
-        head.append(f"Metric: {p.primary_metric} ({p.metric_direction}) · {b}")
+        best_line = " · " + b
+        header.append(("Metric: ", p.primary_metric, f" ({p.metric_direction})"))
     else:
-        head.append("Metric: none (unscored project)")
+        header.append(("Metric: none (unscored project)", "", ""))
+    head = [prefix + value + suffix for prefix, value, suffix in header]
+    head[-1] += best_line
     if task is not None:
         spec = task["spec"] or {}
-        head += ["", f"## Your task {short('task', task['id'])}",
-                 f'"{task["title"]}"' + (f" · tags: {', '.join(task['tags'])}" if task["tags"] else "")]
-        spec_s = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        if spec and spec_s != "{}":
-            head.append("Spec: " + (spec_s if len(spec_s) <= 400 else spec_s[:399] + "…"))
+        task_heading = f"## Your task {short('task', task['id'])}"
+        header.extend([("", "", ""), (task_heading, "", ""), ('"', task["title"], '"')])
+        head += ["", task_heading, f'"{task["title"]}"']
+        if task["tags"]:
+            tags = ", ".join(task["tags"])
+            head[-1] += f" · tags: {tags}"
+            header.append(("Tags: ", tags, ""))
+        if spec:
+            spec_s = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            spec_s = spec_s if len(spec_s) <= 400 else spec_s[:399] + "…"
+            head.append("Spec: " + spec_s)
+            header.append(("Spec: ", spec_s, ""))
+    if estimate_tokens("\n".join(head) + "\n" + FOOTER) > limit:
+        compact_best = f" · Best: {fmt(best['primary_value'])} ({short('experiment', best['id'])})" if best else ""
+        head = _fit_header(header, limit, compact_best)
 
     sections: list[Section] = []
     if improvements:
@@ -208,23 +263,19 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     else:
         sections.append(Section("Since your last brief", [], tail=["(first brief for " + lg.agent + ")"]))
 
-    foot = ["", "Details: assay_get(<id>). Before any evaluation call assay_check_tried; after it, "
-                "assay_record_experiment (failures too)."]
-
     def render() -> str:
         lines = list(head)
         for s in sections:
             lines += s.render()
-        return "\n".join(lines + foot) + "\n"
+        return "\n".join(lines) + "\n" + FOOTER
 
     # ---------------------------------------------------------------- budget: trim items bottom-up
     out = render()
-    limit = int(budget * 1.05)
     while estimate_tokens(out) > limit:
-        victim = next((s for s in reversed(sections) if s.shown > 0), None)
-        if victim is None:
-            break
-        victim.shown -= 1
+        if sections[-1].shown:
+            sections[-1].shown -= 1
+        else:
+            sections.pop()
         out = render()
     if log:
         with lg._conn() as conn:

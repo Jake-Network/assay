@@ -39,10 +39,38 @@ def test_scripted_swarm_smoke(db_url: str) -> None:
     p = subprocess.run([sys.executable, str(ROOT / "examples/circle-packing/scripted_swarm.py"), "--workers", "3",
                         "--minutes", "0.4", "--project", pid], capture_output=True, text=True, timeout=240)
     assert p.returncode == 0, p.stderr[-2000:]
-    s = Ledger.open(project=pid, agent="lead", database_url=db_url).status()
+    lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
+    s = lead.status()
     assert s["experiments"]["total"] > 10
     assert s["best"]["value"] > 2.5
     assert s["dedup"]["avoided"] + s["dedup"]["rejected"] > 0
+
+
+def test_scripted_verification_is_limited_to_the_recorded_seeds(lead: Ledger, worker: Ledger) -> None:
+    sys.path.insert(0, str(ROOT / "examples" / "circle-packing"))
+    from scripted_swarm import CODE_REF, verify_best
+
+    config = {"init": "hex", "optimizer": "slsqp", "iters": 100, "perturb": 0.02}
+    replica = lead.as_agent("replica")
+    metric = lead.project.primary_metric
+    assert metric is not None
+    for runner, seed, score in [(worker, 0, 2.61476), (worker, 1, 2.63), (replica, 2, 2.62)]:
+        runner.record_experiment(config, {metric: score}, seed=seed, code_ref=CODE_REF)
+
+    progress = lead.sql("SELECT best_so_far FROM v_progress ORDER BY n")["rows"]
+    assert [point["best_so_far"] for point in progress] == [2.61476, 2.63, 2.63]
+    verify_best(lead)
+    first = lead.sql("SELECT id, statement FROM v_claim_status WHERE status='verified'")["rows"]
+    assert len(first) == 1
+    assert "minimum sum_radii 2.61476 across 3 tested seeds" in first[0]["statement"]
+
+    replica.record_experiment(config, {metric: 2.60}, seed=4, code_ref=CODE_REF)
+    verify_best(lead)
+    decisions = lead.sql_internal(
+        "SELECT oracle_detail FROM assay.decisions WHERE project_id=%s AND new_status='verified' ORDER BY created_at",
+        (lead.project_id,),
+    )
+    assert [d["oracle_detail"]["seeds"] for d in decisions] == [[0, 1, 2], [0, 1, 2, 4]]
 
 
 def test_bench_dry(tmp_path: Path) -> None:

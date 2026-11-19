@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from assay import Ledger
+from assay import Ledger, hooks
 from assay.config import write_config
 from assay.hooks import extract_text, process
 
@@ -73,18 +74,67 @@ def test_handback_message_is_read() -> None:
     assert extract_text({"tool_name": "SubagentHandback", "tool_input": {"message": "report"}}) == "report"
 
 
-def test_hook_cli_is_fast_and_always_exits_zero(repo: Path, worker: Ledger, db_url: str) -> None:
+def test_distinct_hook_reports_with_same_excerpt(repo: Path, worker: Ledger) -> None:
+    prefix = "x" * 350
+    first = {"cwd": str(repo), "last_assistant_message": prefix + " First conclusion."}
+    second = {"cwd": str(repo), "last_assistant_message": prefix + " Second conclusion."}
+    captured = process("subagent-stop", first)
+    assert process("subagent-stop", second) != captured
+    assert process("post-tool-use", first) == captured
+    notes = _notes(worker)
+    assert len(notes) == 2
+    assert {note["statement"] for note in notes} == {"[auto-captured] " + prefix[:300]}
+    assert {note["payload"]["text"] for note in notes} == {
+        first["last_assistant_message"], second["last_assistant_message"],
+    }
+
+
+def test_spool_retries_with_original_project(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.setattr(hooks, "RETRY_DELAYS", (0,))
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+                             "data": {"cwd": str(repo), "last_assistant_message": "Recovered finding."}})
+    write_config(repo, "unrelated-project")
+    calls = 0
+
+    def flaky_process(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("temporary database failure")
+        return process(*args, **kwargs)
+
+    monkeypatch.setattr(hooks, "process", flaky_process)
+    hooks.replay(spool)
+    assert calls == 2 and list(spool.glob("*.json")) == []
+    [note] = _notes(worker)
+    assert note["payload"]["text"] == "Recovered finding."
+
+
+def test_legacy_spool_entry_can_be_replayed(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    path = repo / "legacy-report.json"
+    path.write_text(json.dumps({"event": "subagent-stop", "cwd": str(repo),
+                               "input": json.dumps({"last_assistant_message": "Pre-upgrade finding."})}))
+    assert hooks.process_file(path)
+    assert not path.exists()
+    [note] = _notes(worker)
+    assert note["payload"]["text"] == "Pre-upgrade finding."
+
+
+def test_hook_cli_is_fast_and_always_exits_zero(repo: Path, worker: Ledger) -> None:
     data = _load("no_ids.json")
     data["cwd"] = str(repo)
     data["last_assistant_message"] = "A different finding, captured through the CLI entry point."
-    import os
-
     env = {**os.environ, "XDG_STATE_HOME": str(repo / "state")}
     t = time.monotonic()
     p = subprocess.run([sys.executable, "-m", "assay.cli", "hook", "subagent-stop"], input=json.dumps(data),
                        text=True, capture_output=True, cwd=repo, timeout=30, env=env)
     elapsed = time.monotonic() - t
     assert p.returncode == 0, p.stderr
+    assert elapsed < 1, f"hook took {elapsed:.2f}s"
     for _ in range(100):
         if len(_notes(worker)) == 1:
             break
@@ -94,4 +144,3 @@ def test_hook_cli_is_fast_and_always_exits_zero(repo: Path, worker: Ledger, db_u
     p2 = subprocess.run([sys.executable, "-m", "assay.cli", "hook", "subagent-stop"], input="not json",
                         text=True, capture_output=True, cwd=repo, timeout=30, env=env)
     assert p2.returncode == 0
-    print(f"hook wall time {elapsed:.2f}s")
