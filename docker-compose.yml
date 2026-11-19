@@ -1,0 +1,19 @@
+# Shared ledger for teams and several machines (docs/multi-machine.md).
+# export ASSAY_DATABASE_URL=postgresql://assay:assay@localhost:5432/assay
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: assay
+      POSTGRES_PASSWORD: assay   # change for anything beyond a private network
+      POSTGRES_DB: assay
+    ports:
+      - "5432:5432"
+    volumes:
+      - assay-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assay"]
+      interval: 5s
+      retries: 10
+volumes:
+  assay-pg:

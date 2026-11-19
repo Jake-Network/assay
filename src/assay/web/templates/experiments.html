@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<form class="filters" hx-get="/experiments" hx-target="#content" hx-select="#content" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change">
+  author <select name="author"><option value="">all</option>{% for a in authors %}<option {{ 'selected' if f.author == a }}>{{ a }}</option>{% endfor %}</select>
+  outcome <select name="outcome"><option value="">all</option>{% for o in ['improved','no_change','worse','failed','unscored'] %}<option {{ 'selected' if f.outcome == o }}>{{ o }}</option>{% endfor %}</select>
+  tag <select name="tag"><option value="">all</option>{% for t in tags %}<option {{ 'selected' if f.tag == t }}>{{ t }}</option>{% endfor %}</select>
+  <span class="muted">{{ rows|length }} shown (latest 300)</span>
+</form>
+<table class="t"><thead><tr><th>id</th><th>author</th><th>outcome</th><th>{{ project.primary_metric or 'value' }}</th><th>seed</th><th>config</th><th>notes</th></tr></thead><tbody>
+{% for e in rows %}<tr class="{{ 'inv' if e.invalidated }} o-{{ e.outcome }}" onclick="location='/r/{{ short('experiment', e.id) }}'">
+<td><a href="/r/{{ short('experiment', e.id) }}">{{ short('experiment', e.id) }}</a></td><td>{{ e.author }}</td>
+<td>{{ e.outcome }}{% if e.invalidated %} (invalidated){% endif %}</td><td>{{ e.primary_value|num }}</td><td>{{ e.seed if e.seed is not none }}</td>
+<td class="cfg">{{ config_line(e.config, 80) }}</td><td class="muted">{{ (e.notes or '')[:80] }}</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

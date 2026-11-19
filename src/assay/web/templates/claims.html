@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block content %}
+<div class="board">{% for status, items in cols.items() %}{% if items or status in ('proposed','supported','verified','refuted') %}
+<div class="col"><h4>{{ status }} <span class="muted">{{ items|length }}</span></h4>
+{% for c in items %}<a class="cardlink" href="/r/{{ short('claim', c.id) }}"><div class="claim s-{{ status }}">
+<div class="muted">{{ short('claim', c.id) }} · {{ c.kind }} · {{ c.author }}</div>
+<div>{{ c.statement }}</div>
+<div class="muted">+{{ c.n_support }} / −{{ c.n_refute }}{% if c.last_oracle %} · oracle {{ c.last_oracle }}{% endif %}{% if c.evidence_invalidated %} · <b>evidence invalidated</b>{% endif %}</div>
+</div></a>{% endfor %}</div>{% endif %}{% endfor %}</div>
+{% endblock %}

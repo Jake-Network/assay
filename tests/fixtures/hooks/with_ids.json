@@ -1,0 +1,10 @@
+{
+  "session_id": "s1",
+  "transcript_path": "/x.jsonl",
+  "cwd": "/tmp",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "a1",
+  "agent_type": "assay-worker",
+  "last_assistant_message": "Done. Hex init with SLSQP reached 2.61. Records: {EXP}, {CLAIM}."
+}

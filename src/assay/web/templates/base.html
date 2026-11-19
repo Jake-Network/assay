@@ -1,0 +1,18 @@
+{% if not partial %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>assay · {{ project.id }}</title>
+<link rel="stylesheet" href="/static/uPlot.min.css"><link rel="stylesheet" href="/static/assay.css">
+<script src="/static/htmx.min.js"></script><script src="/static/uPlot.iife.min.js"></script>
+</head><body>
+<header><b>assay</b> <span class="muted">{{ project.id }}</span>
+<nav>{% for p, label in [("overview","Overview"),("experiments","Experiments"),("claims","Claims"),("tasks","Tasks")] %}
+<a href="/{{ '' if p == 'overview' else p }}" class="{{ 'on' if page == p }}">{{ label }}</a>{% endfor %}</nav>
+<span id="live" class="muted">● live</span></header>
+<main>{% endif %}
+<div id="content" hx-get="{{ request.url.path }}?{{ request.url.query }}{{ '&' if request.url.query }}partial=1"
+     hx-trigger="ledger-changed from:body" hx-select="#content" hx-swap="outerHTML">
+{% block content %}{% endblock %}
+</div>
+{% if not partial %}</main>
+<script src="/static/assay.js"></script>
+</body></html>{% endif %}

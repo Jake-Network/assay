@@ -1,0 +1,13 @@
+{
+  "name": "assay",
+  "owner": {
+    "name": "assay maintainers"
+  },
+  "plugins": [
+    {
+      "name": "assay",
+      "source": "./integrations/claude-code",
+      "description": "Your agents' lab notebook (assay ledger, worker subagent, lead skill, result-capture hook)."
+    }
+  ]
+}

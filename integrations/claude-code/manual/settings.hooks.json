@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "assay hook subagent-stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "assay hook subagent-handback",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

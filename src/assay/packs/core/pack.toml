@@ -1,0 +1,14 @@
+# core pack: the only pack shipped in v0.1
+claim_kinds = ["hypothesis", "observation", "conclusion", "note"]
+dedup_ignore = ["notes", "seed", "run_id", "timestamp"]
+
+[config]
+max_depth = 6
+max_bytes = 65536
+
+[brief]
+verified = 10
+supported = 5
+tried = 8
+open_questions = 5
+recent = 3

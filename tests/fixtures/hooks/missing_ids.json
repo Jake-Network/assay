@@ -1,0 +1,20 @@
+{
+  "session_id": "s3",
+  "transcript_path": "/x.jsonl",
+  "cwd": "/tmp",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "x",
+    "prompt": "y"
+  },
+  "tool_response": {
+    "status": "completed",
+    "content": [
+      {
+        "type": "text",
+        "text": "Finished; see e:00000000 and c:ffffffff for details."
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "assay": {
+      "command": "assay",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

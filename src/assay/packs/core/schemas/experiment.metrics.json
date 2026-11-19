@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "core metrics",
+  "description": "A flat object whose values are numbers, strings or booleans.",
+  "type": "object",
+  "additionalProperties": {
+    "type": [
+      "number",
+      "string",
+      "boolean"
+    ]
+  }
+}

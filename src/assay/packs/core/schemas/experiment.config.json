@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "core experiment config",
+  "description": "Any JSON object. Depth (<=6) and size (<=64KB) are checked in code.",
+  "type": "object"
+}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block content %}
+<h2>{{ r.kind }} {{ r.id }}{% if r.status %} · {{ r.status.status }}{% endif %}{% if r.invalidated %} · invalidated{% endif %}</h2>
+{% if r.kind == 'claim' %}<p class="goal">{{ r.record.statement }}</p>{% endif %}
+{% if r.kind == 'task' %}<p class="goal">{{ r.record.title }}</p>{% endif %}
+<div class="two">
+<div><h3>links in</h3><ul>{% for l in r.links_in or [] %}<li><a href="/r/{{ l.src }}">{{ l.src }}</a> {{ l.relation }} this <span class="muted">({{ l.author }}){% if l.note %} — {{ l.note }}{% endif %}</span></li>{% else %}<li class="muted">none</li>{% endfor %}</ul>
+<h3>links out</h3><ul>{% for l in r.links_out or [] %}<li>this {{ l.relation }} <a href="/r/{{ l.dst }}">{{ l.dst }}</a> <span class="muted">({{ l.author }}){% if l.note %} — {{ l.note }}{% endif %}</span></li>{% else %}<li class="muted">none</li>{% endfor %}</ul>
+{% if r.decisions is defined %}<h3>decisions</h3><ul>{% for d in r.decisions %}<li>{{ d.status }} by {{ d.by }} (oracle {{ d.oracle }}): {{ d.rationale }}</li>{% else %}<li class="muted">none</li>{% endfor %}</ul>{% endif %}
+{% if r.events is defined %}<h3>events</h3><ul>{% for e in r.events %}<li>{{ e.event }} {{ e.agent_id or '' }} <span class="muted">{{ e.created_at }}</span></li>{% endfor %}</ul>{% endif %}
+</div>
+<div><h3>record</h3><pre>{{ r.record|js }}</pre></div>
+</div>
+{% endblock %}

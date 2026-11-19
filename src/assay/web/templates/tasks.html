@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block content %}
+<table class="t"><thead><tr><th>id</th><th>status</th><th>title</th><th>tags</th><th>prio</th><th>lease</th><th>attempts</th><th>summary</th></tr></thead><tbody>
+{% for t in rows %}<tr><td><a href="/r/{{ short('task', t.id) }}">{{ short('task', t.id) }}</a></td><td>{{ t.status }}</td><td>{{ t.title }}</td>
+<td>{{ t.tags|join(', ') }}</td><td>{{ t.priority }}</td>
+<td>{% if t.status == 'claimed' %}{{ t.lease_owner }} · {% if t.lease_left is not none and t.lease_left > 0 %}{{ t.lease_left // 60 }}m{{ t.lease_left % 60 }}s left{% else %}expired{% endif %}{% endif %}</td>
+<td>{{ t.attempts }}/{{ t.max_attempts }}</td><td class="muted">{{ t.summary or '' }}</td></tr>{% else %}<tr><td class="muted">no tasks</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

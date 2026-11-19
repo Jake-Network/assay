@@ -1,0 +1,22 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-13]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --all-groups
+      - run: uv run ruff check src tests bench examples
+      - run: uv run mypy src/assay
+      - run: uv run pytest -q
+        env:
+          ASSAY_PROPERTY_EXAMPLES: "300"
+      - run: scripts/qa_first_experiment.sh

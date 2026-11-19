@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% block content %}
+<p class="goal">{{ st.goal }}</p>
+<section class="cards">
+  <div class="card"><div class="k">best {{ st.metric or '' }} ({{ st.direction or '' }})</div>
+    <div class="v">{% if st.best %}<a href="/r/{{ st.best.id }}">{{ st.best.value|num }}</a>{% else %}—{% endif %}</div>
+    <div class="muted">{% if st.best %}{{ st.best.author }}{% endif %}</div></div>
+  <div class="card"><div class="k">experiments</div><div class="v">{{ st.experiments.total }}</div>
+    <div class="muted">{{ st.experiments.improved }} improved · {{ st.experiments.invalidated }} invalidated</div></div>
+  <div class="card"><div class="k">duplicates blocked</div><div class="v">{{ st.dedup.rejected }}</div>
+    <div class="muted">{{ st.dedup.avoided }} repeat-check matches</div></div>
+  <div class="card"><div class="k">verified claims</div><div class="v">{{ verified }}</div>
+    <div class="muted">{{ st.claims.values()|sum }} claims total</div></div>
+  <div class="card"><div class="k">active agents</div><div class="v">{{ st.active_agents|length }}</div>
+    <div class="muted">{{ st.active_agents|join(', ') }}</div></div>
+</section>
+{% if st.metric %}<h3>best-so-far</h3><div id="chart" data-src="/api/progress"></div>{% endif %}
+<h3>recent activity</h3>
+<table class="t"><tbody>
+{% for a in activity %}<tr><td class="muted">{{ age(a.created_at, now) }}</td><td>{{ a.kind }}</td>
+<td>{% if a.kind in ('experiment','claim','decision','source','link') %}<a href="/r/{{ a.id }}">{{ short(a.kind, a.id) }}</a>{% endif %}</td>
+<td>{{ a.agent or '' }}</td><td>{{ a.summary }}</td></tr>{% else %}<tr><td class="muted">nothing yet</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}
