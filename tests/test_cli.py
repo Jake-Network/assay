@@ -63,3 +63,11 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     assert json.loads(lines[0])["type"] == "project" and len(lines) > 5
     assert cli("exp", "record", "--bogus").returncode == 1
     assert cli("get", "e:zzzz").returncode == 1
+
+
+def test_module_entry_shares_global_options(tmp_path: Path) -> None:
+    """`python -m assay.cli --json ar ...` must see --json/--project (one STATE, not two)."""
+    for mod in ("assay", "assay.cli"):
+        r = subprocess.run([sys.executable, "-m", mod, "--json", "ar", "status"], cwd=tmp_path,
+                           capture_output=True, text=True)
+        assert r.stdout.startswith("{"), (mod, r.stdout, r.stderr)

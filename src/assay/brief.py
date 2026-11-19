@@ -106,7 +106,13 @@ def _fit_header(lines: list[tuple[str, str, str]], limit: int, best_line: str) -
 
 
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *,
-                  now: datetime | None = None, log: bool = True) -> str:
+                  now: datetime | None = None, log: bool = True, partition: str | None = None) -> str:
+    if lg.pack.brief_compiler:
+        import importlib
+
+        mod, _, fn = lg.pack.brief_compiler.partition(":")
+        compiler = getattr(importlib.import_module(mod), fn)
+        return compiler(lg, task_id, budget_tokens, now=now, log=log, partition=partition)  # type: ignore[no-any-return]
     limit = int(budget_tokens) * 105 // 100
     if limit < 1:
         raise ValidationFailed(["budget_tokens: must be positive"])
@@ -120,7 +126,9 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         task = None
         if task_id is not None:
             task = conn.execute("SELECT * FROM assay.tasks WHERE id=%s", (task_id,)).fetchone()
-        best = conn.execute("SELECT * FROM assay.v_best WHERE project_id=%s", (p.id,)).fetchone()
+        best = conn.execute("SELECT * FROM assay.v_best WHERE project_id=%s ORDER BY CASE WHEN %s = 'min'"
+                            " THEN primary_value ELSE -primary_value END, created_at LIMIT 1",
+                            (p.id, p.metric_direction)).fetchone()
         improvements = conn.execute(
             "SELECT id, author, primary_value, created_at FROM assay.experiments_valid WHERE project_id=%s"
             " AND outcome='improved' AND id <> %s ORDER BY created_at DESC, id LIMIT 2",

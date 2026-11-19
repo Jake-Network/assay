@@ -91,3 +91,65 @@ One line per decision the spec left open or that changed during implementation. 
   unless `--execute` is passed (cost rule, §16.3).
 - Real runs use a common API dollar cap and separate project IDs. Evaluation receipts identify each result across
   lead reports, files and the ledger. Token curves use reconciled usage checkpoints or a measured endpoint.
+
+## Step 3: autoresearch (2026-11-20)
+
+- **A0:** the SLSQP `repair()` fix was already on main (331e488). The distribution name, the README install
+  commands and the `v0.1.0` tag wait for a human decision (MANUAL_QA.md); A1-A9 went ahead as §15 allows.
+- **Migration 0005** adds `settings_events` and `blobs` (append-only, notify on settings changes), appends a
+  `partition` column to `v_leaderboard`, `v_best`, `v_tried`, `v_progress` (`seed` too), and adds
+  `v_partition_best`, `v_lineage`, `v_inflight`, `v_knob_history`. All `assay_q` reader copies are dropped and
+  rebuilt (they are `SELECT *` snapshots). Without `settings.partition_key` the partition expression is NULL and
+  every view behaves as before.
+- **Partition-aware outcome (C1):** the epsilon is `settings.partitions[p].epsilon`, else `improve_epsilon`; both
+  are re-read inside the writer's lock because calibration runs in another process. A new setting
+  `outcome_baseline = "verified"` (set by `ar init`) compares with the best verified mean of the partition and
+  falls back to the raw best before anything is verified. Without it the v0.1 raw-best rule applies.
+- **update_settings** is a JSON merge patch (RFC 7386), orchestrator/human only, one `settings_events` row each.
+- **Intents (C3)** are tasks inserted as `claimed` by their creator (`max_attempts` 1, tag `intent`). Exclusivity
+  is generic: `create_intent(..., exclusive=[field])` refuses a live intent with the same `spec[field]`, under an
+  advisory lock. `ar` uses `knob_key = partition|canonical knob changes` (claim) and `code_key =
+  partition|code hash` (run). New error `Conflict` maps to exit code 2.
+- **next_task** gained `spec_match` (jsonb containment) next to `exclude_agents` (C4): replication tasks are
+  only taken by agents in the same partition.
+- **ml-research pack:** `ok_metrics_required = ["val_bpb"]` is checked in code (a JSON Schema cannot see
+  run_status). Packs can name a `brief_compiler`; the ml-research brief replaces the default one.
+- **T5 is stricter than §10.2 literally:** verified needs the mean of all runs *and* the mean of the replications
+  alone to beat the verified best by epsilon. With only the 3-run mean, one lucky first run (−0.01 in the
+  simulator) lifts the mean past a small epsilon and breaks the §12 condition that lucky candidates end refuted
+  or inconclusive. The first run was selected for being good, so it should not count twice.
+- **Calibration doubles as the baseline's replication:** the first code of a partition is re-run twice (T1); when
+  done, T2 stores sigma/epsilon and T5 verifies that code without a comparison, so the partition gets its first
+  verified best. A candidate that finishes replication before any verified best exists is verified on its
+  own replication. Calibration with fewer than 3 successful runs stores `status: partial|failed` and the floor.
+- **replicate_max_queue counts candidates** (default 4), not tasks. A better arrival cancels the open tasks of the
+  weakest candidate that nobody is running; otherwise the arrival is closed as `inconclusive` (oracle none)
+  without replication. T3 also closes candidates already beaten by a verified best recorded since.
+- **T7** compares the first run with "new best + epsilon" exactly as §10.2 says, and only cancels open
+  (unclaimed) replication tasks; T5 then judges the candidate `inconclusive`.
+- **Result claims** are proposed by the referee with the first run as `supports` evidence, then decided
+  `supported` (oracle metric, evidence: first run) and `verified` (oracle rerun, evidence: all runs). Statements
+  include the experiment's short id, so they never collide. A rerun-rule rejection becomes `inconclusive`.
+- **ar run refuses failed code too** (a crash usually repeats); `--retry-failed` re-runs code that has only
+  failed runs. A run whose record cannot be written is queued in `.assay/ar_pending.jsonl` and written by the
+  next `ar` command, which is how "every started run is recorded" holds when the database blips.
+- **Parent code:** compared by normalised hash, so a comment-only commit after a run still counts as "committed".
+  A run whose parent hash equals its own code (a re-run of the parent) records no parent.
+- **Hardware class:** vendor words, memory types and the word "gpu" are dropped; form factors (pcie, sxm4, laptop)
+  are kept because they change speed. Memory comes from the name, else memory.total rounded to GB.
+- **program.assay.md:** the §9 loop block is kept verbatim (Korean comments, as the spec requires) and followed by
+  an English rendering; the rest is upstream `program.md` text adapted to the shared loop. MIT attribution in
+  an HTML comment at the top (upstream has no LICENSE file; its README states MIT).
+- **ar import (Should, S3)** is implemented: rows are first runs whose code comes from `git show <commit>:train.py`;
+  improvements become candidates and get replicated. Re-importing is a no-op.
+- **Not done (Should):** the LLM research-director mode, the `--trust candidate` ablation, `ar init --shim`, and
+  hands-on MLX/macOS fork checks. `sync --trust candidate` itself exists.
+- **`python -m assay`** was added, and `python -m assay.cli` now dispatches through the canonical module: as
+  `__main__` it used to hold a second global STATE, so `--json`/`--project` were ignored by `assay ar`.
+- **Simulator:** noise is drawn fresh per run (the real `train.py` fixes seed 42), runs sleep instead of training,
+  and they print `sim_run_id`, `true_bpb` and `lucky` so the e2e can check that nothing started went unrecorded.
+  The e2e uses a higher lucky rate (0.15) than the default (0.02) so a 1-minute run exercises refutation.
+- **Bench:** arm A runs are collected by a `uv` shim on PATH (wrap_train.sh); arm A's "false best" is a keep
+  whose 3-run re-run mean is worse than its reported value by more than B's calibrated epsilon. `--sim` numbers
+  are dominated by CLI start-up (~1-2 s per `assay` call against 0.2 s simulated runs) and say nothing about
+  real 5-minute runs; the report labels them as a pipeline check.

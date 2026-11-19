@@ -1,0 +1,289 @@
+"""assay ar operations on real git checkouts of the CPU simulator (§8, §16.1). Runs take ~0.05 s each."""
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+import pytest
+
+from assay import Ledger
+from assay.integrations.autoresearch import ops
+from assay.integrations.autoresearch.code import code_hash
+from assay.integrations.autoresearch.referee import tick
+from assay.tokens import estimate_tokens
+
+SIM = Path(__file__).resolve().parent.parent / "examples" / "autoresearch-sim"
+CMD = f"{sys.executable} train.py"
+
+
+@pytest.fixture(autouse=True)
+def sim_env(db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
+    monkeypatch.setenv("ASSAY_AR_HW", "test-cpu")
+    monkeypatch.setenv("AR_SIM_SECONDS", "0.05")
+    monkeypatch.setenv("AR_SIM_LUCKY", "0")
+    monkeypatch.setenv("AR_SIM_NOISE", "0.0005")
+    for k, v in {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+                 "GIT_COMMITTER_EMAIL": "t@example.invalid"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+
+
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
+
+
+def checkout(base: Path, name: str) -> Path:
+    root = base / name
+    root.mkdir()
+    for f in ("prepare.py", "train.py"):
+        shutil.copy(SIM / f, root / f)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "upstream")
+    return root
+
+
+def set_knob(root: Path, name: str, value: str, commit: bool = True) -> None:
+    import re
+
+    p = root / "train.py"
+    p.write_text(re.sub(rf"^{name} = [^#\n]*?(\s*#.*)?$", lambda m: f"{name} = {value}{m.group(1) or ''}",
+                        p.read_text(), count=1, flags=re.M))
+    if commit:
+        git(root, "commit", "-qam", f"{name}={value}")
+
+
+@pytest.fixture
+def lab(tmp_path: Path) -> tuple[str, list[Path]]:
+    pid = f"ar-{uuid.uuid4().hex[:10]}"
+    roots = [checkout(tmp_path, n) for n in ("a", "b", "c")]
+    ops.init(pid, start=roots[0])
+    return pid, roots
+
+
+def ctx(pid: str, root: Path, agent: str) -> ops.Ctx:
+    return ops.open_ctx(project=pid, agent=agent, start=root)
+
+
+def calibrate(pid: str, roots: list[Path]) -> ops.Ctx:
+    a = ctx(pid, roots[0], "a")
+    assert ops.run(a, "baseline", CMD)["verdict"].startswith("KEEP (baseline")
+    assert len(ops.replicate(ctx(pid, roots[1], "b"), cmd=CMD)) == 1
+    assert len(ops.replicate(ctx(pid, roots[2], "c"), cmd=CMD)) == 1
+    return a
+
+
+def test_init(lab: tuple[str, list[Path]]) -> None:
+    pid, (root, *_) = lab
+    assert "LOOP FOREVER" in (root / "program.assay.md").read_text()
+    assert ".assay/ar_state.json" in (root / ".gitignore").read_text()
+    assert f'project = "{pid}"' in (root / ".assay" / "config.toml").read_text()
+    lg = Ledger.open(project=pid, agent="human")
+    assert lg.project.pack == "ml-research" and lg.project.settings["partition_key"] == "partition"
+    assert lg.as_agent("referee").role == "orchestrator"
+    again = ops.init(pid, start=root)
+    assert not again["created"] and not again["wrote_program"] and not again["program_differs"]
+
+
+def test_run_refuses_duplicates_and_records_crashes(lab: tuple[str, list[Path]]) -> None:
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+    first = ops.run(a, "baseline", CMD)
+    assert first["outcome"] == "improved" and first["value"] is not None
+    with pytest.raises(ops.Refused, match="DUPLICATE"):
+        ops.run(a, "baseline again", CMD)
+    (root / "train.py").write_text((root / "train.py").read_text() + "\n# a comment does not make it new\n")
+    with pytest.raises(ops.Refused):
+        ops.run(a, "baseline with a comment", CMD)
+    git(root, "checkout", "train.py")
+    set_knob(root, "DEPTH", "14")  # simulated OOM
+    crash = ops.run(a, "deeper", CMD)
+    assert crash["verdict"].startswith("CRASH") and crash["run_status"] == "error"
+    rec = a.lg.get(crash["id"])["record"]
+    assert rec["outcome"] == "failed" and "OutOfMemoryError" in rec["notes"]
+    with pytest.raises(ops.Refused, match="retry-failed"):
+        ops.run(a, "deeper again", CMD)
+    assert ops.run(a, "deeper again", CMD, retry_failed=True)["run_status"] == "error"
+    rows = (root / "results.tsv").read_text().splitlines()
+    assert rows[0] == "commit\tval_bpb\tmemory_gb\tstatus\tdescription"
+    assert rows[1].split("\t")[3:] == ["keep", "baseline"] and rows[1].split("\t")[0] == git(
+        root, "rev-parse", "--short=7", "HEAD~1").strip()
+    assert rows[2].split("\t")[1:4] == ["0.000000", "0.0", "crash"]
+    assert len(rows) == 4
+
+
+def test_running_duplicate_is_refused(lab: tuple[str, list[Path]]) -> None:
+    pid, (ra, rb, _) = lab
+    a, b = ctx(pid, ra, "a"), ctx(pid, rb, "b")
+    code = code_hash((ra / "train.py").read_bytes())
+    b.lg.create_intent("baseline", {"partition": b.partition, "code_key": f"{b.partition}|{code}"})
+    with pytest.raises(ops.Refused, match="running right now"):
+        ops.run(a, "baseline", CMD)
+    assert not a.lg.sql_internal("SELECT 1 FROM assay.experiments WHERE project_id=%s", (pid,))
+
+
+def test_parent_changed_knobs_and_lineage(lab: tuple[str, list[Path]]) -> None:
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+    base = ops.run(a, "baseline", CMD)
+    set_knob(root, "MATRIX_LR", "0.06")
+    r = ops.run(a, "MATRIX_LR to 0.06", CMD)
+    assert r["changed"] == {"MATRIX_LR": [0.04, 0.06]} and r["parent_from"] == "HEAD~1"
+    assert r["parent"] == base["code"]
+    set_knob(root, "WARMDOWN_RATIO", "0.65", commit=False)  # not committed: the parent is HEAD
+    r2 = ops.run(a, "warmdown", CMD)
+    assert r2["parent_from"] == "HEAD" and r2["changed"] == {"WARMDOWN_RATIO": [0.5, 0.65]}
+    lin = a.lg.sql_internal("SELECT id, depth FROM assay.v_lineage WHERE project_id=%s ORDER BY depth", (pid,))
+    assert [x["depth"] for x in lin] == [0, 1, 2]
+    kh = a.lg.sql_internal("SELECT knob FROM assay.v_knob_history WHERE project_id=%s ORDER BY knob", (pid,))
+    assert [x["knob"] for x in kh] == ["MATRIX_LR", "WARMDOWN_RATIO"]
+
+
+def test_claims(lab: tuple[str, list[Path]]) -> None:
+    pid, (ra, rb, rc) = lab
+    a, b, c = ctx(pid, ra, "a"), ctx(pid, rb, "b"), ctx(pid, rc, "c")
+    first = ops.claim(a, "raise matrix lr to 0.06", {"MATRIX_LR": 0.06})
+    with pytest.raises(ops.Refused, match="already working"):
+        ops.claim(b, "a different wording", {"MATRIX_LR": 0.060})
+    with pytest.raises(ops.Refused, match="very similar"):
+        ops.claim(b, "Raise matrix LR to 0.06!", {"MATRIX_LR": 0.06, "DEPTH": 10})
+    forced = ops.claim(b, "Raise matrix LR to 0.06!", {"MATRIX_LR": 0.06, "DEPTH": 10}, force=True)
+    assert forced["warnings"]
+    second = ops.claim(a, "something else", {"DEPTH": 9})
+    assert [t.title for t in a.lg.my_intents()] == ["something else"]  # the older intent was released
+    ops.claim(c, "now free", {"MATRIX_LR": 0.06})
+    assert first["intent"] != second["intent"]
+
+
+def test_replicate_is_isolated_and_partitioned(lab: tuple[str, list[Path]]) -> None:
+    pid, (ra, rb, rc) = lab
+    a, b = ctx(pid, ra, "a"), ctx(pid, rb, "b")
+    ops.run(a, "baseline", CMD)
+    set_knob(rb, "DEPTH", "10", commit=False)  # b is mid-edit
+    before = ((rb / "train.py").read_bytes(), git(rb, "status", "--porcelain"), git(rb, "rev-parse", "HEAD"))
+    done = ops.replicate(b, cmd=CMD)
+    assert len(done) == 1 and done[0]["run_status"] == "ok" and done[0]["kind"] == "calibration"
+    assert ((rb / "train.py").read_bytes(), git(rb, "status", "--porcelain"), git(rb, "rev-parse", "HEAD")) == before
+    assert not (rb / "results.tsv").exists()
+    # a checkout whose prepare.py differs is another partition and gets no task
+    (rc / "prepare.py").write_text((rc / "prepare.py").read_text().replace("TIME_BUDGET = 3", "TIME_BUDGET = 4"))
+    c = ctx(pid, rc, "c")
+    assert c.partition != a.partition and ops.replicate(c, cmd=CMD) == []
+    assert ops.replicate(a, cmd=CMD) == []  # never your own run
+
+
+def test_sync_adopts_verified_best_and_leaves_refuted_lines(lab: tuple[str, list[Path]],
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    pid, roots = lab
+    a = calibrate(pid, roots)
+    b, c = ctx(pid, roots[1], "b"), ctx(pid, roots[2], "c")
+    assert ops.sync(a)["adopted"] is False  # a already has the verified baseline
+    # a lucky candidate: UNEMBEDDING_LR does not affect the simulated loss
+    set_knob(roots[0], "UNEMBEDDING_LR", "0.005")
+    monkeypatch.setenv("AR_SIM_LUCKY", "1")
+    lucky = ops.run(a, "unembedding lr", CMD)
+    monkeypatch.setenv("AR_SIM_LUCKY", "0")
+    assert lucky["verdict"].startswith("KEEP (candidate")
+    assert ops.sync(a)["adopted"] is False  # its own candidate looks better than the verified mean
+    ops.replicate(b, cmd=CMD)
+    ops.replicate(c, cmd=CMD)
+    assert a.lg.get(lucky["id"])["links_out"]
+    s = ops.sync(a)
+    assert s["adopted"] and "refuted" in s["why"] and s["committed"]
+    assert "UNEMBEDDING_LR = 0.004" in (roots[0] / "train.py").read_text()
+    assert git(roots[0], "log", "-1", "--format=%s").startswith("adopt verified best")
+    # a real improvement replicates and becomes the verified best that others adopt
+    set_knob(roots[1], "MATRIX_LR", "0.06")
+    assert ops.run(b, "matrix lr 0.06", CMD)["verdict"].startswith("KEEP (candidate")
+    ops.replicate(a, cmd=CMD)
+    ops.replicate(c, cmd=CMD)
+    s = ops.sync(c)
+    assert s["adopted"] and s["status"] == "verified"
+    assert "MATRIX_LR = 0.06" in (roots[2] / "train.py").read_text()
+    st = ops.status(c.lg)["partitions"][0]
+    assert st["verified_best"]["author"] == "b" and st["results"].get("refuted") == 1
+    assert st["calibration"]["status"] == "ok" and st["gpu_minutes"]["replication_share"] > 0
+    brief = c.lg.brief(budget_tokens=1500, partition=c.partition)
+    assert "## Verified best" in brief and "MATRIX_LR: 0.06 base" in brief and "assay ar claim" in brief
+    assert estimate_tokens(brief) <= 1575
+    tiny = c.lg.brief(budget_tokens=200, partition=c.partition)
+    assert estimate_tokens(tiny) <= 210 and "Next:" in tiny
+
+
+def test_unrecorded_runs_are_queued_and_flushed(lab: tuple[str, list[Path]],
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+
+    def down(*args: object, **kw: object) -> None:
+        raise ConnectionError("database unreachable")
+
+    monkeypatch.setattr(a.lg, "record_experiment", down)
+    r = ops.run(a, "baseline", CMD)
+    assert r["outcome"] == "queued" and (root / ".assay" / "ar_pending.jsonl").exists()
+    a2 = ctx(pid, root, "a")  # every ar command flushes the queue first
+    assert not (root / ".assay" / "ar_pending.jsonl").exists()
+    assert len(a2.lg.sql_internal("SELECT 1 FROM assay.experiments WHERE project_id=%s", (pid,))) == 1
+
+
+def test_notes_and_ideas(lab: tuple[str, list[Path]]) -> None:
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+    r = ops.run(a, "baseline", CMD)
+    n = ops.note(a, "the baseline is stable")
+    got = a.lg.get(n["id"])
+    assert got["links_in"][0]["src"] == r["id"]
+    i = ops.idea(a, "try a deeper model", {"DEPTH": 10})
+    assert a.lg.get(i["id"])["record"]["payload"] == {"partition": a.partition, "knobs": {"DEPTH": 10}}
+    tick(a.lg)
+
+
+def test_viewer_pages(lab: tuple[str, list[Path]]) -> None:
+    from starlette.testclient import TestClient
+
+    from assay.web.app import create_app
+
+    pid, roots = lab
+    a = calibrate(pid, roots)
+    set_knob(roots[0], "MATRIX_LR", "0.06")
+    r = ops.run(a, "matrix lr 0.06", CMD)
+    ops.claim(ctx(pid, roots[1], "b"), "try depth 10", {"DEPTH": 10})
+    app = create_app(pid, with_mcp=False)
+    with TestClient(app) as client:
+        page = client.get("/")
+        assert page.status_code == 200 and "verified best" in page.text and "try depth 10" in page.text
+        assert a.partition in page.text and "/lineage" in page.text
+        prog = client.get(f"/api/partition_progress?p={a.partition}").json()
+        assert prog["kind"] == "partition" and any(v is not None for v in prog["verified"])
+        assert any(v is not None for v in prog["candidate"])
+        lin = client.get("/lineage")
+        assert lin.status_code == 200 and r["id"] in lin.text
+        assert "MATRIX_LR" in client.get("/knobs").text
+        rec = client.get(f"/r/{r['id']}")
+        assert rec.status_code == 200 and "train.py vs parent" in rec.text and "+MATRIX_LR = 0.06" in rec.text
+
+
+def test_import_results_tsv(lab: tuple[str, list[Path]]) -> None:
+    pid, (root, *_) = lab
+    rows = ["commit\tval_bpb\tmemory_gb\tstatus\tdescription"]
+    base = git(root, "rev-parse", "--short=7", "HEAD").strip()
+    rows.append(f"{base}\t1.002000\t44.0\tkeep\tbaseline")
+    set_knob(root, "MATRIX_LR", "0.06")
+    rows.append(f"{git(root, 'rev-parse', '--short=7', 'HEAD').strip()}\t0.998000\t44.0\tkeep\tlr 0.06")
+    set_knob(root, "DEPTH", "14")
+    rows.append(f"{git(root, 'rev-parse', '--short=7', 'HEAD').strip()}\t0.000000\t0.0\tcrash\tdepth 14 OOM")
+    rows.append("deadbee\t0.990000\t44.0\tkeep\tlost commit")
+    (root / "old.tsv").write_text("\n".join(rows) + "\n")
+    a = ctx(pid, root, "a")
+    r = ops.import_results(a, root / "old.tsv")
+    assert r == {"imported": 3, "duplicates": 0, "missing_commit": 1, "rows": 4, "referee": r["referee"]}
+    exps = a.lg.sql_internal("SELECT outcome, config->'changed' AS ch FROM assay.experiments WHERE project_id=%s"
+                             " ORDER BY created_at", (pid,))
+    assert [e["outcome"] for e in exps] == ["improved", "improved", "failed"]
+    assert exps[1]["ch"] == {"MATRIX_LR": [0.04, 0.06]}
+    again = ops.import_results(a, root / "old.tsv")
+    assert again["imported"] == 0 and again["duplicates"] == 3  # nothing is imported twice

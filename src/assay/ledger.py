@@ -27,6 +27,7 @@ from .dedup import canonical_json, dedup_key, statement_hash
 from .errors import (
     Ambiguous,
     AssayError,
+    Conflict,
     InvalidTransition,
     LeaseLost,
     NotFound,
@@ -81,6 +82,10 @@ _SHORT_RE = re.compile(r"^(?:([ectsdl]):)?([0-9a-f-]{4,36})$")
 
 
 def jsonable(v: Any) -> Any:
+    if isinstance(v, (bytes, memoryview)):
+        import base64
+
+        return base64.b64encode(bytes(v)).decode("ascii")
     if isinstance(v, (UUID, Decimal)):
         return str(v) if isinstance(v, UUID) else float(v)
     if isinstance(v, (datetime, date)):
@@ -187,7 +192,7 @@ class Ledger:
     def init_project(cls, id: str, title: str | None = None, goal: str = "", metric: str | None = None,
                      direction: str | None = None, epsilon: float = 0.0,
                      config_schema: dict[str, Any] | None = None, settings: dict[str, Any] | None = None,
-                     database_url: str | None = None) -> tuple[Project, bool]:
+                     database_url: str | None = None, pack: str = "core") -> tuple[Project, bool]:
         """Create a project (idempotent). Registers lead (orchestrator), human (human), hook (harness).
         Returns (project, created)."""
         if (metric is None) != (direction is None):
@@ -196,6 +201,7 @@ class Ledger:
             raise AssayError("direction must be max or min")
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", id):
             raise AssayError("project id must be a lowercase slug: [a-z0-9][a-z0-9_-]*")
+        load_pack(pack)  # unknown packs fail before anything is written
         st = dict(settings or {})
         if config_schema is not None:
             try:
@@ -206,9 +212,9 @@ class Ledger:
         url = cls.ensure_schema(database_url)
         with cls._pool(url).connection() as conn:
             row = conn.execute(
-                "INSERT INTO assay.projects(id,title,goal,primary_metric,metric_direction,improve_epsilon,settings)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING RETURNING *",
-                (id, title or id, goal or "(no goal set)", metric, direction, epsilon, Jsonb(st)),
+                "INSERT INTO assay.projects(id,title,goal,primary_metric,metric_direction,improve_epsilon,pack,"
+                "settings) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING RETURNING *",
+                (id, title or id, goal or "(no goal set)", metric, direction, epsilon, pack, Jsonb(st)),
             ).fetchone()
             created = row is not None
             if row is None:
@@ -216,6 +222,66 @@ class Ledger:
             for a, r in (("lead", "orchestrator"), ("human", "human"), ("hook", "harness")):
                 cls._ensure_agent(conn, id, a, r)
         return Project(**row), created
+
+    def refresh(self) -> Project:
+        """Re-read the project row (settings change while agents run)."""
+        with self._conn() as conn:
+            self.project = Project(**conn.execute("SELECT * FROM assay.projects WHERE id=%s",
+                                                  (self.project_id,)).fetchone())
+        return self.project
+
+    def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """Apply a JSON merge patch (RFC 7386) to the project settings (orchestrator/human only).
+        Every change is kept as an append-only settings_events row."""
+        self._require_decider()
+        if not isinstance(patch, dict) or not patch:
+            raise ValidationFailed(["patch: must be a non-empty JSON object"])
+        canonical_json(patch)
+        with self._conn() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (self.project_id,))
+            row = conn.execute("SELECT settings FROM assay.projects WHERE id=%s FOR UPDATE",
+                               (self.project_id,)).fetchone()
+            new: dict[str, Any] = merge_patch(row["settings"], patch)
+            if "config_schema" in new:
+                try:
+                    Draft202012Validator.check_schema(new["config_schema"])
+                except Exception as e:  # jsonschema.SchemaError
+                    raise ValidationFailed([f"config_schema: {e}"]) from e
+            conn.execute("UPDATE assay.projects SET settings=%s WHERE id=%s", (Jsonb(new), self.project_id))
+            conn.execute("INSERT INTO assay.settings_events(project_id, agent_id, patch, settings)"
+                         " VALUES (%s,%s,%s,%s)", (self.project_id, self.agent, Jsonb(patch), Jsonb(new)))
+        self.refresh()
+        return new
+
+    # ------------------------------------------------------------------ blobs (C2)
+
+    def put_blob(self, data: bytes, media_type: str = "application/octet-stream") -> str:
+        """Store bytes content-addressed; returns assay://blob/<sha256>. Re-putting returns the same URI."""
+        import hashlib
+
+        if not isinstance(data, (bytes, bytearray)):
+            raise ValidationFailed(["data: must be bytes"])
+        limit = int(self.project.settings.get("blob_max_bytes", 1_000_000))
+        if len(data) > limit:
+            raise ValidationFailed([f"blob: {len(data)} bytes, limit {limit} (settings.blob_max_bytes)"])
+        digest = hashlib.sha256(data).hexdigest()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO assay.blobs(project_id, sha256, bytes, size, media_type, author)"
+                " VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (project_id, sha256) DO NOTHING",
+                (self.project_id, digest, bytes(data), len(data), media_type, self.agent))
+        return BLOB_PREFIX + digest
+
+    def get_blob(self, uri: str) -> bytes:
+        digest = uri[len(BLOB_PREFIX):] if uri.startswith(BLOB_PREFIX) else uri
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise NotFound(f"not a blob uri: {uri!r} (expected {BLOB_PREFIX}<sha256>)")
+        with self._conn() as conn:
+            r = conn.execute("SELECT bytes FROM assay.blobs WHERE project_id=%s AND sha256=%s",
+                             (self.project_id, digest)).fetchone()
+        if r is None:
+            raise NotFound(f"no blob {digest[:12]}… in project {self.project_id}")
+        return bytes(r["bytes"])
 
     def as_agent(self, agent: str, role: str | None = None) -> Ledger:
         with self._conn() as conn:
@@ -300,10 +366,15 @@ class Ledger:
             (self.project_id, task_id, event, agent if agent is not None else self.agent, Jsonb(detail)),
         )
 
-    def next_task(self, tags: Sequence[str] | None = None, lease_seconds: int = 900) -> Task | None:
-        """Atomically claim the highest-priority claimable task (spec §10). None if nothing is claimable."""
+    def next_task(self, tags: Sequence[str] | None = None, lease_seconds: int = 900,
+                  spec_match: dict[str, Any] | None = None) -> Task | None:
+        """Atomically claim the highest-priority claimable task (spec §10). None if nothing is claimable.
+        Tasks whose spec.exclude_agents lists this agent are skipped (C4). spec_match keeps only tasks
+        whose spec contains the given JSON (jsonb @>)."""
         if lease_seconds <= 0:
             raise AssayError("lease_seconds must be positive")
+        if spec_match is not None and not isinstance(spec_match, dict):
+            raise ValidationFailed(["spec_match: must be a JSON object"])
         with self._conn() as conn:
             # Exhausted tasks whose lease ran out become failed here; there is no scheduler (P8).
             conn.execute(
@@ -324,6 +395,8 @@ class Ledger:
                        AND (t.status = 'open' OR (t.status = 'claimed' AND t.lease_expires_at < now()))
                        AND t.attempts < t.max_attempts
                        AND (cardinality(%(tags)s::text[]) = 0 OR t.tags && %(tags)s::text[])
+                       AND NOT coalesce(t.spec -> 'exclude_agents' ? %(me)s, false)
+                       AND t.spec @> %(match)s::jsonb
                        AND NOT EXISTS (SELECT 1 FROM assay.tasks d
                                        WHERE d.id = ANY (t.depends_on) AND d.status <> 'done')
                      ORDER BY t.priority DESC, t.created_at
@@ -335,7 +408,8 @@ class Ledger:
                        attempts = t.attempts + 1, updated_at = now()
                    FROM c WHERE t.id = c.id
                    RETURNING t.*, c.prev_status, c.prev_owner""",
-                {"p": self.project_id, "tags": list(tags or []), "me": self.agent, "secs": lease_seconds},
+                {"p": self.project_id, "tags": list(tags or []), "me": self.agent, "secs": lease_seconds,
+                 "match": Jsonb(spec_match or {})},
             ).fetchone()
             if row is None:
                 return None
@@ -344,6 +418,76 @@ class Ledger:
                 self._event(conn, row["id"], "expired", {"reason": "lease expired"}, agent=prev_owner)
             self._event(conn, row["id"], "claimed", {"lease_seconds": lease_seconds, "attempt": row["attempts"]})
             return Task(**row)
+
+    def create_intent(self, title: str, spec: dict[str, Any] | None = None, tags: Sequence[str] | None = None,
+                      lease_seconds: int = 900, exclusive: Sequence[str] = ()) -> Task:
+        """Announce work you are about to do (C3): a task created already claimed by you, tagged 'intent'.
+        Needs settings.worker_intents for workers. For each spec field named in `exclusive`, another live
+        intent with the same value is a conflict (raises Conflict, CLI exit 2)."""
+        if self.role not in DECIDERS and not self.project.settings.get("worker_intents"):
+            self.refresh()
+            if not self.project.settings.get("worker_intents"):
+                raise PermissionDenied("intents are off for this project (settings.worker_intents=false)")
+        if not isinstance(title, str) or not title.strip():
+            raise ValidationFailed(["title: required non-empty string"])
+        spec = dict(spec or {})
+        if lease_seconds <= 0:
+            raise AssayError("lease_seconds must be positive")
+        tg = list(dict.fromkeys(["intent", *(tags or [])]))
+        with self._conn() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
+            self._check_exclusive(conn, spec, exclusive, None)
+            r = conn.execute(
+                "INSERT INTO assay.tasks(project_id,title,spec,tags,created_by,status,lease_owner,lease_expires_at,"
+                "attempts,max_attempts) VALUES (%s,%s,%s,%s,%s,'claimed',%s,now() + make_interval(secs => %s),1,1)"
+                " RETURNING *",
+                (self.project_id, title.strip()[:500], Jsonb(spec), tg, self.agent, self.agent, lease_seconds),
+            ).fetchone()
+            self._event(conn, r["id"], "created", {"intent": True})
+            self._event(conn, r["id"], "claimed", {"lease_seconds": lease_seconds, "attempt": 1})
+            return Task(**r)
+
+    def update_intent(self, task_id: str | UUID, spec_patch: dict[str, Any], lease_seconds: int | None = None,
+                      exclusive: Sequence[str] = ()) -> Task:
+        """Merge fields into the spec of your own live intent and optionally extend its lease."""
+        tid = self._rid(task_id, "task")
+        with self._conn() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
+            cur = conn.execute("SELECT * FROM assay.tasks WHERE id=%s AND status='claimed' AND lease_owner=%s"
+                               " AND 'intent' = ANY(tags) FOR UPDATE", (tid, self.agent)).fetchone()
+            if cur is None:
+                raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
+            spec = {**cur["spec"], **spec_patch}
+            self._check_exclusive(conn, spec, exclusive, tid)
+            r = conn.execute(
+                "UPDATE assay.tasks SET spec=%s, updated_at=now(), lease_expires_at = CASE WHEN %s::int IS NULL"
+                " THEN lease_expires_at ELSE now() + make_interval(secs => %s::int) END WHERE id=%s RETURNING *",
+                (Jsonb(spec), lease_seconds, lease_seconds, tid)).fetchone()
+            self._event(conn, tid, "updated", {"spec": spec_patch})  # type: ignore[arg-type]
+            return Task(**r)
+
+    def _check_exclusive(self, conn: psycopg.Connection[Any], spec: dict[str, Any], exclusive: Sequence[str],
+                         own: UUID | None) -> None:
+        for key in exclusive:
+            if spec.get(key) is None:
+                continue
+            other = conn.execute(
+                "SELECT id, lease_owner, title FROM assay.tasks WHERE project_id=%s AND status='claimed'"
+                " AND lease_expires_at > now() AND 'intent' = ANY(tags) AND spec -> %s = %s::jsonb"
+                " AND id IS DISTINCT FROM %s ORDER BY created_at LIMIT 1",
+                (self.project_id, key, Jsonb(spec[key]), own)).fetchone()
+            if other is not None:
+                raise Conflict(f"{short('task', other['id'])} by {other['lease_owner']} is already working on this "
+                               f"({key}): {other['title']}", existing=other["id"], agent=other["lease_owner"])
+
+    def my_intents(self) -> list[Task]:
+        """Your live intents, newest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM assay.tasks WHERE project_id=%s AND status='claimed' AND lease_owner=%s"
+                " AND lease_expires_at > now() AND 'intent' = ANY(tags) ORDER BY created_at DESC",
+                (self.project_id, self.agent)).fetchall()
+        return [Task(**r) for r in rows]
 
     def heartbeat(self, task_id: str | UUID, lease_seconds: int = 900) -> datetime:
         tid = self._rid(task_id, "task")
@@ -467,6 +611,9 @@ class Ledger:
             self.pack.validate("experiment.metrics", metrics, "metrics")
         except ValidationFailed as e:
             problems += e.problems
+        if run_status == "ok":
+            problems += [f"metrics.{m}: required when run_status is ok (pack {self.pack.name})"
+                         for m in self.pack.ok_metrics_required if m not in metrics]
         for k, v in metrics.items():
             if isinstance(v, float) and not math.isfinite(v):
                 problems.append(f"metrics.{k}: NaN/Infinity not allowed; use run_status='invalid' and explain in notes")
@@ -498,13 +645,16 @@ class Ledger:
             elif value is None:
                 outcome = "unscored"
             else:
-                b = conn.execute("SELECT primary_value FROM assay.v_best WHERE project_id=%s",
-                                 (self.project_id,)).fetchone()
-                eps = self.project.improve_epsilon
-                if b is None:
+                # Settings are re-read: calibration (another process) may have changed the epsilon.
+                prow = conn.execute("SELECT settings, improve_epsilon FROM assay.projects WHERE id=%s",
+                                    (self.project_id,)).fetchone()
+                pk = prow["settings"].get("partition_key")
+                part = partition_text(cfg.get(pk)) if pk else None
+                best = self._baseline(conn, prow["settings"], part)
+                eps = partition_epsilon(prow["settings"], part, prow["improve_epsilon"])
+                if best is None:
                     outcome = "improved"
                 else:
-                    best = b["primary_value"]
                     better = value > best + eps if direction == "max" else value < best - eps
                     worse = value < best - eps if direction == "max" else value > best + eps
                     outcome = "improved" if better else ("worse" if worse else "no_change")
@@ -526,6 +676,26 @@ class Ledger:
                 return self._reject(conn, key, dup["id"] if dup else None)
         return RecordResult(id=r["id"], outcome=outcome, is_new_best=outcome == "improved",
                             duplicate_of=None, dedup_key=key, primary_value=value)
+
+    def _baseline(self, conn: psycopg.Connection[Any], settings: dict[str, Any], part: str | None) -> float | None:
+        """The value a new result is compared with: the best in its partition (C1), or with
+        settings.outcome_baseline='verified' the best replicated mean when there is one."""
+        if settings.get("outcome_baseline") == "verified":
+            r = conn.execute("SELECT mean FROM assay.v_partition_best WHERE project_id=%s AND status='verified'"
+                             " AND rank=1 AND partition IS NOT DISTINCT FROM %s", (self.project_id, part)).fetchone()
+            if r is not None and r["mean"] is not None:
+                return float(r["mean"])
+        b = conn.execute("SELECT primary_value FROM assay.v_best WHERE project_id=%s"
+                         " AND partition IS NOT DISTINCT FROM %s", (self.project_id, part)).fetchone()
+        return None if b is None else float(b["primary_value"])
+
+    def baseline(self, partition: str | None = None) -> tuple[float | None, float]:
+        """(baseline value, epsilon) that record_experiment would use for this partition right now."""
+        with self._conn() as conn:
+            prow = conn.execute("SELECT settings, improve_epsilon FROM assay.projects WHERE id=%s",
+                                (self.project_id,)).fetchone()
+            return (self._baseline(conn, prow["settings"], partition),
+                    partition_epsilon(prow["settings"], partition, prow["improve_epsilon"]))
 
     def _reject(self, conn: psycopg.Connection[Any], key: str, existing: UUID | None) -> RecordResult:
         conn.execute("INSERT INTO assay.dedup_hits(project_id,kind,dedup_key,existing_id,agent_id)"
@@ -766,8 +936,13 @@ class Ledger:
     def status(self) -> dict[str, Any]:
         p = self.project_id
         with self._conn() as conn:
-            best = conn.execute("SELECT id, author, primary_value, created_at FROM assay.v_best WHERE project_id=%s",
-                                (p,)).fetchone()
+            best = conn.execute(
+                "SELECT id, author, primary_value, created_at FROM assay.v_best WHERE project_id=%s ORDER BY"
+                " CASE WHEN %s = 'min' THEN primary_value ELSE -primary_value END, created_at LIMIT 1",
+                (p, self.project.metric_direction)).fetchone()
+            partitions = conn.execute(
+                "SELECT partition, primary_value AS best, id, author FROM assay.v_best WHERE project_id=%s"
+                " AND partition IS NOT NULL ORDER BY partition", (p,)).fetchall()
             exp = conn.execute(
                 "SELECT count(*) AS total, count(*) FILTER (WHERE run_status='ok') AS ok,"
                 " count(*) FILTER (WHERE outcome='improved') AS improved FROM assay.experiments WHERE project_id=%s",
@@ -793,6 +968,9 @@ class Ledger:
             "experiments": {**exp, "invalidated": inval},
             "dedup": dd, "claims": claims, "tasks": {**tasks, "claimable": claimable}, "active_agents": active,
         })
+        if partitions:
+            out["partitions"] = [{"partition": r["partition"], "best": r["best"], "id": short("experiment", r["id"]),
+                                  "author": r["author"]} for r in partitions]
         return out
 
     def search(self, text: str | None = None, kind: str | None = None, status: str | None = None,
@@ -920,16 +1098,17 @@ class Ledger:
         except psycopg.OperationalError:
             return psycopg.connect(self.url, row_factory=dict_row, autocommit=False), True
 
-    def brief(self, task_id: str | UUID | None = None, budget_tokens: int = 2000) -> str:
+    def brief(self, task_id: str | UUID | None = None, budget_tokens: int = 2000,
+              partition: str | None = None) -> str:
         from .brief import compile_brief
 
         tid = self._rid(task_id, "task")
-        return compile_brief(self, tid, budget_tokens)
+        return compile_brief(self, tid, budget_tokens, partition=partition)
 
     def export(self) -> Iterator[dict[str, Any]]:
         """The whole project as an append-only event stream, oldest first."""
         tables = ["agents", "tasks", "task_events", "sources", "experiments", "claims", "links", "decisions",
-                  "dedup_hits", "brief_log"]
+                  "dedup_hits", "brief_log", "settings_events", "blobs"]
         with self._conn() as conn:
             proj = conn.execute("SELECT * FROM assay.projects WHERE id=%s", (self.project_id,)).fetchone()
             yield {"type": "project", "record": jsonable(proj)}
@@ -940,12 +1119,45 @@ class Ledger:
                     events.append((r["created_at"], t, r))
         events.sort(key=lambda e: (e[0], tables.index(e[1])))
         for _, t, r in events:
-            yield {"type": t.rstrip("s") if t not in ("dedup_hits", "brief_log") else t, "record": jsonable(r)}
+            plural = ("dedup_hits", "brief_log", "settings_events")
+            yield {"type": t.rstrip("s") if t not in plural else t, "record": jsonable(r)}
 
     def sql_internal(self, query: str, params: Any = None) -> list[dict[str, Any]]:
         """Full-privilege read for adapters (viewer). Not exposed to agents."""
         with self._conn() as conn:
             return conn.execute(query, params).fetchall()  # type: ignore[no-any-return]
+
+
+BLOB_PREFIX = "assay://blob/"
+
+
+def partition_text(v: Any) -> str | None:
+    """The text Postgres `config ->> key` yields for a config value."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    return json.dumps(v, separators=(", ", ": ")) if isinstance(v, (dict, list)) else json.dumps(v)
+
+
+def partition_epsilon(settings: dict[str, Any], part: str | None, default: float) -> float:
+    p = (settings.get("partitions") or {}).get(part) if part is not None else None
+    if isinstance(p, dict) and _num(p.get("epsilon")) is not None:
+        return float(p["epsilon"])
+    return float(default)
+
+
+def merge_patch(target: Any, patch: Any) -> Any:
+    """RFC 7386 JSON merge patch: objects merge recursively, null deletes, anything else replaces."""
+    if not isinstance(patch, dict):
+        return patch
+    out = dict(target) if isinstance(target, dict) else {}
+    for k, v in patch.items():
+        if v is None:
+            out.pop(k, None)
+        else:
+            out[k] = merge_patch(out.get(k), v)
+    return out
 
 
 def config_line(cfg: Any, max_len: int = 90) -> str:

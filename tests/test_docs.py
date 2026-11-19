@@ -24,3 +24,12 @@ def test_schema_examples(lead: Ledger, worker: Ledger) -> None:
         r = lead.sql(q)
         assert "rows" in r, q
     assert lead.sql(queries[0])["rows"][0]["n_support_authors"] == 2
+
+
+def test_autoresearch_template_matches_package() -> None:
+    root = Path(__file__).resolve().parent.parent
+    packaged = root / "src" / "assay" / "integrations" / "autoresearch" / "templates" / "program.assay.md"
+    copy = root / "integrations" / "autoresearch" / "template" / "program.assay.md"
+    assert packaged.read_text() == copy.read_text()
+    text = packaged.read_text()
+    assert "MIT" in text and "0. assay ar replicate --auto" in text and "NEVER STOP" in text

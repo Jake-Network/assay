@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% block content %}
+<p class="goal">{{ project.goal }}</p>
+{% if ps %}
+<section class="cards">
+  <div class="card"><div class="k">verified best {{ project.primary_metric }} ({{ project.metric_direction }})</div>
+    <div class="v">{% if ps.verified_best %}<a href="/r/{{ ps.verified_best.claim }}">{{ ps.verified_best.mean|num }}</a>{% else %}—{% endif %}</div>
+    <div class="muted">{% if ps.verified_best %}± {{ ps.verified_best.std|num }} · n={{ ps.verified_best.n }} · {{ ps.verified_best.author }}{% else %}nothing replicated yet{% endif %}</div></div>
+  <div class="card"><div class="k">awaiting replication</div><div class="v">{{ ps.candidates|length }}</div>
+    <div class="muted">{{ ps.results.get('verified', 0) }} verified · {{ ps.results.get('refuted', 0) }} refuted · {{ ps.results.get('inconclusive', 0) }} inconclusive</div></div>
+  <div class="card"><div class="k">in flight</div><div class="v">{{ ps.in_flight|length }}</div>
+    <div class="muted">intents with a live lease</div></div>
+  <div class="card"><div class="k">duplicate runs blocked</div><div class="v">{{ ps.duplicates_blocked }}</div>
+    <div class="muted">~{{ ps.gpu_minutes_saved }} GPU min saved</div></div>
+  <div class="card"><div class="k">GPU time on replication</div><div class="v">{{ (ps.gpu_minutes.replication_share * 100)|round(1) }}%</div>
+    <div class="muted">{{ ps.gpu_minutes.replication }} of {{ ps.gpu_minutes.total }} min · {{ ps.runs }} runs, {{ ps.failed_runs }} failed</div></div>
+  <div class="card"><div class="k">noise (calibration)</div><div class="v">{% if ps.calibration %}{{ ps.calibration.epsilon|num }}{% else %}…{% endif %}</div>
+    <div class="muted">{% if ps.calibration %}epsilon · sigma {{ ps.calibration.sigma|num }} · n={{ ps.calibration.n }}{% else %}calibration pending{% endif %}</div></div>
+</section>
+<h3>verified best (steps) · candidates (hollow) · refuted or inconclusive (red)</h3>
+<div id="chart" data-src="/api/partition_progress?p={{ cur|urlencode }}"></div>
+<div class="two"><div>
+<h3>in flight</h3>
+<table class="t"><tbody>{% for f in ps.in_flight %}<tr><td>{{ f.agent }}</td><td>{{ f.idea }}</td>
+<td class="cfg">{% if f.knobs %}{% for k, v in f.knobs.items() %}{{ k }}={{ v }} {% endfor %}{% endif %}</td>
+<td class="muted">{{ f.lease_left_s // 60 }}m{{ f.lease_left_s % 60 }}s left</td></tr>{% else %}<tr><td class="muted">nobody is running anything</td></tr>{% endfor %}</tbody></table>
+<h3>candidates awaiting replication</h3>
+<table class="t"><tbody>{% for c in ps.candidates %}<tr><td><a href="/r/{{ c.id }}">{{ c.id }}</a></td><td>{{ c.value|num }}</td><td>{{ c.author }}</td><td class="cfg">{{ c.code }}</td></tr>{% else %}<tr><td class="muted">none</td></tr>{% endfor %}</tbody></table>
+</div><div>
+<h3>recent activity</h3>
+<table class="t"><tbody>
+{% for a in activity %}<tr><td class="muted">{{ age(a.created_at, now) }}</td><td>{{ a.kind }}</td>
+<td>{% if a.kind in ('experiment','claim','decision','source','link') %}<a href="/r/{{ a.id }}">{{ short(a.kind, a.id) }}</a>{% endif %}</td>
+<td>{{ a.agent or '' }}</td><td>{{ a.summary }}</td></tr>{% endfor %}
+</tbody></table></div></div>
+{% else %}<p class="muted">No runs yet. In an autoresearch checkout: assay ar claim "baseline" then assay ar run -m "baseline".</p>{% endif %}
+{% endblock %}

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
-from .errors import AssayError, ValidationFailed
+from .errors import AssayError, Conflict, ValidationFailed
 from .ids import short
 
 if TYPE_CHECKING:
@@ -478,6 +478,41 @@ def db_url() -> None:
     emit({"url": u}, u)
 
 
+# ------------------------------------------------------------------ blobs and autoresearch
+
+blob_app = typer.Typer(no_args_is_help=True, help="Small files stored in the ledger (content addressed).")
+app.add_typer(blob_app, name="blob")
+
+
+@blob_app.command("put")
+def blob_put(path: Path, media_type: Annotated[str, typer.Option("--media-type")] = "application/octet-stream") -> None:
+    """Store a file; prints assay://blob/<sha256>."""
+    if not path.is_file():
+        die(f"file not found: {path}")
+    uri = ledger().put_blob(path.read_bytes(), media_type)
+    emit({"ok": True, "uri": uri}, uri)
+
+
+@blob_app.command("get")
+def blob_get(uri: str, output: Annotated[Path | None, typer.Option("-o", "--output")] = None) -> None:
+    """Write a stored blob to a file (or stdout)."""
+    data = ledger().get_blob(uri)
+    if output is not None:
+        output.write_bytes(data)
+        emit({"ok": True, "path": str(output), "bytes": len(data)}, str(output))
+    else:
+        sys.stdout.buffer.write(data)
+
+
+def _register_ar() -> None:
+    from .integrations.autoresearch.cli import ar_app
+
+    app.add_typer(ar_app, name="ar")
+
+
+_register_ar()
+
+
 # ------------------------------------------------------------------ entry point
 
 def _extract_globals(argv: list[str]) -> list[str]:
@@ -512,6 +547,11 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(rc if isinstance(rc, int) else 0)
     except typer.Exit as e:
         sys.exit(e.exit_code)
+    except Conflict as e:
+        try:
+            die(str(e), 2)
+        except typer.Exit as x:
+            sys.exit(x.exit_code)
     except ValidationFailed as e:
         if STATE["json"]:
             print(json.dumps({"ok": False, "error": "validation failed", "problems": e.problems}, ensure_ascii=False))
@@ -537,4 +577,8 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Run through the canonical module: under `python -m assay.cli` this file is __main__, and the
+    # sub-apps (assay ar) would otherwise read a second, empty STATE from assay.cli.
+    from assay.cli import main as _main
+
+    _main()

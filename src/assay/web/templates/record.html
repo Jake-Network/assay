@@ -8,6 +8,7 @@
 {% if r.decisions is defined %}<h3>decisions</h3><ul>{% for d in r.decisions %}<li>{{ d.status }} by {{ d.by }} (oracle {{ d.oracle }}): {{ d.rationale }}</li>{% else %}<li class="muted">none</li>{% endfor %}</ul>{% endif %}
 {% if r.events is defined %}<h3>events</h3><ul>{% for e in r.events %}<li>{{ e.event }} {{ e.agent_id or '' }} <span class="muted">{{ e.created_at }}</span></li>{% endfor %}</ul>{% endif %}
 </div>
-<div><h3>record</h3><pre>{{ r.record|js }}</pre></div>
+<div>{% if diff %}<h3>train.py vs parent</h3><pre class="diff">{% for cls, ln in diff %}<span class="{{ cls }}">{{ ln }}</span>
+{% endfor %}</pre>{% endif %}<h3>record</h3><pre>{{ r.record|js }}</pre></div>
 </div>
 {% endblock %}

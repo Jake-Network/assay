@@ -32,6 +32,21 @@ assay exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 
 assay brief
 ```
 
+## autoresearch를 GPU 여러 대에서
+
+**GPU 여러 대를 하나의 연구실로: 같은 실험을 반복하지 않고, 결과를 잃지 않으며, 재현된 결과 위에서만 쌓는다.**
+
+```bash
+cd autoresearch && uv run prepare.py                         # karpathy/autoresearch 또는 포크
+bash /path/to/assay/integrations/autoresearch/launch_local.sh 4   # assay ar init + GPU마다 worktree와 에이전트
+assay serve                                                  # http://127.0.0.1:7466
+```
+
+각 에이전트는 `program.assay.md`(업스트림 `program.md`에 공유 루프를 더한 문서)를 따른다. 같은 코드는 같은
+하드웨어에서 두 번 돌지 않고, 모든 실행은 크래시까지 기록되며, 다른 에이전트 두 명이 다시 돌려 평균이 여전히
+이길 때만 공유 기준선이 된다. 셀프호스팅이고 API 키가 없다. 여러 머신이면 Postgres URL 하나만 있으면 된다.
+자세한 내용: [docs/autoresearch.md](docs/autoresearch.md) (영어).
+
 ## 작동 방식
 
 - **유실 없음.** 평가가 끝나는 순간 한 행이 된다. 레코드를 인용하지 않은 subagent 출력은 hook이 자동으로

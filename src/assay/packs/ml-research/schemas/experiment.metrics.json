@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ml-research metrics",
+  "description": "Numbers parsed from the run summary. val_bpb is required when run_status is ok (checked in code).",
+  "type": "object",
+  "additionalProperties": {
+    "type": "number"
+  }
+}

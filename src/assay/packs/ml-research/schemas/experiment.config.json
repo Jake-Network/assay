@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ml-research experiment config",
+  "description": "One training run of a code snapshot. code_ref holds the normalised code hash.",
+  "type": "object",
+  "required": [
+    "partition"
+  ],
+  "properties": {
+    "partition": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "knobs": {
+      "type": "object"
+    },
+    "changed": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "parent": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500
+    }
+  }
+}

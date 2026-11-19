@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased: Step 3, autoresearch on many GPUs
+
+- Core: partitions (`settings.partition_key`), per-partition epsilon, verified-best baseline, `update_settings`
+  with an audit table, content-addressed blobs, worker intents with exclusive keys, `next_task` exclusions and
+  spec matching, views `v_partition_best`, `v_lineage`, `v_inflight`, `v_knob_history` (migration 0005).
+- `ml-research` pack: result and calibration claims, config and metrics schemas, its own brief.
+- `assay ar`: init, brief, claim, run, replicate, sync, note, idea, status, import, referee; deterministic
+  referee (calibration, replication, verdicts); `program.assay.md`; `launch_local.sh`; `assay blob put/get`.
+- Viewer: partition selector, verified-best staircase with candidates and refuted runs, in-flight work,
+  lineage and knob pages, train.py diffs against the parent.
+- CPU simulator with scripted agents and an e2e swarm test; launch experiment harness (`bench/autoresearch`).
+- `python -m assay`; `python -m assay.cli` no longer ignores global options in sub-commands.
+
 ## 0.1.0.dev0 (unreleased)
 
 - Bound brief and SQL output, keep invalidated experiments out of briefs, and flag claims whose evidence was invalidated.

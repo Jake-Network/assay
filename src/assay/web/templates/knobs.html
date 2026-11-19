@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<table class="t"><thead><tr><th>knob</th><th>value</th><th>runs</th><th>improved</th><th>verified</th><th>refuted</th><th>inconclusive</th><th>no change</th><th>worse</th><th>crash</th><th>last</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.knob }}</td><td class="cfg">{{ r.value }}</td><td>{{ r.n }}</td><td>{{ r.n_improved }}</td><td>{{ r.n_verified }}</td><td>{{ r.n_refuted }}</td>
+<td>{{ r.n_inconclusive }}</td><td>{{ r.n_no_change }}</td><td>{{ r.n_worse }}</td><td>{{ r.n_failed }}</td><td class="muted">{{ r.last_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+{% else %}<tr><td class="muted">no knob changes recorded yet</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

@@ -36,3 +36,12 @@ class LeaseLost(AssayError):
 
 class InvalidTransition(AssayError):
     pass
+
+
+class Conflict(AssayError):
+    """Someone else is already doing this (a live intent with the same key). CLI exit code 2."""
+
+    def __init__(self, message: str, existing: object = None, agent: str | None = None):
+        self.existing = existing
+        self.agent = agent
+        super().__init__(message)

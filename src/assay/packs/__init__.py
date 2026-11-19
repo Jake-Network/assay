@@ -21,6 +21,8 @@ class Pack:
     brief_limits: dict[str, int]
     config_max_depth: int
     config_max_bytes: int
+    ok_metrics_required: list[str] = field(default_factory=list)
+    brief_compiler: str | None = None  # "module:function", replaces the default brief (§6.7)
     validators: dict[str, Draft202012Validator] = field(default_factory=dict)
 
     def validate(self, schema_name: str, value: Any, label: str) -> None:
@@ -40,6 +42,8 @@ def check(validator: Draft202012Validator, value: Any, label: str) -> None:
 
 @cache
 def load_pack(name: str) -> Pack:
+    if not isinstance(name, str) or not name or "/" in name or "\\" in name or name.startswith("."):
+        raise AssayError(f"unknown pack: {name}")
     root = resources.files("assay.packs").joinpath(name)
     if not root.joinpath("pack.toml").is_file():
         raise AssayError(f"unknown pack: {name}")
@@ -51,6 +55,8 @@ def load_pack(name: str) -> Pack:
         brief_limits=dict(meta.get("brief", {})),
         config_max_depth=int(meta.get("config", {}).get("max_depth", 6)),
         config_max_bytes=int(meta.get("config", {}).get("max_bytes", 65536)),
+        ok_metrics_required=list(meta.get("ok_metrics_required", [])),
+        brief_compiler=meta.get("brief_compiler"),
     )
     schemas = root.joinpath("schemas")
     for f in schemas.iterdir():

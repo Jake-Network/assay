@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<h3>path to the verified best{% if best %} ({{ best.mean|num }}){% endif %}</h3>
+{% if path %}<table class="t"><thead><tr><th>depth</th><th>experiment</th><th>{{ project.primary_metric }}</th><th>outcome</th><th>changed</th><th>description</th><th>author</th></tr></thead><tbody>
+{% for r in path %}<tr><td>{{ r.depth }}</td><td><a href="/r/{{ short('experiment', r.id) }}">{{ short('experiment', r.id) }}</a></td><td>{{ r.primary_value|num }}</td><td>{{ r.outcome }}</td>
+<td class="cfg">{% if r.changed %}{% for k, v in r.changed.items() %}{{ k }} {{ v[0] }}→{{ v[1] }} {% endfor %}{% endif %}</td><td>{{ r.description or '' }}</td><td>{{ r.author }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="muted">no verified best yet</p>{% endif %}
+<h3>all first runs as a tree ({{ tree|length }})</h3>
+<ul class="tree">{% for r in tree %}<li style="margin-left:{{ r.indent * 18 }}px" class="{{ 'onpath' if r.id in on_path }} o-{{ r.outcome }}">
+<a href="/r/{{ short('experiment', r.id) }}">{{ short('experiment', r.id) }}</a> {{ r.primary_value|num }} <span class="oc">{{ r.outcome }}</span>
+<span class="cfg">{% if r.changed %}{% for k, v in r.changed.items() %}{{ k }}={{ v[1] }} {% endfor %}{% endif %}</span>
+<span class="muted">{{ r.author }} · {{ (r.description or '')[:80] }}</span></li>{% else %}<li class="muted">no runs</li>{% endfor %}</ul>
+{% endblock %}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "replicated result (written by the referee)",
+  "type": "object",
+  "required": [
+    "partition",
+    "code_ref",
+    "experiment_ids",
+    "mean",
+    "std",
+    "n"
+  ],
+  "properties": {
+    "partition": {
+      "type": "string"
+    },
+    "code_ref": {
+      "type": "string"
+    },
+    "experiment_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "mean": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "std": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "origin": {
+      "type": "string"
+    },
+    "origin_author": {
+      "type": "string"
+    },
+    "baseline": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "epsilon": {
+      "type": "number"
+    },
+    "replicate_mean": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  }
+}

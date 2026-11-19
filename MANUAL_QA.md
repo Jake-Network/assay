@@ -58,3 +58,55 @@ a lower duplicate ratio and a lower peak lead context than A. Report whether C m
 ## Platforms not verified by hand
 
 - macOS (arm64, x86_64) embedded Postgres start-up: run `scripts/qa_first_experiment.sh` and `pytest`.
+
+## Step 3: autoresearch (needs a GPU; the coding agent does not run these)
+
+### Name and release (A0)
+
+- [ ] Decide the distribution name, update the install commands in README.md, README.ko.md,
+      docs/autoresearch.md and integrations/autoresearch/template/README.md, then tag `v0.1.0`.
+
+### One-GPU smoke test (A5)
+
+```bash
+git clone https://github.com/karpathy/autoresearch && cd autoresearch && uv run prepare.py
+uv tool install --from /path/to/assay assay
+assay ar init --project smoke
+export ASSAY_AGENT=gpu0-smoke CUDA_VISIBLE_DEVICES=0
+assay ar claim "baseline" && assay ar run -m "baseline"
+```
+
+Expected: `assay ar init` prints a partition like `h100-80gb/xxxxxxxx` (your GPU model); `run` takes about
+5.5 minutes and prints `KEEP (baseline, calibration pending)  val_bpb=0.99…`; `results.tsv` has the header
+and one `keep` row; `run.log` holds the full output; `assay ar status` shows 1 run and 2 open calibration tasks
+(they need a second agent); the upstream `analysis.ipynb` reads `results.tsv`.
+
+Then a second agent on the same machine (`ASSAY_AGENT=gpu0-b`, a second worktree): `assay ar replicate --auto`
+runs a calibration run in a temp directory without touching that worktree's `train.py` or `git status`. After
+both calibration runs: `assay ar status` shows `calibration sigma=… epsilon=… (ok)` and a verified best.
+
+Also check with an agent: `claude "Read program.assay.md and start."` in the worktree; it should loop through
+replicate, sync, brief, claim, commit, run, keep/reset without asking questions.
+
+### Launch experiment (§13)
+
+Before running anything, decide and write into bench/autoresearch/PREREGISTRATION.md:
+
+- [ ] GPU provider, GPU model, price per GPU hour (check at the time of the run).
+- [ ] Total GPU budget cap (GPU hours and dollars) and the LLM budget cap per agent (`--max-budget-usd`).
+- [ ] N GPUs per arm (recommended 4, minimum 2) and hours per arm (e.g. 8).
+- [ ] The dated model identifier and the Claude Code version.
+- [ ] Whether arm C (autoresearch-at-home) is included (only if it runs and its terms allow it).
+- [ ] Commit PREREGISTRATION.md.
+
+```bash
+python -m bench.autoresearch.launch --upstream ~/autoresearch --gpus-a 0,1,2,3 --gpus-b 4,5,6,7 \
+    --hours 8 --model <dated model id> --max-budget-usd <cap>           # preview: prints commands.sh
+python -m bench.autoresearch.launch ... --execute                       # starts 2N agents, stops after --hours
+python -m bench.autoresearch.post_replicate bench/out/autoresearch-... --gpu 0 --execute   # metrics 1 and 5
+python -m bench.autoresearch.report bench/out/autoresearch-...
+```
+
+`post_replicate` without `--execute` prints how many training runs it needs (3 per arm plus 3 per sampled keep,
+about 5.5 GPU minutes each). Fill the README table from report.md, including metrics B loses.
+`python -m bench.autoresearch.launch --sim` checks the whole pipeline on the CPU simulator first.

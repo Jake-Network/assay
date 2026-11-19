@@ -16,8 +16,21 @@
     const el = document.getElementById('chart');
     if (!el) { plot = null; return; }
     const d = await (await fetch(el.dataset.src)).json();
+    if (d.kind === 'partition') {
+      const pdata = [d.t, d.verified, d.candidate, d.refuted];
+      if (plot && plot.root.isConnected && plot.series.length === 4) { plot.setData(pdata); return; }
+      el.innerHTML = '';
+      plot = new uPlot({
+        width: Math.min(el.clientWidth || 900, 1200), height: 260,
+        series: [{}, {label: 'verified best', stroke: '#1a7f37', width: 2, spanGaps: true, paths: uPlot.paths.stepped({align: 1})},
+                 {label: 'candidate', stroke: 'transparent', points: {show: true, size: 7, fill: '#fff', stroke: '#2f6fed', width: 1.5}},
+                 {label: 'refuted / inconclusive', stroke: 'transparent', points: {show: true, size: 6, fill: '#c33', stroke: '#c33'}}],
+        axes: [{}, {}],
+      }, pdata, el);
+      return;
+    }
     const data = [d.t, d.value, d.best];
-    if (plot && plot.root.isConnected) { plot.setData(data); return; }
+    if (plot && plot.root.isConnected && plot.series.length === 3) { plot.setData(data); return; }
     el.innerHTML = '';
     plot = new uPlot({
       width: Math.min(el.clientWidth || 900, 1200), height: 260,

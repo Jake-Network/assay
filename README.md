@@ -36,6 +36,34 @@ assay exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 
 assay brief
 ```
 
+## autoresearch on many GPUs
+
+**Run autoresearch on many GPUs as one lab: no repeated runs, nothing lost, and the swarm only builds on
+results that replicated.**
+
+<!-- 30-second GIF: the viewer's verified-best staircase while candidates pass or fail replication.
+     Record with: python examples/autoresearch-sim/run_sim_swarm.py --agents 4 --minutes 5 --keep, then assay serve -->
+
+```bash
+cd autoresearch && uv run prepare.py                         # karpathy/autoresearch or any fork
+bash /path/to/assay/integrations/autoresearch/launch_local.sh 4   # assay ar init + one worktree and agent per GPU
+assay serve                                                  # watch it at http://127.0.0.1:7466
+```
+
+Each agent follows `program.assay.md` (upstream `program.md` with a shared loop). The same code never runs
+twice on the same hardware; every run is recorded, crashes included; a result only becomes the shared
+baseline after two other agents re-run it and the mean still wins. Self-hosted, no API key: several machines
+need one Postgres URL. Details: [docs/autoresearch.md](docs/autoresearch.md).
+
+| launch experiment (same GPUs, time and agent) | A: independent | B: assay |
+|---|---|---|
+| replicated best val_bpb | _tbd_ | _tbd_ |
+| duplicate runs | _tbd_ | _tbd_ |
+| keeps that did not reproduce / refuted | _tbd_ | _tbd_ |
+| GPU time spent on replication | 0% | _tbd_ |
+
+<!-- Filled from bench/autoresearch report.md after the pre-registered run (MANUAL_QA.md). -->
+
 ## Benchmark
 
 <!-- Filled from bench/report.md after the real runs (MANUAL_QA.md). -->
@@ -79,7 +107,8 @@ Circle packing (n=26) with the same model, API budget, worker count, and wall-cl
 ## Docs
 
 [Concepts](docs/concepts.md) · [Schema and SQL examples](docs/schema.md) · [Claude Code](docs/claude-code.md) ·
-[Several machines](docs/multi-machine.md) · [Python SDK](docs/sdk.md) · [Circle-packing demo](examples/circle-packing/README.md)
+[Several machines](docs/multi-machine.md) · [Python SDK](docs/sdk.md) · [Circle-packing demo](examples/circle-packing/README.md) ·
+[autoresearch on many GPUs](docs/autoresearch.md)
 
 ## Roadmap
 

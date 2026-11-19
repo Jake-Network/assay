@@ -5,8 +5,10 @@
 <script src="/static/htmx.min.js"></script><script src="/static/uPlot.iife.min.js"></script>
 </head><body>
 <header><b>assay</b> <span class="muted">{{ project.id }}</span>
-<nav>{% for p, label in [("overview","Overview"),("experiments","Experiments"),("claims","Claims"),("tasks","Tasks")] %}
-<a href="/{{ '' if p == 'overview' else p }}" class="{{ 'on' if page == p }}">{{ label }}</a>{% endfor %}</nav>
+<nav>{% set pages = [("overview","Overview"),("experiments","Experiments"),("claims","Claims"),("tasks","Tasks")] %}
+{% if partitioned %}{% set pages = pages + [("lineage","Lineage"),("knobs","Knobs")] %}{% endif %}
+{% for p, label in pages %}<a href="/{{ '' if p == 'overview' else p }}{% if cur %}?p={{ cur|urlencode }}{% endif %}" class="{{ 'on' if page in (p, 'ar_' ~ p) }}">{{ label }}</a>{% endfor %}</nav>
+{% if partitioned and parts %}<form method="get" class="psel">partition <select name="p" onchange="this.form.submit()">{% for p in parts %}<option {{ 'selected' if p == cur }}>{{ p }}</option>{% endfor %}</select></form>{% endif %}
 <span id="live" class="muted">● live</span></header>
 <main>{% endif %}
 <div id="content" hx-get="{{ request.url.path }}?{{ request.url.query }}{{ '&' if request.url.query }}partial=1"

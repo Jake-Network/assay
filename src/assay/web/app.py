@@ -46,10 +46,149 @@ class Viewer:
     def render(self, name: str, request: Request, **ctx: Any) -> HTMLResponse:
         partial = request.headers.get("HX-Request") == "true" and request.query_params.get("partial") == "1"
         tpl = self.env.get_template(name)
-        return HTMLResponse(tpl.render(request=request, partial=partial, page=name.split(".")[0], **ctx))
+        parts = ctx.pop("parts", None)
+        if parts is None and self.partitioned:
+            parts = self._partition_list()
+        cur = ctx.pop("cur", None) or self._cur(request, parts or [])
+        return HTMLResponse(tpl.render(request=request, partial=partial, page=name.split(".")[0], parts=parts or [],
+                                       cur=cur, partitioned=self.partitioned, **ctx))
+
+    # ------------------------------------------------------------------ partitions (Step 3, §14)
+    @property
+    def partitioned(self) -> bool:
+        return bool(self.lg.project.settings.get("partition_key"))
+
+    def _partition_list(self) -> list[str]:
+        rows = self.lg.sql_internal(
+            "SELECT config->>%s AS p, count(*) AS n FROM assay.experiments WHERE project_id=%s"
+            " AND config ? %s GROUP BY 1 ORDER BY 2 DESC, 1",
+            (self.lg.project.settings["partition_key"], self.lg.project_id, self.lg.project.settings["partition_key"]))
+        return [r["p"] for r in rows]
+
+    @staticmethod
+    def _cur(request: Request, parts: list[str]) -> str | None:
+        p = request.query_params.get("p")
+        return p if p in parts else (parts[0] if parts else None)
+
+    async def partition_overview(self, request: Request) -> Response:
+        from ..integrations.autoresearch.ops import status as ar_status
+
+        parts = await anyio.to_thread.run_sync(self._partition_list)
+        cur = self._cur(request, parts)
+        st = await anyio.to_thread.run_sync(ar_status, self.lg, cur) if cur else {"partitions": []}
+        ps = st["partitions"][0] if st["partitions"] else None
+        now = (await self.q("SELECT now() AS t"))[0]["t"]
+        activity = await self.q(
+            "SELECT * FROM assay.v_activity WHERE project_id=%s AND kind <> 'task_event'"
+            " ORDER BY created_at DESC LIMIT 25", (self.lg.project_id,))
+        return self.render("ar_overview.html", request, ps=ps, parts=parts, cur=cur, activity=activity, now=now,
+                           age=_age)
+
+    async def partition_progress(self, request: Request) -> Response:
+        cur = request.query_params.get("p")
+        pid = self.lg.project_id
+        verified = await self.q(
+            "SELECT extract(epoch FROM created_at) AS t, mean FROM assay.v_partition_best WHERE project_id=%s"
+            " AND partition=%s AND status='verified' ORDER BY created_at", (pid, cur))
+        cands = await self.q(
+            "SELECT extract(epoch FROM created_at) AS t, mean FROM assay.v_partition_best WHERE project_id=%s"
+            " AND partition=%s AND status='candidate'", (pid, cur))
+        refuted = await self.q(
+            "SELECT extract(epoch FROM e.created_at) AS t, e.primary_value AS v FROM assay.claims c"
+            " JOIN assay.v_claim_status s ON s.id = c.id"
+            " JOIN assay.experiments e ON e.id = (c.payload->>'origin')::uuid"
+            " WHERE c.project_id=%s AND c.kind='result' AND c.payload->>'partition'=%s"
+            " AND s.status IN ('refuted','inconclusive') AND e.primary_value IS NOT NULL", (pid, cur))
+        minimize = self.lg.project.metric_direction == "min"
+        xs = sorted({float(r["t"]) for r in verified + cands + refuted})
+        vmap = sorted((float(r["t"]), r["mean"]) for r in verified)
+        cmap = {float(r["t"]): r["mean"] for r in cands}
+        rmap = {float(r["t"]): r["v"] for r in refuted}
+        step: list[float | None] = []
+        best: float | None = None
+        i = 0
+        for x in xs:
+            while i < len(vmap) and vmap[i][0] <= x:
+                v = vmap[i][1]
+                best = v if best is None or (v < best if minimize else v > best) else best
+                i += 1
+            step.append(best)
+        return JSONResponse({"kind": "partition", "t": xs, "verified": step, "candidate": [cmap.get(x) for x in xs],
+                             "refuted": [rmap.get(x) for x in xs]})
+
+    async def lineage(self, request: Request) -> Response:
+        parts = await anyio.to_thread.run_sync(self._partition_list)
+        cur = self._cur(request, parts)
+        pid = self.lg.project_id
+        rows = await self.q("SELECT * FROM assay.v_lineage WHERE project_id=%s AND partition=%s"
+                            " AND coalesce(seed,0)=0 ORDER BY created_at, id LIMIT 2000", (pid, cur))
+        by_id = {r["id"]: r for r in rows}
+        best = await self.q("SELECT origin_id, mean FROM assay.v_partition_best WHERE project_id=%s AND partition=%s"
+                            " AND status='verified' AND rank=1", (pid, cur))
+        path: list[dict[str, Any]] = []
+        node = by_id.get(best[0]["origin_id"]) if best else None
+        while node is not None and len(path) < 500:
+            path.append(node)
+            node = by_id.get(node["parent_id"])
+        children: dict[Any, list[dict[str, Any]]] = {}
+        for r in rows:
+            children.setdefault(r["parent_id"] if r["parent_id"] in by_id else None, []).append(r)
+        tree: list[dict[str, Any]] = []
+
+        def walk(parent: Any, depth: int) -> None:
+            for r in children.get(parent, []):
+                tree.append({**r, "indent": depth})
+                if depth < 200:
+                    walk(r["id"], depth + 1)
+
+        walk(None, 0)
+        on_path = {r["id"] for r in path}
+        return self.render("lineage.html", request, path=path, tree=tree, on_path=on_path, parts=parts, cur=cur,
+                           best=best[0] if best else None)
+
+    async def knobs(self, request: Request) -> Response:
+        parts = await anyio.to_thread.run_sync(self._partition_list)
+        cur = self._cur(request, parts)
+        rows = await self.q("SELECT * FROM assay.v_knob_history WHERE project_id=%s AND partition=%s"
+                            " ORDER BY knob, last_at DESC", (self.lg.project_id, cur))
+        return self.render("knobs.html", request, rows=rows, parts=parts, cur=cur)
+
+    def _diff(self, rec: dict[str, Any]) -> list[tuple[str, str]] | None:
+        """Unified diff of an experiment's train.py blob against its derived_from parent (§14)."""
+        import difflib
+
+        if rec.get("kind") != "experiment":
+            return None
+        parent = next((lk["dst"] for lk in rec.get("links_out") or [] if lk["relation"] == "derived_from"), None)
+        if parent is None:
+            return None
+
+        def blob(r: dict[str, Any]) -> str | None:
+            for a in r.get("artifacts") or []:
+                if isinstance(a, dict) and str(a.get("uri", "")).startswith("assay://blob/"):
+                    try:
+                        return self.lg.get_blob(a["uri"]).decode("utf-8", errors="replace")
+                    except AssayError:
+                        return None
+            return None
+
+        mine = blob(rec["record"])
+        theirs = blob(self.lg.get(parent)["record"])
+        if mine is None or theirs is None:
+            return None
+        lines = difflib.unified_diff(theirs.splitlines(), mine.splitlines(), f"{parent} train.py",
+                                     f"{rec['id']} train.py", lineterm="", n=3)
+        out = []
+        for ln in lines:
+            cls = "add" if ln.startswith("+") and not ln.startswith("+++") else (
+                "del" if ln.startswith("-") and not ln.startswith("---") else ("hunk" if ln.startswith("@@") else ""))
+            out.append((cls, ln))
+        return out[:3000]
 
     # ------------------------------------------------------------------ pages
     async def overview(self, request: Request) -> Response:
+        if self.partitioned:
+            return await self.partition_overview(request)
         pid = self.lg.project_id
         st = await anyio.to_thread.run_sync(self.lg.status)
         now = (await self.q("SELECT now() AS t"))[0]["t"]
@@ -102,7 +241,8 @@ class Viewer:
             rec = await anyio.to_thread.run_sync(self.lg.get, request.path_params["rid"])
         except AssayError as e:
             return PlainTextResponse(str(e), status_code=404)
-        return self.render("record.html", request, r=rec)
+        diff = await anyio.to_thread.run_sync(self._diff, rec)
+        return self.render("record.html", request, r=rec, diff=diff)
 
     # ------------------------------------------------------------------ live updates
     async def events(self, request: Request) -> Response:
@@ -136,7 +276,10 @@ class Viewer:
             Route("/claims", self.claims),
             Route("/tasks", self.tasks),
             Route("/r/{rid}", self.record),
+            Route("/lineage", self.lineage),
+            Route("/knobs", self.knobs),
             Route("/api/progress", self.progress),
+            Route("/api/partition_progress", self.partition_progress),
             Route("/events", self.events),
             Mount("/static", StaticFiles(directory=HERE / "static"), name="static"),
         ]
