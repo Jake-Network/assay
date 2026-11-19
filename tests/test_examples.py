@@ -34,6 +34,25 @@ def test_evaluator_rejects_tolerance_exploits() -> None:
     assert abs(json.loads(out.stdout)["sum_radii"] - 2.1667) < 1e-3
 
 
+def test_slsqp_repairs_overlap_before_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
+    sys.path.insert(0, str(ROOT / "examples" / "circle-packing"))
+    import numpy as np
+    import packing
+    from evaluator import TOL, score_circles
+
+    grid = packing.initial("grid", 0.0, np.random.default_rng(0))
+    grid[2 * packing.N:] += TOL
+    assert "invalid" in score_circles(grid.reshape(3, packing.N).T)
+    monkeypatch.setattr(packing, "slsqp", lambda z, iters: (grid, False, "Iteration limit reached"))
+
+    circles, info = packing.solve({"init": "grid", "optimizer": "slsqp", "iters": 10}, seed=0)
+
+    result = score_circles(circles)
+    assert "invalid" not in result, result
+    assert result["max_violation"] == 0.0
+    assert info == {"converged": False, "message": "Iteration limit reached"}
+
+
 def test_scripted_swarm_smoke(db_url: str) -> None:
     pid = f"cp-{uuid.uuid4().hex[:6]}"
     p = subprocess.run([sys.executable, str(ROOT / "examples/circle-packing/scripted_swarm.py"), "--workers", "3",

@@ -132,6 +132,7 @@ def solve(config: dict[str, Any], seed: int) -> tuple[list[list[float]], dict[st
     info: dict[str, Any] = {}
     if config["optimizer"] == "slsqp":
         z, ok, msg = slsqp(z, int(config["iters"]))
+        z = repair(z)
         info["converged"], info["message"] = ok, msg
     elif config["optimizer"] == "penalty":
         z = repair(penalty(z, int(config["iters"]), rng))
