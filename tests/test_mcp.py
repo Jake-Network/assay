@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +93,43 @@ def test_errors_are_actionable(project: str) -> None:
              oracle="metric", rationale="x")
 
 
+def test_check_tried_reports_invalidated_seeds(lead: Ledger, worker: Ledger) -> None:
+    cfg = {"init": "hex"}
+    result = worker.record_experiment(cfg, {"score": 2.5}, seed=0)
+    assert result.id is not None
+    lead.decide(result.id, "invalidated", "human", "broken evaluator")
+    out = call(build(lead.project_id, "all"), "assay_check_tried", agent=worker.agent, config=cfg)
+    assert out["tried"] and out["exact"] == [] and out["best_value"] is None
+    assert out["invalidated"][0]["seed"] == 0 and "duplicate" in out["note"]
+
+
+def test_mcp_uses_live_project_lease_default(lead: Ledger, worker: Ledger) -> None:
+    mcp = build(lead.project_id, "all")
+    call(mcp, "assay_status", agent=worker.agent)
+    lead.create_tasks([{"title": "Try hex"}])
+    lead.update_settings({"lease_seconds": 90})
+    claim = call(mcp, "assay_next_task", agent=worker.agent)["task"]
+    remaining = (datetime.fromisoformat(claim["lease_expires_at"]) - datetime.now(UTC)).total_seconds()
+    assert 85 < remaining <= 90
+    lead.update_settings({"lease_seconds": 180})
+    beat = call(mcp, "assay_heartbeat", agent=worker.agent, task_id=claim["id"])
+    remaining = (datetime.fromisoformat(beat["lease_expires_at"]) - datetime.now(UTC)).total_seconds()
+    assert 175 < remaining <= 180
+
+
+def test_internal_errors_carry_a_hint(project: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    def down(*a: Any, **k: Any) -> str:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(Ledger, "brief", down)
+    with pytest.raises(Exception) as ei:
+        call(build(project, "all"), "assay_brief", agent="worker-1")
+    msg = str(ei.value)
+    assert "OperationalError" in msg and "assay doctor" in msg and "not a problem with your input" in msg
+
+
 def test_schema_resource(project: str) -> None:
     mcp = build(project, "all")
     res = asyncio.run(mcp.read_resource("assay://schema"))
@@ -116,6 +154,6 @@ def test_stdio_server_discovers_tools_before_project_init(
             write_config(tmp_path, project)
             result = await client.call_tool("assay_create_tasks", {"agent": "lead", "tasks": [{"title": "First task"}]})
             assert not result.is_error
-            assert len(Ledger.open(project=project, database_url=db_url).list_tasks()) == 1
+            assert len(Ledger.open(project=project, agent="lead", database_url=db_url).list_tasks()) == 1
 
     asyncio.run(check())

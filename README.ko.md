@@ -12,6 +12,7 @@ Postgres 원장을 준다. worker는 실험이 끝나는 즉시(실패도) 기�
 
 ```bash
 uv tool install --from git+https://github.com/Jake-Network/assay assay     # PyPI 이름은 미정. Docker 불필요
+uv tool update-shell        # `assay`를 못 찾으면 한 번. 새 터미널을 열고 Claude Code를 다시 시작
 cd your-repo && assay init --goal "검증 손실 최소화" --metric val_loss --direction min
 claude plugin marketplace add Jake-Network/assay && claude plugin install assay@assay
 ```
@@ -27,6 +28,7 @@ Claude Code에서:
 Claude Code 없이도 CLI와 Python SDK로 같은 일을 한다.
 
 ```bash
+export ASSAY_AGENT=worker-1   # 누가 기록하는지
 assay exp tried  --config '{"lr": 3e-4, "warmup": 500}'
 assay exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
 assay brief
@@ -54,8 +56,15 @@ assay serve                                                  # http://127.0.0.1:
 - **반복 없음.** 같은 설정 + 코드 + seed는 거부되고, seed만 다르면 재현(replicate)으로 집계된다. brief는 내 작업
   주변에서 이미 해본 것(실패 포함)을 보여 준다.
 - **증거 없는 신뢰 없음.** worker는 주장을 제안한다. 리드나 사람은 LLM이 아닌 오라클과 증거 id로 검증한다.
-  기본 rerun 기준은 원래 설정과 코드로 실행한 서로 다른 seed 3개와 다른 에이전트의 재현 1건이다.
-  DB 트리거가 레코드의 수정과 삭제를 막는다.
+  기본 rerun 기준은 원래 설정과 코드로 실행한 서로 다른 seed 3개와 다른 에이전트의 재현 1건이고, 재실행 결과가
+  baseline을 여전히 이겨야 한다. 다시 돌리기만 하고 재현되지 않은 결과는 거부된다.
+
+이 약속이 기대는 것과 기대지 않는 것: DB 트리거는 레코드의 UPDATE, DELETE, TRUNCATE를 막고 에이전트의 role을
+바꾸지 못하게 한다. 그래서 "테스트 데이터 정리" 같은 정직한 실수는 기록을 바꾸지 못한다. 하지만 DB owner
+자격 증명을 가진 쪽은 막지 못하고(공유 URL을 쓰는 모든 에이전트가 지금은 이 자격 증명을 갖는다), 에이전트 이름은
+자기 신고라 이름을 속이는 에이전트는 리드나 "다른 에이전트"로 행세할 수 있다. per-agent token과 별도 writer
+role(v0.2)이 들어오기 전까지는 실수에 대한 보호로 보고, 악의적인 에이전트에 대한 보호로 보지 않는다.
+[Honest limits](docs/concepts.md#honest-limits) 참고.
 
 ## 무엇이 아닌가
 

@@ -11,13 +11,22 @@ from typing import Any
 
 import psycopg
 
+from ..errors import AssayError
+
 ALEMBIC_DIR = Path(str(resources.files("assay.db").joinpath("alembic")))
 
 
-def head() -> str:
+def revisions() -> list[str]:
     """Revision ids are the NNNN prefix of the version files, in a straight line."""
-    revs = sorted(p.name.split("_", 1)[0] for p in (ALEMBIC_DIR / "versions").glob("[0-9]*_*.py"))
-    return revs[-1]
+    return sorted(p.name.split("_", 1)[0] for p in (ALEMBIC_DIR / "versions").glob("[0-9]*_*.py"))
+
+
+def head() -> str:
+    return revisions()[-1]
+
+
+class SchemaTooNew(AssayError):
+    """The database was migrated by a newer assay than this one."""
 
 
 def run_sql_file(name: str) -> None:
@@ -58,6 +67,9 @@ def current(url: str) -> str | None:
 def migrate(url: str) -> tuple[str | None, str]:
     """Upgrade to head. Returns (before, after). Safe to call concurrently (advisory lock in env.py)."""
     before = current(url)
+    if before is not None and before not in revisions():
+        raise SchemaTooNew(f"database schema revision {before} is newer than this assay (head {head()}); "
+                           "upgrade assay on this machine (e.g. `uv tool upgrade assay`)")
     if before != head():
         from alembic import command
 

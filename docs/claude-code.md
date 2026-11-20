@@ -8,6 +8,15 @@ claude plugin marketplace add /path/to/assay     # the repository root has .clau
 claude plugin install assay@assay
 ```
 
+Claude Code starts `assay mcp` and `assay hook` from its own PATH. If `command -v assay` finds nothing in a new
+terminal, run `uv tool update-shell` once (it adds `~/.local/bin` to your shell profile), open a new terminal and
+restart Claude Code. Without it the MCP server does not connect and the hook fails with exit 127 at every subagent
+stop. `assay doctor` checks the database and project from the same directory.
+
+On macOS the embedded database lives in `~/Library/Application Support/assay/pg`. To keep it elsewhere set
+`ASSAY_DATA_DIR`, and set it in Claude Code's `settings.json` `env` too: the CLI, MCP server and hook must see the
+same value.
+
 The plugin (`integrations/claude-code/`) contains:
 
 | file | what |
@@ -16,7 +25,7 @@ The plugin (`integrations/claude-code/`) contains:
 | `agents/assay-worker.md` | worker subagent: worker tools only (no `assay_decide`, `assay_create_tasks`, `assay_cancel_task`) |
 | `skills/assay/SKILL.md` | rules for any agent using the ledger |
 | `skills/assay-lead/SKILL.md` | the lead loop, `/assay:assay-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` and `PostToolUse(SubagentHandback)` -> `assay hook ...` |
+| `hooks/hooks.json` | `SubagentStop` (matcher `^assay:assay-worker$`) and `PostToolUse(SubagentHandback)` -> `assay hook ...` |
 
 For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
 
@@ -49,15 +58,26 @@ open session, its next ledger call opens the newly initialized project.
 
 ## The result-capture hook
 
-When a subagent stops, `assay hook subagent-stop` reads its final message. If the message cites an existing
-experiment, claim or task id, nothing happens. Otherwise a `note` claim tagged `auto-captured` is recorded with the
-first 300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge
-across hook events. Reports with a shared opening and different conclusions each get a record.
+When an `assay-worker` subagent stops, `assay hook subagent-stop` reads its final message. A report sent through
+`SubagentHandback` is captured from the handback. A cited experiment
+or claim ID counts when the subagent's transcript shows a successful write returning that ID and the ledger
+timestamps place the record within the run. The hook captures the report when the transcript is missing or
+the citation cannot establish that the run wrote the record. A `note` claim tagged `auto-captured` keeps the first
+300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge across
+hook events. Reports with a shared opening and different conclusions each get a record.
 
-The hook uses the project selected by `.assay/config.toml` or `ASSAY_PROJECT`. It writes the report to a local
-spool and exits 0 while a detached process handles the database write. The processor retries failures and keeps
-pending reports for the next hook. After a longer outage, run `assay hook replay` with the same database settings
-to process the pending reports. See `~/.local/state/assay/hook.log` for capture and retry status.
+Other subagents (Explore, general-purpose, ...) are not captured. To capture your own worker types too, set
+`ASSAY_HOOK_AGENTS=assay-worker,implementer` and widen the `SubagentStop` matcher (manual install:
+`"matcher": "assay-worker|implementer"`).
+
+The hook uses the project selected by `.assay/config.toml` or `ASSAY_PROJECT`; when it finds neither (for example a
+worktree without a committed `.assay/`) it writes a "no assay project" line to the log. It writes the report to a
+local spool and exits 0 while a detached process handles the database write; only one processor drains a spool at a
+time. The processor retries connection failures for about a minute and keeps those reports for the next hook.
+Failures a retry cannot fix (the project does not exist in this database, the schema is newer than this assay) move
+the report to the spool's `dead/` folder. Malformed spool files are quarantined with the `.invalid` suffix.
+After an outage or a fix, `assay hook replay` retries pending and dead reports once in the foreground using
+the same database settings. See `~/.local/state/assay/hook.log` for capture and retry status.
 
 Earlier builds placed spool files directly in `~/.local/state/assay/spool/` without recording the database target.
 To recover one, use the environment and project settings from the original session and run

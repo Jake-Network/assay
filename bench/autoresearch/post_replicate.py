@@ -1,10 +1,11 @@
 """Post-hoc re-runs for the launch experiment (§13.3 metrics 1 and 5). Needs the GPU in real mode.
 
-1. Each arm's final best code is re-run 3 times on the same hardware (arm A: the best "keep" over all its
-   branches; arm B: the verified best, else the best candidate).
-2. Up to 10 random arm-A "keep" commits (not the baseline) are re-run 3 times each. A keep counts as not
-   reproduced when the re-run mean is worse than its reported val_bpb by more than epsilon (arm B's calibrated
-   epsilon for the partition, else --epsilon).
+1. Each arm's final best code is re-run --repeats times on the same hardware (arm A: the best "keep" over all
+   its branches, valued by what the shim saw it print; arm B: the verified best, else the best candidate).
+2. Metric 5, the same procedure for both arms (B2): up to --sample random non-baseline keeps per arm (A: "keep"
+   rows of results.tsv; B: runs that printed KEEP) are re-run --repeats times each. A keep is not reproduced
+   when its re-run mean is worse than the value it reported by more than epsilon (arm B's calibrated epsilon
+   for the partition, else --epsilon).
 
     python -m bench.autoresearch.post_replicate bench/out/autoresearch-... --gpu 0            # prints the plan
     python -m bench.autoresearch.post_replicate bench/out/autoresearch-... --gpu 0 --execute  # runs it
@@ -12,13 +13,11 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import random
 import shutil
 import statistics
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,30 +27,10 @@ from assay.integrations.autoresearch.code import code_hash
 from assay.integrations.autoresearch.ops import _isolated_dir
 from assay.integrations.autoresearch.runner import run_command
 
-
-def a_keeps(out: Path) -> list[dict[str, Any]]:
-    rows = []
-    for wt in sorted((out / "A").glob("gpu*")):
-        f = wt / "results.tsv"
-        if not f.exists():
-            continue
-        with open(f, encoding="utf-8", newline="") as fh:
-            for i, r in enumerate(csv.DictReader(fh, delimiter="\t")):
-                if r.get("status", "").strip().lower() == "keep":
-                    rows.append({"tree": wt, "commit": r["commit"], "val_bpb": float(r["val_bpb"]),
-                                 "description": r.get("description", ""), "baseline": i == 0})
-    return rows
+from . import arms
 
 
-def code_at(tree: Path, commit: str) -> bytes | None:
-    r = subprocess.run(["git", "-C", str(tree), "show", f"{commit}:./train.py"], capture_output=True)
-    return r.stdout if r.returncode == 0 else None
-
-
-def b_best(conditions: dict[str, Any]) -> tuple[bytes | None, dict[str, Any]]:
-    from assay import Ledger
-
-    lg = Ledger.open(project=conditions["project_b"], agent="human")
+def b_best(lg: Any) -> tuple[bytes | None, dict[str, Any]]:
     rows = lg.sql_internal("SELECT * FROM assay.v_partition_best WHERE project_id=%s AND rank=1"
                            " ORDER BY (status='verified') DESC, mean LIMIT 1", (lg.project_id,))
     if not rows:
@@ -75,6 +54,19 @@ def rerun(tree: Path, src: bytes, n: int, cmd: str, timeout: float, env: dict[st
     return vals
 
 
+def check_keeps(keeps: list[tuple[dict[str, Any], bytes | None]], tree: Path, eps: float, args: Any, cmd: str,
+                env: dict[str, str]) -> tuple[list[dict[str, Any]], float | None]:
+    checked = []
+    for k, src in keeps:
+        vals = rerun(tree, src, args.repeats, cmd, args.timeout, env) if src else []
+        ok = [v for v in vals if v is not None]
+        mean = statistics.fmean(ok) if ok else None
+        checked.append({**{x: str(v) if isinstance(v, Path) else v for x, v in k.items()}, "reruns": vals,
+                        "mean": mean, "reproduced": mean is not None and mean <= k["val_bpb"] + eps})
+    ratio = sum(not x["reproduced"] for x in checked) / len(checked) if checked else None
+    return checked, ratio
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("out", type=Path)
@@ -88,17 +80,30 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--execute", action="store_true")
     args = ap.parse_args(argv)
+    from assay import Ledger
+
     out = args.out.resolve()
     cond = json.loads((out / "conditions.json").read_text())
-    keeps = a_keeps(out)
-    b_src, b_info = b_best(cond)
+    simulated = cond.get("label") == "pipeline check, not evidence"
+    if (args.sim or args.execute) and args.sim != simulated:
+        ap.error("post-replication mode must match the launch's real or simulated conditions")
+    base = cond.get("baseline_code_hash")
+    keeps = arms.a_keeps(out)
+    matched = [k for k in keeps if k["source"] == "shim"]
+    unmatched = len(keeps) - len(matched)
+    lg = Ledger.open(project=cond["project_b"], agent="human")
+    b_src, b_info = b_best(lg)
     eps = b_info.get("epsilon") or args.epsilon
-    a_best = min(keeps, key=lambda r: r["val_bpb"]) if keeps else None
-    candidates = [k for k in keeps if not k["baseline"]]
-    sample = random.Random(args.seed).sample(candidates, min(args.sample, len(candidates)))
-    runs = 3 * args.repeats + len(sample) * args.repeats
+    a_best = arms.a_best(matched) if not unmatched else None
+    rng = random.Random(args.seed)
+    a_cands = [k for k in matched if not k["baseline"] and k["code_hash"] != base] if not unmatched else []
+    a_sample = rng.sample(a_cands, min(args.sample, len(a_cands)))
+    b_cands = arms.b_keeps(lg, base)
+    b_sample = rng.sample(b_cands, min(args.sample, len(b_cands)))
+    runs = (int(a_best is not None) + int(b_src is not None) + len(a_sample) + len(b_sample)) * args.repeats
     plan = {"a_best": a_best and {k: str(v) if isinstance(v, Path) else v for k, v in a_best.items()},
-            "b_best": b_info, "sampled_keeps": len(sample), "epsilon": eps, "training_runs": runs}
+            "b_best": b_info, "sampled_keeps": {"A": len(a_sample), "B": len(b_sample)}, "epsilon": eps,
+            "a_unmatched_keeps": unmatched, "training_runs": runs}
     if not (args.sim or args.execute):
         print(json.dumps(plan, indent=2))
         print(f"{runs} training runs on GPU {args.gpu} (~{runs * 5.5:.0f} GPU minutes). Re-run with --execute.")
@@ -108,30 +113,25 @@ def main(argv: list[str] | None = None) -> int:
         env.setdefault("AR_SIM_SECONDS", "0.2")
     cmd = f"{sys.executable} train.py" if args.sim else args.cmd
     tree0 = Path(cond["agents"][0]["cwd"])
-    result: dict[str, Any] = {"epsilon": eps, "label": cond.get("label")}
+    result: dict[str, Any] = {"epsilon": eps, "label": cond.get("label"), "protocol": {
+        "cmd": cmd, "repeats": args.repeats, "sample": args.sample, "epsilon_floor": args.epsilon,
+        "seed": args.seed, "timeout": args.timeout, "gpu": None if args.sim else args.gpu}}
     if a_best is not None:
-        src = code_at(a_best["tree"], a_best["commit"])
+        src = arms.code_at(a_best["tree"], a_best["commit"])
         vals = rerun(tree0, src, args.repeats, cmd, args.timeout, env) if src else []
         ok = [v for v in vals if v is not None]
-        result["A"] = {"reported": a_best["val_bpb"], "commit": a_best["commit"], "code": code_hash(src or b""),
-                       "reruns": vals, "mean": statistics.fmean(ok) if ok else None}
+        result["A"] = {"reported": a_best["val_bpb"], "source": a_best["source"], "commit": a_best["commit"],
+                       "code": code_hash(src or b""), "reruns": vals, "mean": statistics.fmean(ok) if ok else None}
     if b_src is not None:
         vals = rerun(tree0, b_src, args.repeats, cmd, args.timeout, env)
         ok = [v for v in vals if v is not None]
         result["B"] = {**b_info, "code": code_hash(b_src), "reruns": vals, "mean": statistics.fmean(ok) if ok else None}
-    false_best = []
-    for k in sample:
-        src = code_at(k["tree"], k["commit"])
-        vals = rerun(tree0, src, args.repeats, cmd, args.timeout, env) if src else []
-        ok = [v for v in vals if v is not None]
-        mean = statistics.fmean(ok) if ok else None
-        false_best.append({"commit": k["commit"], "reported": k["val_bpb"], "reruns": vals, "mean": mean,
-                           "reproduced": mean is not None and mean <= k["val_bpb"] + eps})
-    result["A_keeps"] = false_best
-    result["A_false_best_ratio"] = (sum(not x["reproduced"] for x in false_best) / len(false_best)
-                                    if false_best else None)
+    result["A_keeps"], result["A_false_best_ratio"] = check_keeps(
+        [(k, arms.code_at(k["tree"], k["commit"])) for k in a_sample], tree0, eps, args, cmd, env)
+    result["B_keeps"], result["B_false_best_ratio"] = check_keeps(
+        [(k, lg.get_blob(k["uri"]) if k["uri"] else None) for k in b_sample], tree0, eps, args, cmd, env)
     (out / "post_replicate.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
-    print(json.dumps({k: v for k, v in result.items() if k != "A_keeps"}, indent=2, default=str))
+    print(json.dumps({k: v for k, v in result.items() if k not in ("A_keeps", "B_keeps")}, indent=2, default=str))
     return 0
 
 

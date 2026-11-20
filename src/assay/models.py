@@ -69,6 +69,8 @@ class TriedResult(_M):
     exact: list[ExperimentSummary]
     replicates: int
     best_value: float | None
+    invalidated: list[ExperimentSummary] = []
+    note: str | None = None
 
 
 class RecordResult(_M):

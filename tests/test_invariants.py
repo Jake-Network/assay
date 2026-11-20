@@ -142,6 +142,7 @@ def test_i3_verified_needs_oracle_and_evidence(db_url: str, lead: Ledger, worker
 def test_rerun_rule(lead: Ledger) -> None:
     w1 = lead.as_agent("w1", "worker")
     w2 = lead.as_agent("w2", "worker")
+    w1.record_experiment({"a": 0}, {"score": 0.5})  # the baseline the claim improves on
     ids = [w1.record_experiment({"a": 1}, {"score": 1.0}, seed=s).id for s in (0, 1)]
     c = w1.propose_claim("observation", "a=1 scores 1", evidence=[(i, "supports") for i in ids])  # type: ignore[misc]
     lead.decide(c.id, "supported", "metric", "two seeds", ids)  # type: ignore[arg-type]
@@ -153,6 +154,7 @@ def test_rerun_rule(lead: Ledger) -> None:
 
 def test_rerun_evidence_matches_original_config_and_code(lead: Ledger, worker: Ledger) -> None:
     other = lead.as_agent("worker-2")
+    worker.record_experiment({"a": 0}, {"score": 0}, code_ref="v1")  # baseline
     original = worker.record_experiment({"a": 1}, {"score": 1}, seed=0, code_ref="v1").id
     same = other.record_experiment({"a": 1}, {"score": 1}, seed=1, code_ref="v1").id
     wrong_code = other.record_experiment({"a": 1}, {"score": 1}, seed=2, code_ref="v2").id
@@ -175,6 +177,7 @@ def test_rerun_checks_original_author_with_custom_threshold(db_url: str) -> None
     pid = make_project(db_url, settings={"rerun_min_seeds": 1, "rerun_min_authors": 1})
     lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
     worker = lead.as_agent("worker")
+    worker.record_experiment({"a": 0}, {"score": 0})  # baseline
     original = worker.record_experiment({"a": 1}, {"score": 1}, seed=0).id
     assert original is not None
     c = worker.propose_claim("observation", "a=1 scores 1", evidence=[(original, "supports")])

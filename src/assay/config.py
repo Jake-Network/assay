@@ -17,11 +17,37 @@ class LocalConfig:
 
 
 def find_config(start: Path | None = None) -> Path | None:
+    """.assay/config.toml in the start directory or a parent; in a linked git worktree where .assay/ is not
+    committed, the main worktree's copy (U6)."""
     cur = (start or Path.cwd()).resolve()
     for d in (cur, *cur.parents):
         p = d / CONFIG_REL
         if p.is_file():
             return p
+    main = _main_worktree(cur)
+    if main is not None and (main / CONFIG_REL).is_file():
+        return main / CONFIG_REL
+    return None
+
+
+def _main_worktree(cur: Path) -> Path | None:
+    """The main worktree of the linked git worktree containing cur. Reads the .git file and commondir instead of
+    running git, so hooks stay fast."""
+    for d in (cur, *cur.parents):
+        dot = d / ".git"
+        if dot.is_dir():
+            return None  # the main worktree itself (or a plain repository)
+        if not dot.is_file():
+            continue
+        try:
+            line = dot.read_text(encoding="utf-8").strip()
+            if not line.startswith("gitdir:"):
+                return None
+            gitdir = (d / line[len("gitdir:"):].strip()).resolve()
+            common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+        except OSError:
+            return None
+        return common.parent if common.name == ".git" else None
     return None
 
 

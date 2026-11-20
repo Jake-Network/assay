@@ -27,11 +27,12 @@ experiment count, duplicates blocked and the viewer URL.
 
 ## Scenario 4: a subagent that does not write to the ledger is still captured
 
-1. In the same repo, in Claude Code: "Use a general-purpose subagent to compute the sum of radii of the seed
+1. In the same repo, in Claude Code: "Use an assay-worker subagent to compute the sum of radii of the seed
    program (python evaluator.py seed_program.py) and report the number. Tell it not to use any assay tools."
 2. Expected: `assay claim list --kind note` shows a claim starting with `[auto-captured]`, tag `auto-captured`,
    author `hook`; `assay get c:...` shows the full text in `payload.text` and the session id in `payload.source`.
-3. `~/.local/state/assay/hook.log` has a `captured:c:...` line. A worker that ends with record ids produces `cited`.
+3. `~/.local/state/assay/hook.log` has a `captured:c:...` line. A worker who cites an ID from a successful write
+   in its own transcript produces `cited`.
 
 ## Benchmark (real)
 

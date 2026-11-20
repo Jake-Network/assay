@@ -74,7 +74,7 @@ LOOP FOREVER:
 4. assay ar claim "<한 줄 설명>" --knob K=V ...   # 거부되면 다른 아이디어로. 최대 5번.
 5. train.py를 수정하고 git commit.
 6. assay ar run -m "<같은 설명>"    # 직접 `uv run train.py`를 실행하지 않는다.
-7. 출력이 KEEP이면 커밋 유지, DISCARD나 CRASH면 git reset --hard HEAD~1.
+7. 출력이 KEEP이면 커밋 유지, DISCARD, CRASH, INVALID면 git reset --hard HEAD~1.
    (KEEP은 후보일 뿐이다. 나중에 sync가 refuted된 후보를 되돌릴 수 있다.)
 8. 배운 것이 있으면 assay ar note "...", 다음에 해볼 만한 것은 assay ar idea "...".
 ```
@@ -90,8 +90,9 @@ In English, for clarity (the block above is the rule):
    Use `--knob` for every UPPER_CASE constant you will change; skip it for code changes.
 5. Edit `train.py` and `git commit`.
 6. `assay ar run -m "<the same one-line idea>"` — never run `uv run train.py` directly.
-7. If the output starts with KEEP, keep the commit; if DISCARD or CRASH, `git reset --hard HEAD~1`.
-   (KEEP only means candidate. A later sync may move you off a candidate that was refuted.)
+7. If the output starts with KEEP, keep the commit; if DISCARD, CRASH or INVALID, `git reset --hard HEAD~1`.
+   KEEP means better than your previous kept code (your parent), like upstream; it only means candidate, and a
+   later sync may move you off a candidate that was refuted.
 8. If you learned something, `assay ar note "..."`; for something worth trying next, `assay ar idea "..."`.
 
 **Rules that come with sharing:**
@@ -101,7 +102,15 @@ In English, for clarity (the block above is the rule):
 - A crash: if it is something dumb and easy to fix (a typo, a missing import), fix it, commit, and `assay ar run`
   again. If the idea itself is broken, `git reset --hard HEAD~1` and move on. The crash is already recorded.
 
-**Timeout**: `assay ar run` kills a run after 10 minutes and records it as a failure.
+**Timeout**: `assay ar run` kills a run after 10 minutes and records it as a failure. A run that trains
+longer than the time budget in `prepare.py` is recorded as INVALID.
+
+**Waiting for a run**: one `assay ar run` takes about 6 minutes, longer than a shell tool's default timeout
+(2 minutes in Claude Code). Always give the command the longest timeout your tool allows (Claude Code Bash:
+`timeout: 600000`), or start it in the background with its output in a file
+(`assay ar run -m "..." > ar_run.out 2>&1`, run in the background) and wait until that file shows the verdict.
+Never start a second `assay ar run` while one is running. If the command gets killed anyway, the run is
+recorded as interrupted and the training is stopped; run it again with `--retry-failed`.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you
 should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep,

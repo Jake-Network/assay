@@ -17,6 +17,8 @@ from assay.integrations.autoresearch.hw import detect, gpu_class
 from assay.integrations.autoresearch.runner import parse_summary, results_tsv_line
 
 FIXTURE = Path(__file__).parent / "fixtures" / "autoresearch" / "upstream_train_constants.py"
+GOLDEN_FSTRING = "56e5ad786e5caee23ae497b9515d53cca958efd6f7aa7a25d345e59b3c7e0b9b"
+GOLDEN_FIXTURE = "7d0bfbf6f4e71f916aa77ddd3c20a4a214b80241bddcb998cf4f438d37921502"
 UPSTREAM_SUMMARY = """step 00953 (100.0%) | loss: 3.012 | lrm: 0.00 | dt: 310ms | tok/sec: 1,690,000 | mfu: 39.8%
 Gradient accumulation steps: 4
 Time budget: 300s
@@ -126,3 +128,89 @@ def test_results_tsv_lines() -> None:
         "a1b2c3d\t0.997900\t44.0\tkeep\tbaseline\n"
     assert results_tsv_line("d4e5f6g", None, None, "crash", "double width\t(OOM)\n") == \
         "d4e5f6g\t0.000000\t0.0\tcrash\tdouble width (OOM)\n"
+
+
+
+def test_hash_is_the_same_on_every_python_version() -> None:
+    """A7: ast.unparse writes f"{'a'}" on 3.11/3.13 but f'{'a'}' on 3.12, so it cannot be the hash input.
+    These values were checked on CPython 3.11, 3.12 and 3.13; a change here breaks dedup across machines."""
+    src = 'x = f"{a!r:>10} {\'q\'} {b=}"\ny = f\'a\' \'b\' f\'{x}\'\n'
+    assert code_hash(src) == GOLDEN_FSTRING
+    assert code_hash(FIXTURE.read_text()) == GOLDEN_FIXTURE
+    assert code_hash(src) != code_hash(src.replace("q", "r"))
+
+
+def test_agent_name_keeps_the_whole_host() -> None:
+    from assay.integrations.autoresearch.ops import default_agent_name
+
+    env = {"CUDA_VISIBLE_DEVICES": "1,2"}
+    assert default_agent_name(env, "gpu-node-12") == "gpu1-gpu-node-12"
+    assert default_agent_name(env, "gpu-node-12") != default_agent_name(env, "gpu-node-13")  # A6
+    long_a, long_b = "x" * 45 + "a.example.com", "x" * 45 + "b.example.com"
+    assert default_agent_name(env, long_a) != default_agent_name(env, long_b)
+    assert len(default_agent_name(env, long_a)) <= 50
+
+
+def test_failing_nvidia_smi_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A9: a transient nvidia-smi failure must not become an unknown-<host> partition."""
+    import subprocess
+
+    from assay.errors import AssayError
+    from assay.integrations.autoresearch import hw
+
+    calls: list[object] = []
+
+    def failing(cmd: list[str], **kw: object) -> None:
+        calls.append(cmd)
+        raise subprocess.CalledProcessError(9, cmd, "", "Unable to determine the device handle")
+
+    monkeypatch.setattr(hw.subprocess, "run", failing)
+    monkeypatch.setattr(hw.time, "sleep", lambda s: None)
+    with pytest.raises(AssayError, match="nvidia-smi failed"):
+        hw.detect(env={})
+    assert len(calls) == 3
+
+    def missing(cmd: list[str], **kw: object) -> None:
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(hw.subprocess, "run", missing)
+    assert hw.detect_nvidia({}) is None
+
+
+def test_budget_check() -> None:
+    from assay.integrations.autoresearch.runner import RunResult, check_budget
+
+    ok = RunResult("ok", 0, {"val_bpb": 1.0, "training_seconds": 300.4}, 330_000)
+    assert check_budget(ok, 300, 30, 240) is ok
+    long = RunResult("ok", 0, {"val_bpb": 1.0, "training_seconds": 540.0}, 560_000)
+    bad = check_budget(long, 300, 30, 240)
+    assert bad.run_status == "invalid" and "training_seconds 540" in bad.reason and "wall clock" in bad.reason
+    lying = RunResult("ok", 0, {"val_bpb": 1.0, "training_seconds": 299.0}, 600_000)
+    assert check_budget(lying, 300, 30, 240).run_status == "invalid"
+    assert check_budget(long, None).run_status == "ok"
+
+
+def test_sigterm_kills_the_training_and_raises(tmp_path: Path) -> None:
+    """A4: SIGTERM to the runner kills the training process group and surfaces as Interrupted."""
+    import os
+    import signal
+    import sys
+    import threading
+    import time
+
+    from assay.integrations.autoresearch.runner import Interrupted, run_command
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX signals")
+    pidfile = tmp_path / "pid"
+    cmd = f"{sys.executable} -c \"import os, time; open('pid', 'w').write(str(os.getpid())); time.sleep(60)\""
+    threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    t0 = time.monotonic()
+    with pytest.raises(Interrupted):
+        run_command(cmd, tmp_path, tmp_path / "run.log", 60)
+    assert time.monotonic() - t0 < 30
+    child = int(pidfile.read_text())
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)
+    assert signal.getsignal(signal.SIGTERM) is not None  # the previous handler is back

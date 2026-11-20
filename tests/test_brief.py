@@ -32,6 +32,7 @@ def test_brief_sections(lead: Ledger, worker: Ledger) -> None:
                                 "spec": {"config_space": {"init": ["hex", "random"], "optimizer": ["slsqp"]}}}])
     t = worker.next_task()
     assert t is not None
+    lead.as_agent("worker-0").record_experiment({"layout": "grid"}, {"score": 1.0})  # baseline, not relevant
     ids = []
     for s in range(3):
         ids.append(worker.record_experiment({"init": "hex", "optimizer": "slsqp"}, {"score": 2.0 + s / 100},

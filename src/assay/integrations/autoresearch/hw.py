@@ -6,6 +6,9 @@ import platform
 import re
 import socket
 import subprocess
+import time
+
+from ...errors import AssayError
 
 VENDOR = {"nvidia", "geforce", "tesla", "amd", "radeon", "intel", "corporation", "graphics", "apple", "gpu"}
 MEMORY_KIND = {"hbm", "hbm2", "hbm2e", "hbm3", "hbm3e", "gddr5", "gddr5x", "gddr6", "gddr6x", "gddr7", "ddr4", "ddr5"}
@@ -48,10 +51,23 @@ def detect_nvidia(env: dict[str, str] | None = None) -> str | None:
     dev = _first_visible_device(env)
     if dev is not None:
         cmd += ["-i", dev]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=True).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
+    out, err = None, ""
+    for attempt in range(3):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=True).stdout
+            break
+        except FileNotFoundError:
+            return None  # no NVIDIA tooling on this machine
+        except subprocess.CalledProcessError as e:
+            msg = (e.stderr or e.stdout or "").strip()
+            err = f"exit {e.returncode}: {msg.splitlines()[-1] if msg else ''}"[:300]
+        except (OSError, subprocess.SubprocessError) as e:
+            err = str(e)[:300]
+        if attempt < 2:
+            time.sleep(1 + attempt)
+    if out is None:
+        # A transient failure must not put runs into an unknown-<host> partition (A9).
+        raise AssayError(f"nvidia-smi failed ({err}); fix it or pass --hw / set ASSAY_AR_HW to the GPU class")
     line = next((ln for ln in out.splitlines() if ln.strip()), None)
     if line is None:
         return None
@@ -75,7 +91,8 @@ def detect_macos() -> str | None:
 
 
 def detect(override: str | None = None, env: dict[str, str] | None = None) -> str:
-    """--hw, then ASSAY_AR_HW, then nvidia-smi, then macOS sysctl, then unknown-<hostname>."""
+    """--hw, then ASSAY_AR_HW, then nvidia-smi, then macOS sysctl, then unknown-<hostname>. An installed
+    nvidia-smi that fails raises AssayError instead of falling through."""
     env = dict(os.environ if env is None else env)
     value = override or env.get("ASSAY_AR_HW")
     if value:

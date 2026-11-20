@@ -15,5 +15,6 @@ summaries and record ids (`e:` experiment, `c:` claim, `t:` task, `s:` source, `
 - Read `assay_brief` instead of re-reading transcripts; use `assay_get(<id>)` only for details.
 - Only the orchestrator (`lead`) or a human writes decisions. `verified` needs a non-LLM oracle
   (metric, rerun, pytest, lean, human) and evidence; an LLM judgement can reach `supported` at most.
-- Without MCP, the same operations exist in the CLI: `assay brief`, `assay exp tried --config ...`,
+- Without MCP, the same operations exist in the CLI (set `ASSAY_AGENT=<your name>` first; writes without a name
+  are refused): `assay brief`, `assay exp tried --config ...`,
   `assay exp record ...`, `assay claim add ...` (all accept `--json`).

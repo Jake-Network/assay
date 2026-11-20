@@ -20,6 +20,7 @@ import random
 import sys
 import time
 from pathlib import Path
+from statistics import fmean
 from typing import Any
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -189,12 +190,15 @@ def verify_best(lead: Ledger) -> None:
             lead.create_tasks([{"title": "Replicate the current best with new seeds", "priority": 10,
                                 "tags": ["replicate"], "spec": {"replicate": t["config"], "seeds": new}}])
         return
-    lo = min(e["primary_value"] for e in exps)
+    values = [e["primary_value"] for e in exps]
+    lo, mean = min(values), fmean(values)
     from assay.ledger import config_line
 
     tested = ", ".join(map(str, seeds))
-    stmt = f"{config_line(t['config'])}: minimum sum_radii {lo!r} across {len(seeds)} tested seeds ({tested})"
-    c = lead.propose_claim("conclusion", stmt, evidence=[(e["id"], "supports") for e in exps], tags=["best"])
+    stmt = (f"{config_line(t['config'])}: minimum sum_radii {lo!r} across {len(seeds)} tested seeds ({tested}). "
+            f"Mean sum_radii {mean:.12g}.")
+    c = lead.propose_claim("conclusion", stmt, payload={"measurement": True, "mean": mean},
+                           evidence=[(e["id"], "supports") for e in exps], tags=["best"])
     status = lead.claim_status(c.id)
     ev = [e["id"] for e in exps]
     if status == "proposed":

@@ -9,6 +9,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime
 from decimal import Decimal
+from statistics import fmean
 from typing import Any
 from uuid import UUID
 
@@ -68,7 +69,10 @@ SQL_ROW_LIMIT = 200
 SQL_TOKEN_LIMIT = 4000
 _FORBIDDEN_SQL = re.compile(
     r"\b(set_config|set\s+role|reset|set\s+session|pg_read_\w+|pg_ls_dir|lo_\w+|dblink\w*|copy|"
-    r"pg_terminate_backend|pg_cancel_backend)\b",
+    r"pg_terminate_backend|pg_cancel_backend|pg_settings|query_to_xml\w*|cursor_to_xml\w*|table_to_xml\w*|"
+    r"schema_to_xml\w*|database_to_xml\w*|pg_file\w*|pg_stat_file)\b"
+    # U&"..." / U&'...' spell any identifier or string with escapes (U&"set\005fconfig" is set_config)
+    r"|\bu&\s*[\"']",
     re.IGNORECASE,
 )
 _ARTIFACTS = Draft202012Validator({
@@ -100,7 +104,10 @@ def jsonable(v: Any) -> Any:
 def _num(v: Any) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:
+        return None
     return f if math.isfinite(f) else None
 
 
@@ -154,14 +161,18 @@ class Ledger:
     def open(cls, project: str | None = None, agent: str | None = None, role: str | None = None,
              database_url: str | None = None) -> Ledger:
         """Open a project's ledger. Project comes from the argument, ASSAY_PROJECT or .assay/config.toml.
-        Agent defaults to ASSAY_AGENT, else 'human'. An unknown agent is registered with `role`
+        Agent comes from the argument or ASSAY_AGENT; there is no default, so a process that forgot to name
+        itself cannot act as 'human' by accident. An unknown agent is registered with `role`
         (default worker; 'human' defaults to the human role)."""
         import os
 
         project = project or localcfg.load().project
         if not project:
             raise AssayError("no project: pass project=, set ASSAY_PROJECT, or run `assay init`")
-        agent = agent or os.environ.get("ASSAY_AGENT") or "human"
+        agent = agent or os.environ.get("ASSAY_AGENT")
+        if not agent:
+            raise AssayError("no agent name: set ASSAY_AGENT=<name> or pass --agent <name> "
+                             "(a person deciding by hand uses `assay decide ... --as human`)")
         url = cls.ensure_schema(database_url)
         with cls._pool(url).connection() as conn:
             row = conn.execute("SELECT * FROM assay.projects WHERE id = %s", (project,)).fetchone()
@@ -366,21 +377,42 @@ class Ledger:
             (self.project_id, task_id, event, agent if agent is not None else self.agent, Jsonb(detail)),
         )
 
-    def next_task(self, tags: Sequence[str] | None = None, lease_seconds: int = 900,
-                  spec_match: dict[str, Any] | None = None) -> Task | None:
+    def lease_default(self) -> int:
+        """settings.lease_seconds (default 900): the lease a claim gets when the caller names none."""
+        with self._conn() as conn:
+            return self._read_lease_default(conn)
+
+    def _read_lease_default(self, conn: psycopg.Connection[Any]) -> int:
+        row = conn.execute("SELECT settings->'lease_seconds' AS seconds FROM assay.projects WHERE id=%s",
+                           (self.project_id,)).fetchone()
+        assert row is not None
+        seconds = _num(row["seconds"])
+        return int(seconds) if seconds is not None and seconds >= 1 else 900
+
+    def next_task(self, tags: Sequence[str] | None = None, lease_seconds: int | None = None,
+                  spec_match: dict[str, Any] | None = None, task_id: str | UUID | None = None) -> Task | None:
         """Atomically claim the highest-priority claimable task (spec §10). None if nothing is claimable.
-        Tasks whose spec.exclude_agents lists this agent are skipped (C4). spec_match keeps only tasks
-        whose spec contains the given JSON (jsonb @>)."""
-        if lease_seconds <= 0:
+        Tasks whose spec.exclude_agents lists this agent are skipped (C4). A task with
+        spec.distinct_agents_for = "<key>" is skipped when this agent already claimed another task with the
+        same spec[<key>] (one agent cannot replicate the same origin twice). spec_match keeps only tasks
+        whose spec contains the given JSON (jsonb @>). task_id claims that one task if it is claimable."""
+        tid = self._rid(task_id, "task")
+        if lease_seconds is not None and lease_seconds <= 0:
             raise AssayError("lease_seconds must be positive")
         if spec_match is not None and not isinstance(spec_match, dict):
             raise ValidationFailed(["spec_match: must be a JSON object"])
         with self._conn() as conn:
+            # Lock the agent before selecting a task, so a parallel claim sees its
+            # committed event even if it would lock a different task row.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+                         ("assay:task-claim:" + self.project_id, self.agent))
+            if lease_seconds is None:
+                lease_seconds = self._read_lease_default(conn)
             # Exhausted tasks whose lease ran out become failed here; there is no scheduler (P8).
             conn.execute(
                 """WITH f AS (
-                     UPDATE assay.tasks SET status='failed', updated_at=now()
-                     WHERE project_id=%(p)s AND status='claimed' AND lease_expires_at < now()
+                     UPDATE assay.tasks SET status='failed', updated_at=statement_timestamp()
+                     WHERE project_id=%(p)s AND status='claimed' AND lease_expires_at < statement_timestamp()
                        AND attempts >= max_attempts
                      RETURNING id, lease_owner)
                    INSERT INTO assay.task_events(project_id, task_id, event, agent_id, detail)
@@ -392,11 +424,19 @@ class Ledger:
                 """WITH c AS (
                      SELECT t.id, t.status AS prev_status, t.lease_owner AS prev_owner FROM assay.tasks t
                      WHERE t.project_id = %(p)s
-                       AND (t.status = 'open' OR (t.status = 'claimed' AND t.lease_expires_at < now()))
+                       AND (t.status = 'open' OR (t.status = 'claimed' AND t.lease_expires_at < statement_timestamp()))
                        AND t.attempts < t.max_attempts
                        AND (cardinality(%(tags)s::text[]) = 0 OR t.tags && %(tags)s::text[])
                        AND NOT coalesce(t.spec -> 'exclude_agents' ? %(me)s, false)
                        AND t.spec @> %(match)s::jsonb
+                       AND (%(tid)s::uuid IS NULL OR t.id = %(tid)s::uuid)
+                       AND NOT (t.spec ? 'distinct_agents_for' AND EXISTS (
+                             SELECT 1 FROM assay.tasks o JOIN assay.task_events ev ON ev.task_id = o.id
+                             WHERE o.project_id = t.project_id AND o.id <> t.id AND ev.event = 'claimed'
+                               AND ev.agent_id = %(me)s
+                               AND o.spec ->> 'distinct_agents_for' = t.spec ->> 'distinct_agents_for'
+                               AND o.spec ->> (t.spec ->> 'distinct_agents_for')
+                                   = t.spec ->> (t.spec ->> 'distinct_agents_for')))
                        AND NOT EXISTS (SELECT 1 FROM assay.tasks d
                                        WHERE d.id = ANY (t.depends_on) AND d.status <> 'done')
                      ORDER BY t.priority DESC, t.created_at
@@ -404,12 +444,12 @@ class Ledger:
                      LIMIT 1)
                    UPDATE assay.tasks t
                    SET status = 'claimed', lease_owner = %(me)s,
-                       lease_expires_at = now() + make_interval(secs => %(secs)s),
-                       attempts = t.attempts + 1, updated_at = now()
+                       lease_expires_at = statement_timestamp() + make_interval(secs => %(secs)s),
+                       attempts = t.attempts + 1, updated_at = statement_timestamp()
                    FROM c WHERE t.id = c.id
                    RETURNING t.*, c.prev_status, c.prev_owner""",
                 {"p": self.project_id, "tags": list(tags or []), "me": self.agent, "secs": lease_seconds,
-                 "match": Jsonb(spec_match or {})},
+                 "match": Jsonb(spec_match or {}), "tid": tid},
             ).fetchone()
             if row is None:
                 return None
@@ -418,6 +458,18 @@ class Ledger:
                 self._event(conn, row["id"], "expired", {"reason": "lease expired"}, agent=prev_owner)
             self._event(conn, row["id"], "claimed", {"lease_seconds": lease_seconds, "attempt": row["attempts"]})
             return Task(**row)
+
+    def claim_task(self, task_id: str | UUID, lease_seconds: int | None = None) -> Task:
+        """Claim one task by id (the lead hands a specific task to a specific worker). Raises when it is
+        not claimable by this agent (done, leased by someone else, excluded, or waiting on dependencies)."""
+        t = self.next_task(lease_seconds=lease_seconds, task_id=task_id)
+        if t is None:
+            cur = self.get_task(task_id)
+            who = f" by {cur.lease_owner}" if cur.status == "claimed" else ""
+            raise Conflict(f"{cur.short_id} is not claimable by {self.agent}: status {cur.status}{who} "
+                           f"(attempts {cur.attempts}/{cur.max_attempts}; exclusions and dependencies also apply)",
+                           existing=cur.id, agent=cur.lease_owner)
+        return t
 
     def create_intent(self, title: str, spec: dict[str, Any] | None = None, tags: Sequence[str] | None = None,
                       lease_seconds: int = 900, exclusive: Sequence[str] = ()) -> Task:
@@ -489,9 +541,13 @@ class Ledger:
                 (self.project_id, self.agent)).fetchall()
         return [Task(**r) for r in rows]
 
-    def heartbeat(self, task_id: str | UUID, lease_seconds: int = 900) -> datetime:
+    def heartbeat(self, task_id: str | UUID, lease_seconds: int | None = None) -> datetime:
         tid = self._rid(task_id, "task")
+        if lease_seconds is not None and lease_seconds <= 0:
+            raise AssayError("lease_seconds must be positive")
         with self._conn() as conn:
+            if lease_seconds is None:
+                lease_seconds = self._read_lease_default(conn)
             r = conn.execute(
                 "UPDATE assay.tasks SET lease_expires_at = now() + make_interval(secs => %s), updated_at=now()"
                 " WHERE id=%s AND status='claimed' AND lease_owner=%s RETURNING lease_expires_at",
@@ -591,9 +647,23 @@ class Ledger:
                 conn.execute(
                     "INSERT INTO assay.dedup_hits(project_id,kind,dedup_key,existing_id,agent_id)"
                     " VALUES (%s,'avoided',%s,%s,%s)", (self.project_id, key, rows[0]["id"], self.agent))
+            # The unique index also counts invalidated runs (DECISIONS.md): say so before the GPU time is spent.
+            inval = conn.execute(
+                "SELECT e.id, e.author, e.seed, e.run_status, e.outcome, e.primary_value, e.notes, e.created_at"
+                " FROM assay.experiments e WHERE e.project_id=%s AND e.dedup_key=%s AND e.run_status='ok'"
+                " AND NOT EXISTS (SELECT 1 FROM assay.experiments_valid v WHERE v.id = e.id)"
+                " ORDER BY e.created_at DESC LIMIT 20", (self.project_id, key)).fetchall()
+        note = None
+        if inval:
+            seeds = sorted({"none" if r["seed"] is None else str(r["seed"]) for r in inval})
+            note = (f"{len(inval)} invalidated run(s) of this exact config and code_ref exist "
+                    f"(seeds {', '.join(seeds)}); recording the same config, code_ref and seed again is rejected "
+                    "as a duplicate. Change code_ref "
+                    "(e.g. after fixing the evaluator) or use another seed.")
         return TriedResult(dedup_key=key, exact=[ExperimentSummary(**r) for r in rows],
                            replicates=int(agg["reps"]) if agg else 0,
-                           best_value=agg["best_value"] if agg else None)
+                           best_value=agg["best_value"] if agg else None,
+                           invalidated=[ExperimentSummary(**r) for r in inval], note=note)
 
     def record_experiment(self, config: dict[str, Any], metrics: dict[str, Any] | None = None,
                           run_status: str = "ok", seed: int | None = None, code_ref: str | None = None,
@@ -626,7 +696,7 @@ class Ledger:
                      for e in _ARTIFACTS.iter_errors(arts)]
         if problems:
             raise ValidationFailed(problems)
-        tid = self._rid(task_id, "task")
+        tid = self._rid(task_id, "task") if task_id is not None else self._only_lease()
         key = self._key(cfg, code_ref)
         pm, direction = self.project.primary_metric, self.project.metric_direction
         value = _num(metrics.get(pm)) if (pm and run_status == "ok") else None
@@ -636,7 +706,7 @@ class Ledger:
             if run_status == "ok":
                 dup = conn.execute(
                     "SELECT id FROM assay.experiments WHERE project_id=%s AND dedup_key=%s"
-                    " AND coalesce(seed,-1)=coalesce(%s::bigint,-1) AND run_status='ok'",
+                    " AND seed IS NOT DISTINCT FROM %s::bigint AND run_status='ok'",
                     (self.project_id, key, seed)).fetchone()
                 if dup:
                     return self._reject(conn, key, dup["id"])
@@ -671,11 +741,25 @@ class Ledger:
             except psycopg.errors.UniqueViolation:
                 dup = conn.execute(
                     "SELECT id FROM assay.experiments WHERE project_id=%s AND dedup_key=%s"
-                    " AND coalesce(seed,-1)=coalesce(%s::bigint,-1) AND run_status='ok'",
+                    " AND seed IS NOT DISTINCT FROM %s::bigint AND run_status='ok'",
                     (self.project_id, key, seed)).fetchone()
                 return self._reject(conn, key, dup["id"] if dup else None)
         return RecordResult(id=r["id"], outcome=outcome, is_new_best=outcome == "improved",
                             duplicate_of=None, dedup_key=key, primary_value=value)
+
+    def live_leases(self) -> list[Task]:
+        """Tasks this agent holds a live lease on, intents excluded."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM assay.tasks WHERE project_id=%s AND status='claimed' AND lease_owner=%s"
+                " AND lease_expires_at > now() AND NOT ('intent' = ANY(tags)) ORDER BY created_at",
+                (self.project_id, self.agent)).fetchall()
+        return [Task(**r) for r in rows]
+
+    def _only_lease(self) -> UUID | None:
+        """The task an experiment recorded without task_id belongs to: the one task this agent holds (U3)."""
+        leases = self.live_leases()
+        return leases[0].id if len(leases) == 1 else None
 
     def _baseline(self, conn: psycopg.Connection[Any], settings: dict[str, Any], part: str | None) -> float | None:
         """The value a new result is compared with: the best in its partition (C1), or with
@@ -848,7 +932,8 @@ class Ledger:
                     raise InvalidTransition(f"{cur} -> {new_status} is outside the claim state graph; pass force=True "
                                             "if you mean it")
                 if new_status == "verified" and oracle == "rerun":
-                    self._check_rerun(conn, tid, {eid for kind, eid in resolved if kind == "experiment"})
+                    check = self._check_rerun(conn, tid, {eid for kind, eid in resolved if kind == "experiment"})
+                    oracle_detail = {**(oracle_detail or {}), "rerun_check": check}
             r = conn.execute(
                 "INSERT INTO assay.decisions(project_id,target_type,target_id,new_status,oracle,oracle_detail,"
                 "rationale,evidence_ids,decided_by,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,"
@@ -857,9 +942,14 @@ class Ledger:
                  self.agent, last["created_at"] if last else None)).fetchone()
         return Decision(**{k: r[k] for k in Decision.model_fields})
 
-    def _check_rerun(self, conn: psycopg.Connection[Any], claim_id: UUID, experiment_ids: set[UUID]) -> None:
+    def _check_rerun(self, conn: psycopg.Connection[Any], claim_id: UUID, experiment_ids: set[UUID]) -> dict[str, Any]:
+        """Check the evidence mean and require independent reruns to also beat the baseline for an improvement."""
+        prow = conn.execute("SELECT settings, improve_epsilon, primary_metric, metric_direction FROM assay.projects"
+                            " WHERE id=%s", (self.project_id,)).fetchone()
+        assert prow is not None
+        st = prow["settings"]  # re-read: another process may have changed the thresholds
         runs = conn.execute(
-            "SELECT dedup_key, author, seed FROM assay.experiments_valid"
+            "SELECT id, dedup_key, author, seed, primary_value FROM assay.experiments_valid"
             " WHERE project_id=%s AND id=ANY(%s) AND run_status='ok'",
             (self.project_id, list(experiment_ids))).fetchall()
         if not runs or len(runs) != len(experiment_ids) or len({run["dedup_key"] for run in runs}) != 1:
@@ -872,33 +962,99 @@ class Ledger:
                     AND target_type='claim' AND new_status='supported'
                   ORDER BY created_at DESC, id DESC LIMIT 1
                 ), cited AS (
-                  SELECT e.id, e.dedup_key, e.author, e.created_at FROM assay.experiments e
+                  SELECT e.id, e.dedup_key, e.author, e.created_at, e.config, e.code_ref FROM assay.experiments e
                   JOIN prior p ON e.id=ANY(p.evidence_ids)
                   WHERE e.project_id=%(project)s AND e.run_status='ok'
                 ), original_candidates AS (
                   SELECT * FROM cited
                   UNION ALL
-                  SELECT e.id, e.dedup_key, e.author, e.created_at FROM assay.experiments e
+                  SELECT e.id, e.dedup_key, e.author, e.created_at, e.config, e.code_ref FROM assay.experiments e
                   JOIN assay.links l ON l.project_id=e.project_id AND l.src_id=e.id
                   WHERE e.project_id=%(project)s AND e.run_status='ok' AND l.src_type='experiment'
                     AND l.dst_type='claim' AND l.dst_id=%(claim)s AND l.relation='supports'
                     AND NOT EXISTS (SELECT 1 FROM cited)
                 )
-                SELECT author FROM original_candidates WHERE dedup_key=%(key)s
+                SELECT id, author, created_at, config, code_ref FROM original_candidates WHERE dedup_key=%(key)s
                 ORDER BY created_at, id LIMIT 1""",
             {"project": self.project_id, "claim": claim_id, "key": runs[0]["dedup_key"]}).fetchone()
         if original is None:
             raise InvalidTransition("rerun evidence must match the config and code reference of an original "
                                     "supporting experiment for the claim.")
-        st = self.project.settings
         min_seeds, min_authors = int(st.get("rerun_min_seeds", 3)), int(st.get("rerun_min_authors", 2))
         seeds = {run["seed"] for run in runs if run["seed"] is not None}
         authors = {run["author"] for run in runs}
-        if len(seeds) < min_seeds or len(authors) < min_authors or not (authors - {original["author"]}):
+        independent = [run for run in runs if run["author"] != original["author"]]
+        if len(seeds) < min_seeds or len(authors) < min_authors or not independent:
             raise InvalidTransition(
                 f"rerun oracle needs >= {min_seeds} distinct seeds and >= {min_authors} distinct authors "
                 f"including a rerun by someone other than {original['author']}; "
                 f"got {len(seeds)} seeds, {len(authors)} authors. Create a replication task.")
+        out: dict[str, Any] = {"n": len(runs), "seeds": len(seeds), "authors": sorted(authors),
+                               "original": str(original["id"])}
+        crow = conn.execute("SELECT kind, payload FROM assay.claims WHERE id=%s", (claim_id,)).fetchone()
+        assert crow is not None
+        payload: dict[str, Any] = crow["payload"]
+        measurement = payload.get("measurement") is True
+        result = crow["kind"] == "result"
+        if prow["primary_metric"] is None:
+            if measurement or result:
+                raise InvalidTransition("a reproduced measurement needs a project primary metric")
+            return out  # unscored project: nothing to compare
+        if any(_num(r["primary_value"]) is None for r in runs):
+            raise InvalidTransition(f"rerun oracle compares values: every evidence run needs "
+                                    f"{prow['primary_metric']}")
+        try:
+            mean = fmean(r["primary_value"] for r in runs)
+            rerun_mean = fmean(r["primary_value"] for r in independent)
+        except OverflowError as e:
+            raise InvalidTransition("experiment values are too large to compare") from e
+        out.update(mean=mean, rerun_mean=rerun_mean)
+        if measurement or result:
+            stated_mean = _num(payload.get("mean"))
+            if stated_mean is None or not math.isclose(stated_mean, mean, rel_tol=1e-12, abs_tol=1e-15):
+                raise InvalidTransition(f"payload.mean must match the experiment evidence mean {mean:.12g}; "
+                                        f"got {payload.get('mean')!r}")
+        if result:
+            partition = partition_text(original["config"].get(st.get("partition_key") or "partition"))
+            origin = payload.get("origin")
+            if (payload.get("partition") != partition or payload.get("code_ref") != original["code_ref"]
+                    or (origin is not None and str(origin).lower() != str(original["id"]))):
+                raise InvalidTransition("result payload partition, code_ref and origin must match the "
+                                        "original experiment")
+        if measurement:
+            out["measurement"] = True
+            return out
+        pk = st.get("partition_key")
+        part = partition_text(original["config"].get(pk)) if pk and isinstance(original["config"], dict) else None
+        eps = max(partition_epsilon(st, part, prow["improve_epsilon"]), _num(payload.get("epsilon")) or 0.0)
+        maximize = prow["metric_direction"] == "max"
+        base, source = _num(payload.get("baseline")), "claim payload.baseline"
+        if base is None:
+            r = conn.execute(
+                "SELECT primary_value FROM assay.experiments_valid WHERE project_id=%(p)s AND run_status='ok'"
+                " AND primary_value IS NOT NULL AND dedup_key <> %(key)s AND created_at < %(t)s"
+                " AND (%(pk)s::text IS NULL OR config ->> %(pk)s IS NOT DISTINCT FROM %(part)s)"
+                " ORDER BY CASE WHEN %(max)s THEN -primary_value ELSE primary_value END LIMIT 1",
+                {"p": self.project_id, "key": runs[0]["dedup_key"], "t": original["created_at"], "pk": pk,
+                 "part": part, "max": maximize}).fetchone()
+            base, source = (None if r is None else float(r["primary_value"])), "best earlier result"
+        if base is None:
+            raise InvalidTransition(
+                "rerun oracle compares the reruns with a baseline and there is none: no earlier result with another "
+                "config" + (f" in partition {part}" if part else "") + " and no numeric payload.baseline on the "
+                "claim. Record a baseline run first, or set payload.measurement=true if the claim only states a "
+                "reproduced value.")
+
+        def beats(v: float) -> bool:
+            return v > base + eps if maximize else v < base - eps
+
+        out.update(baseline=base, baseline_source=source, epsilon=eps)
+        if not beats(mean) or not beats(rerun_mean):
+            raise InvalidTransition(
+                f"the reruns do not reproduce the claim: mean {mean:.6g} over {len(runs)} runs, "
+                f"independent reruns {rerun_mean:.6g}; both must beat "
+                f"the baseline {base:.6g} ({source}) by epsilon {eps:g}. Decide refuted or inconclusive instead.")
+        return out
 
     # ------------------------------------------------------------------ reads
 
@@ -1038,9 +1194,11 @@ class Ledger:
                 conn.execute("SET TRANSACTION READ ONLY")
                 conn.execute("SET LOCAL statement_timeout = '2s'")
                 conn.execute("SET LOCAL search_path = assay_q")
-                conn.execute("SELECT set_config('assay.project', %s, true)", (self.project_id,))
+                # SET, not set_config(): migration 0006 revokes EXECUTE on set_config from the reader.
+                conn.execute(psql.SQL("SET LOCAL assay.project = {}").format(psql.Literal(self.project_id)))
                 if via_set_role:
                     conn.execute("SET LOCAL ROLE assay_reader")
+                guard = conn.execute("SELECT current_user AS u, current_setting('assay.project') AS p").fetchone()
                 try:
                     # Describe the original query without fetching any rows. Experiments can contain
                     # configurations larger than the entire SQL budget.
@@ -1059,6 +1217,10 @@ class Ledger:
                         remaining = conn.execute(
                             psql.SQL("MOVE FORWARD ALL FROM {}").format(psql.Identifier(cursor.name))
                         ).rowcount
+                    # Defence in depth (C4): if the query changed the project filter or the role, discard it.
+                    after = conn.execute("SELECT current_user AS u, current_setting('assay.project') AS p").fetchone()
+                    if after != guard:
+                        raise AssayError("query changed the session's project or role; refused")
                 except psycopg.errors.QueryCanceled as e:
                     raise AssayError("query exceeded the 2s statement timeout") from e
                 except psycopg.errors.InsufficientPrivilege as e:
@@ -1095,7 +1257,15 @@ class Ledger:
             kw["password"] = pw
         try:
             return psycopg.connect(self.url, **kw), False
-        except psycopg.OperationalError:
+        except psycopg.OperationalError as e:
+            # SET ROLE keeps the owner as session user, so a query that escapes the reader role regains its
+            # privileges. Only on explicit opt-in (C4).
+            if os.environ.get("ASSAY_SQL_ALLOW_SET_ROLE") != "1":
+                raise AssayError(
+                    "assay_sql connects as the assay_reader role and could not log in "
+                    f"({str(e).strip().splitlines()[0] if str(e).strip() else 'connection failed'}). Set a password "
+                    "for it (ALTER ROLE assay_reader PASSWORD '...') and export ASSAY_READER_PASSWORD, or set "
+                    "ASSAY_SQL_ALLOW_SET_ROLE=1 to accept the weaker SET ROLE fallback.") from e
             return psycopg.connect(self.url, row_factory=dict_row, autocommit=False), True
 
     def brief(self, task_id: str | UUID | None = None, budget_tokens: int = 2000,

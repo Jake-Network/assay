@@ -51,10 +51,13 @@ def emit(data: Any, text: str | None = None) -> None:
         print(text if text is not None else json.dumps(jsonable(data), ensure_ascii=False, indent=2, default=str))
 
 
-def ledger(agent: str | None = None) -> Ledger:
+def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
+    """Writes need a name: --agent, ASSAY_AGENT or (for decide) --as. Reads that write nothing fall back to
+    'human' so a person can look around without naming themselves (I1)."""
     from .ledger import Ledger
 
-    return Ledger.open(project=STATE["project"], agent=agent or STATE["agent"])
+    name = agent or STATE["agent"] or os.environ.get("ASSAY_AGENT") or ("human" if read_only else None)
+    return Ledger.open(project=STATE["project"], agent=name)
 
 
 def load_json(value: str | None, what: str) -> Any:
@@ -115,7 +118,7 @@ def init(
          f"{'created' if created else 'using existing'} project {p.id}\n"
          f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
          f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n"
-         f"next: assay exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   assay ui")
+         f"next: ASSAY_AGENT=me assay exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   assay ui")
 
 
 def _repo_root() -> Path:
@@ -129,7 +132,7 @@ def _repo_root() -> Path:
 @app.command()
 def status() -> None:
     """One-screen project summary."""
-    s = ledger().status()
+    s = ledger(read_only=True).status()
     if STATE["json"]:
         return emit(s)
     b = s["best"]
@@ -157,7 +160,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
 @app.command()
 def get(id: str) -> None:
     """Show one record with its links."""
-    emit(ledger().get(id))
+    emit(ledger(read_only=True).get(id))
 
 
 @app.command()
@@ -167,7 +170,7 @@ def search(text: Annotated[str | None, typer.Argument()] = None,
            tags: Annotated[str | None, typer.Option()] = None,
            limit: Annotated[int, typer.Option()] = 20) -> None:
     """One-line summaries of claims, experiments and tasks."""
-    rows = ledger().search(text, kind, status, csv(tags), limit)
+    rows = ledger(read_only=True).search(text, kind, status, csv(tags), limit)
     emit(rows, "\n".join(f"{r['id']}  {r['line']}" for r in rows) or "(nothing)")
 
 
@@ -189,7 +192,8 @@ def task_add(title: str,
 
 @task_app.command("next")
 def task_next(tags: Annotated[str | None, typer.Option()] = None,
-              lease: Annotated[int, typer.Option(help="lease seconds")] = 900) -> None:
+              lease: Annotated[int | None, typer.Option(help="lease seconds (default: settings.lease_seconds or 900)")]
+              = None) -> None:
     """Claim the next task. Exit 3 when nothing is claimable."""
     t = ledger().next_task(tags=csv(tags), lease_seconds=lease)
     if t is None:
@@ -198,8 +202,20 @@ def task_next(tags: Annotated[str | None, typer.Option()] = None,
     emit({"ok": True, "task": t.model_dump()}, task_line(t))
 
 
+@task_app.command("claim")
+def task_claim(id: str,
+               lease: Annotated[int | None, typer.Option(help="lease seconds (default: settings.lease_seconds or 900)")]
+               = None) -> None:
+    """Claim one task by id (the lead assigned it to you). Exit 3 when it is not claimable."""
+    try:
+        t = ledger().claim_task(id, lease_seconds=lease)
+    except Conflict as e:
+        die(str(e), 3)
+    emit({"ok": True, "task": t.model_dump()}, task_line(t))
+
+
 @task_app.command("heartbeat")
-def task_heartbeat(id: str, lease: Annotated[int, typer.Option()] = 900) -> None:
+def task_heartbeat(id: str, lease: Annotated[int | None, typer.Option()] = None) -> None:
     exp = ledger().heartbeat(id, lease)
     emit({"ok": True, "lease_expires_at": exp}, f"lease until {exp:%H:%M:%S}")
 
@@ -228,13 +244,13 @@ def task_cancel(id: str, reason: Annotated[str, typer.Option()] = "cancelled") -
 @task_app.command("list")
 def task_list(status: Annotated[str | None, typer.Option()] = None,
               limit: Annotated[int, typer.Option()] = 100) -> None:
-    ts = ledger().list_tasks(status, limit)
+    ts = ledger(read_only=True).list_tasks(status, limit)
     emit([t.model_dump() for t in ts], "\n".join(task_line(t) for t in ts) or "(no tasks)")
 
 
 @task_app.command("show")
 def task_show(id: str) -> None:
-    emit(ledger().get(id))
+    emit(ledger(read_only=True).get(id))
 
 
 # ------------------------------------------------------------------ experiments
@@ -252,8 +268,15 @@ def exp_record(config: Annotated[str, typer.Option(help="JSON or @file")],
                duration_ms: Annotated[int | None, typer.Option("--duration-ms")] = None,
                tokens: Annotated[int | None, typer.Option()] = None,
                cost_usd: Annotated[float | None, typer.Option("--cost-usd")] = None) -> None:
-    """Record an evaluation (failures too). Exit 2 when it duplicates an existing ok run."""
-    r = ledger().record_experiment(
+    """Record an evaluation (failures too). Exit 2 when it duplicates an existing ok run. Without --task the
+    experiment belongs to the one task you hold a lease on, if there is exactly one."""
+    lg = ledger()
+    if task is None:
+        leases = lg.live_leases()
+        if len(leases) > 1:
+            print(f"warning: you hold {len(leases)} tasks ({', '.join(t.short_id for t in leases)}); pass --task so "
+                  "this experiment shows up in the briefs of related tasks", file=sys.stderr)
+    r = lg.record_experiment(
         load_json(config, "--config"), load_json(metrics, "--metrics") or {}, run_status=run_status, seed=seed,
         code_ref=code_ref, notes=notes, task_id=task, artifacts=load_json(artifacts, "--artifacts"),
         trace_ref=load_json(trace_ref, "--trace-ref"), duration_ms=duration_ms, tokens=tokens, cost_usd=cost_usd)
@@ -275,11 +298,15 @@ def exp_tried(config: Annotated[str, typer.Option(help="JSON or @file")],
     t = ledger().check_tried(load_json(config, "--config"), code_ref)
     data: dict[str, Any] = {"tried": bool(t.exact), "replicates": t.replicates, "best_value": t.best_value,
             "exact": [{"id": short("experiment", e.id), "author": e.author, "seed": e.seed,
-                       "outcome": e.outcome, "value": e.primary_value, "notes": e.notes} for e in t.exact]}
+                       "outcome": e.outcome, "value": e.primary_value, "notes": e.notes} for e in t.exact],
+            "invalidated": [{"id": short("experiment", e.id), "seed": e.seed} for e in t.invalidated],
+            "note": t.note}
     txt = ("not tried yet" if not t.exact else
            f"tried {len(t.exact)}x ({t.replicates} ok seeds), best {t.best_value}\n"
            + "\n".join(f"  {x['id']} seed={x['seed']} {x['outcome']} {x['value']} {x['notes'] or ''}"
                        for x in data["exact"]))
+    if t.note:
+        txt += f"\nnote: {t.note}"
     emit(data, txt)
 
 
@@ -306,13 +333,13 @@ def claim_add(kind: str, statement: str,
 def claim_list(status: Annotated[str | None, typer.Option()] = None,
                kind: Annotated[str | None, typer.Option()] = None,
                limit: Annotated[int, typer.Option()] = 50) -> None:
-    rows = ledger().search(None, kind or "claim", status, None, limit)
+    rows = ledger(read_only=True).search(None, kind or "claim", status, None, limit)
     emit(rows, "\n".join(f"{r['id']}  {r['line']}" for r in rows) or "(no claims)")
 
 
 @claim_app.command("show")
 def claim_show(id: str) -> None:
-    emit(ledger().get(id))
+    emit(ledger(read_only=True).get(id))
 
 
 @app.command()
@@ -340,7 +367,7 @@ def decide(target: str, status: str,
 @app.command("sql")
 def sql_cmd(query: str) -> None:
     """Read-only SQL over the v_* views of this project."""
-    r = ledger().sql(query)
+    r = ledger(read_only=True).sql(query)
     if STATE["json"]:
         return emit(r)
     cols = r["columns"]
@@ -356,7 +383,7 @@ def export(fmt: Annotated[str, typer.Option("--format")] = "jsonl") -> None:
     """Export the project as an append-only JSONL event log."""
     if fmt != "jsonl":
         die("only --format jsonl is supported")
-    for ev in ledger().export():
+    for ev in ledger(read_only=True).export():
         print(json.dumps(ev, ensure_ascii=False, default=str))
 
 
@@ -365,14 +392,17 @@ def export(fmt: Annotated[str, typer.Option("--format")] = "jsonl") -> None:
 @app.command()
 def serve(host: Annotated[str, typer.Option()] = "127.0.0.1",
           port: Annotated[int, typer.Option()] = 7466,
-          toolset: Annotated[str, typer.Option()] = "all") -> None:
+          toolset: Annotated[str, typer.Option()] = "all",
+          token: Annotated[str | None, typer.Option(help="required for non-loopback binds (or ASSAY_SERVE_TOKEN)")]
+          = None) -> None:
     """HTTP: streamable MCP at /mcp and the read-only viewer at /."""
+    from .web.app import requires_serve_token
     from .web.app import serve as run
 
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        print(f"WARNING: binding {host}; assay has no authentication. Anyone who can reach this port can "
-              "read and write the ledger.", file=sys.stderr)
-    run(host=host, port=port, toolset=toolset, project=STATE["project"])
+    if requires_serve_token(host):
+        print(f"WARNING: binding {host}. Requests need the serve token (Bearer header, cookie or ?token=); anyone "
+              "holding it can read and write the ledger. Use TLS or a private network.", file=sys.stderr)
+    run(host=host, port=port, toolset=toolset, project=STATE["project"], token=token)
 
 
 @app.command()
@@ -400,10 +430,14 @@ def ui(port: Annotated[int, typer.Option()] = 7466) -> None:
 
 @app.command()
 def hook(event: str) -> None:
-    """Claude Code hook entry point. Always exits 0."""
+    """Claude Code hook entry point. Always exits 0, except `replay`, which reports what it processed."""
     from .hooks import main as hook_main
 
-    hook_main(event)
+    res = hook_main(event)
+    if res is not None:
+        emit(res.as_dict(), str(res))
+        if not res.ok:
+            raise typer.Exit(1)
 
 
 @app.command()
@@ -496,7 +530,7 @@ def blob_put(path: Path, media_type: Annotated[str, typer.Option("--media-type")
 @blob_app.command("get")
 def blob_get(uri: str, output: Annotated[Path | None, typer.Option("-o", "--output")] = None) -> None:
     """Write a stored blob to a file (or stdout)."""
-    data = ledger().get_blob(uri)
+    data = ledger(read_only=True).get_blob(uri)
     if output is not None:
         output.write_bytes(data)
         emit({"ok": True, "path": str(output), "bytes": len(data)}, str(output))

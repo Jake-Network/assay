@@ -33,8 +33,22 @@ def canonical_json(value: Any) -> str:
     return json.dumps(_norm(value, ""), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _drop(cfg: dict[str, Any], ignore: list[str]) -> dict[str, Any]:
+    """Remove ignored keys. A key is matched at the top level first; "a.b" also removes b inside object a."""
+    top = set(ignore)
+    kept = {k: v for k, v in cfg.items() if k not in top}
+    nested: dict[str, list[str]] = {}
+    for path in ignore:
+        head, dot, rest = path.partition(".")
+        if dot and rest and head in kept and isinstance(kept[head], dict):
+            nested.setdefault(head, []).append(rest)
+    for head, rests in nested.items():
+        kept[head] = _drop(kept[head], rests)
+    return kept
+
+
 def dedup_key(config: dict[str, Any], code_ref: str | None, ignore: list[str]) -> str:
-    kept = {k: v for k, v in config.items() if k not in set(ignore)}
+    kept = _drop(config, list(ignore))
     raw = canonical_json(kept) + "\n" + (code_ref or "")
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ...errors import AssayError
-from .code import code_hash, extract_knobs, short_hash
+from .code import code_hash, code_hashes, extract_knobs, short_hash
 
 STATE_REL = Path(".assay") / "ar_state.json"
 PENDING_REL = Path(".assay") / "ar_pending.jsonl"
@@ -41,6 +41,9 @@ class Checkout:
     def partition(self, hw: str) -> str:
         return f"{hw}/{short_hash(self.harness_hash())}"
 
+    def partition_keys(self, hw: str) -> tuple[str, ...]:
+        return partition_keys(hw, (self.root / "prepare.py").read_bytes())
+
     # ------------------------------------------------------------------ git
 
     def git(self, *args: str, check: bool = False) -> subprocess.CompletedProcess[bytes] | None:
@@ -64,21 +67,21 @@ class Checkout:
         r = self.git("rev-parse", "--short=7", "HEAD")
         return r.stdout.decode().strip() if r is not None and r.returncode == 0 else None
 
-    def parent(self, current: bytes) -> tuple[str | None, dict[str, Any] | None, str]:
-        """(parent code hash, parent knobs, how). §6.1.2: committed -> HEAD~1, uncommitted -> HEAD,
+    def parent(self, current: bytes) -> tuple[tuple[str, ...], dict[str, Any] | None, str]:
+        """(parent code hashes, parent knobs, how). §6.1.2: committed -> HEAD~1, uncommitted -> HEAD,
         no git -> the last code this checkout synced or kept (.assay/ar_state.json)."""
         head = self.git_show("HEAD") if self.is_git() else None
         if head is not None:
             if code_hash(head) == code_hash(current):
                 prev = self.git_show("HEAD~1")
                 if prev is None:
-                    return None, None, "root commit"
-                return code_hash(prev), extract_knobs(prev), "HEAD~1"
-            return code_hash(head), extract_knobs(head), "HEAD"
+                    return (), None, "root commit"
+                return code_hashes(prev), extract_knobs(prev), "HEAD~1"
+            return code_hashes(head), extract_knobs(head), "HEAD"
         st = self.load_state()
         if st.get("last_code_hash"):
-            return st["last_code_hash"], st.get("last_knobs"), "state"
-        return None, None, "none"
+            return tuple(st.get("last_code_hashes") or [st["last_code_hash"]]), st.get("last_knobs"), "state"
+        return (), None, "none"
 
     # ------------------------------------------------------------------ local state
 
@@ -100,3 +103,7 @@ class Checkout:
 
     def pending_path(self) -> Path:
         return self.root / PENDING_REL
+
+
+def partition_keys(hw: str, source: bytes) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(f"{hw}/{short_hash(h)}" for h in code_hashes(source)))

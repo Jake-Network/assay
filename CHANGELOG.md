@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased: review fixes (assay-review.md)
+
+- Core (migration 0006): the rerun oracle compares values against a baseline; TRUNCATE and agent re-roling are
+  refused; `assay_sql` cannot call `set_config` and rejects `U&` escapes and `*_to_xml`; seed NULL and -1 differ;
+  `v_tried` summarises replicated configs by their mean; candidates no longer need seed 0; `check_tried` reports
+  invalidated runs; nested `dedup_ignore` keys.
+- Referee: no verification without a verified baseline, repeated calibration rounds, replications by distinct
+  agents, replication tasks carry the original command.
+- CLI/SDK: no silent `human` agent; `task claim <id>`; `settings.lease_seconds`; experiments link to the
+  agent's only leased task; briefs show unjudged findings under the task's tags; worktrees find the main config.
+- Core (migration 0007): rerun result claims bind to their evidence, independent reruns determine reproducibility,
+  and concurrent claims by one agent respect replication groups. Briefs tolerate legacy partition epsilon values.
+- Viewer and MCP: non-loopback HTTP binds require a token, duplicate checks report invalidated seeds,
+  and task claims and heartbeats use the current project lease default.
+- Hooks: confirm cited record IDs against write receipts and continue replaying after malformed entries or
+  concurrent arrivals.
+- Autoresearch: keep completed runs across database outages, resolve known legacy partition hashes, recover
+  from an invalidated calibration, and decide local KEEP independently of shared replication eligibility.
+- Autoresearch benchmark: carry forward each agent's remaining API budget, reconcile collector and ledger
+  run receipts, and validate provenance before aggregating repetitions.
+
 ## Unreleased: Step 3, autoresearch on many GPUs
 
 - Core: partitions (`settings.partition_key`), per-partition epsilon, verified-best baseline, `update_settings`

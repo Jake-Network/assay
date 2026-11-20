@@ -2,6 +2,7 @@
   "hooks": {
     "SubagentStop": [
       {
+        "matcher": "assay-worker",
         "hooks": [
           {
             "type": "command",

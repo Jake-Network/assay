@@ -16,6 +16,7 @@ transcripts.
 
 ```bash
 uv tool install --from git+https://github.com/Jake-Network/assay assay     # PyPI name to be decided; no Docker needed
+uv tool update-shell        # once, if `assay` is not found; then open a new terminal and restart Claude Code
 cd your-repo && assay init --goal "Minimise validation loss" --metric val_loss --direction min
 claude plugin marketplace add Jake-Network/assay && claude plugin install assay@assay
 ```
@@ -31,6 +32,7 @@ and `assay serve` to watch it at http://127.0.0.1:7466.
 No Claude Code? Everything is in the CLI and the Python SDK:
 
 ```bash
+export ASSAY_AGENT=worker-1                                                     # who is writing
 assay exp tried  --config '{"lr": 3e-4, "warmup": 500}'                         # before running
 assay exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
 assay brief
@@ -95,7 +97,15 @@ Circle packing (n=26) with the same model, API budget, worker count, and wall-cl
   list what was already tried around your task, failures included.
 - **Nothing trusted without evidence.** Workers propose claims. The lead or a human verifies them with a
   non-LLM oracle and evidence ids. The default rerun rule requires three seeds for the same configuration
-  and code, including a rerun by a different agent. Database triggers keep records append-only.
+  and code, including a rerun by a different agent, and the reruns must still beat the baseline: a result that
+  was only re-run, not reproduced, is refused.
+
+What these rest on, and what they do not: database triggers refuse UPDATE, DELETE and TRUNCATE on records
+and keep each agent's role fixed, so an honest mistake (an agent "cleaning up test data") cannot rewrite
+history. They do not stop someone who holds the database owner's credentials, which every agent on a shared
+URL has today, and agent names are self-declared: an agent that lies about its name can pose as the lead or as
+"another agent". Treat the guarantees as protection against mistakes, not against a hostile agent, until
+per-agent tokens and a separate writer role land (v0.2). See [Honest limits](docs/concepts.md#honest-limits).
 
 ## What it is not
 
