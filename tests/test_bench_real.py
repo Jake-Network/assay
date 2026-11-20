@@ -41,6 +41,7 @@ def test_real_preview_isolated_and_budgeted(tmp_path: Path, monkeypatch: pytest.
         assert Path(meta["env"]["BENCH_EVALS"]) == (out / "evals.jsonl").resolve()
         assert meta["cmd"][meta["cmd"].index("--max-budget-usd") + 1] == "0.75"
         assert meta["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "sonnet"
+        assert meta["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
         if mode == "C":
             ids.add(meta["project_id"])
             assert meta["env"]["ASSAY_PROJECT"] == meta["project_id"]
