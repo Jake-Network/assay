@@ -498,14 +498,20 @@ def _db_checks() -> list[Any]:
         return [*checks, Check("db schema", False, "unknown (no connection)"), build_head]
     import psycopg
 
-    with psycopg.connect(url) as c:
-        ver = c.execute("SHOW server_version").fetchone()[0]  # type: ignore[index]
-        checks.append(Check("postgres >= 15", int(ver.split(".")[0]) >= 15, ver))
-        vec = c.execute("SELECT 1 FROM pg_available_extensions WHERE name='vector'").fetchone()
-        checks.append(Check("pgvector (optional)", True, "available" if vec else "not available"))
-        rd = c.execute("SELECT 1 FROM pg_roles WHERE rolname='assay_reader'").fetchone()
-        checks.append(Check("assay_reader role", rd is not None, "present" if rd else "missing", "assay migrate"))
-    cur = current(url)
+    try:
+        with psycopg.connect(url, connect_timeout=10) as c:
+            ver = c.execute("SHOW server_version").fetchone()[0]  # type: ignore[index]
+            vec = c.execute("SELECT 1 FROM pg_available_extensions WHERE name='vector'").fetchone()
+            rd = c.execute("SELECT 1 FROM pg_roles WHERE rolname='assay_reader'").fetchone()
+        cur = current(url)
+    except psycopg.Error as e:
+        # An unreachable team database must not hide the remaining checks (and --json must stay JSON).
+        first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        checks[-1] = Check("connect", False, f"{mode}: {first}", "check ASSAY_DATABASE_URL and that the server is up")
+        return [*checks, Check("db schema", False, "unknown (no connection)"), build_head]
+    checks.append(Check("postgres >= 15", int(ver.split(".")[0]) >= 15, ver))
+    checks.append(Check("pgvector (optional)", True, "available" if vec else "not available"))
+    checks.append(Check("assay_reader role", rd is not None, "present" if rd else "missing", "assay migrate"))
     if cur == head():
         checks.append(Check("db schema", True, cur))
     elif cur is None or cur < head():

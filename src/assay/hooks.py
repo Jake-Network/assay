@@ -12,8 +12,9 @@ Inputs handled:
 - PostToolUse on SubagentHandback: tool_input.message (the report, when handed back through that tool)
 
 Only assay workers are captured: the agent type must be one of ASSAY_HOOK_AGENTS (default `assay-worker`, matched
-with or without a plugin prefix such as `assay:`). The plugin's matcher passes every subagent; any other type exits
-before the config is read or anything is spooled. A run that handed its report back is captured once, from the
+with or without a plugin prefix such as `assay:`). The plugin's matcher passes every subagent; any other type, and an
+event with no agent type at all, exits before the config is read or anything is spooled (`ASSAY_HOOK_AGENTS=*`
+captures every event). A run that handed its report back is captured once, from the
 handback. Permanent failures (unknown project, schema newer than this assay, data Postgres refuses) move to
 `dead/` in the spool; `assay hook replay` retries them once more and reports what it did.
 """
@@ -244,13 +245,18 @@ def _agent_type(data: dict[str, Any]) -> str | None:
     return str(t) if t else None
 
 
-def is_worker(agent_type: str | None) -> bool:
-    """No agent type (the main session, older Claude Code) is let through; a named one must be a worker type,
-    with or without its plugin prefix (`assay:assay-worker`)."""
-    if not agent_type:
-        return True
+def is_worker(agent_type: str | None, *, require_type: bool = True) -> bool:
+    """The agent type must be a worker type, with or without its plugin prefix (`assay:assay-worker`). The hook
+    fires for every subagent, so a new event without a type (older Claude Code, an Agent call without
+    subagent_type) is not captured; ASSAY_HOOK_AGENTS=* captures everything, untyped events included.
+    require_type=False is for entries already in the spool: they passed the filter of the build that wrote them
+    (earlier builds relied on the plugin matcher and spooled untyped events), so replay must not drop them."""
     types = _worker_types()
-    return "*" in types or agent_type in types or agent_type.rsplit(":", 1)[-1] in types
+    if "*" in types:
+        return True
+    if not agent_type:
+        return not require_type
+    return agent_type in types or agent_type.rsplit(":", 1)[-1] in types
 
 
 def _is_handback(data: dict[str, Any]) -> bool:
@@ -452,7 +458,7 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'."""
     from .config import load
 
-    if not is_worker(_agent_type(data)):
+    if not is_worker(_agent_type(data), require_type=False):
         return f"skipped:not-a-worker ({_agent_type(data)})"
     text = extract_text(data).replace("\x00", "").strip()  # Postgres text cannot hold NUL
     if _is_handback(data):

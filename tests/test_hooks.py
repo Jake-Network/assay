@@ -340,7 +340,7 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
             queued = True
             assert hooks._locked(spool)
             monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
-                {"cwd": str(repo), "last_assistant_message": "Concurrent report."})))
+                {"cwd": str(repo), "agent_type": "assay-worker", "last_assistant_message": "Concurrent report."})))
             hooks.main("subagent-stop")
         return snapshot
 
@@ -371,7 +371,8 @@ def test_missing_project_is_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.delenv("ASSAY_PROJECT", raising=False)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(tmp_path), "last_assistant_message": "x"})))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(tmp_path), "agent_type": "assay-worker",
+                                                                     "last_assistant_message": "x"})))
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
     hooks.main("subagent-stop")
     assert "no assay project" in (tmp_path / "state" / "assay" / "hook.log").read_text()
@@ -403,3 +404,32 @@ def test_plugin_hook_passes_every_subagent() -> None:
     for f in (root / "hooks" / "hooks.json", root / "manual" / "settings.hooks.json"):
         [stop] = json.loads(f.read_text())["hooks"]["SubagentStop"]
         assert "matcher" not in stop, f
+
+
+def test_untyped_events_are_not_captured_unless_wildcard(repo: Path, worker: Ledger,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hook fires for every subagent: a new event without an agent type is dropped at the entry point, but an
+    untyped entry already in the spool (written by an earlier build behind the plugin matcher) is still replayed."""
+    import io
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS", raising=False)
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
+    spool = hooks._spool_dir()
+    event = {"cwd": str(repo), "hook_event_name": "SubagentStop", "last_assistant_message": "Untyped report."}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    hooks.main("subagent-stop")
+    assert not list(spool.glob("*.json"))
+    monkeypatch.setenv("ASSAY_HOOK_AGENTS", "*")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    hooks.main("subagent-stop")
+    assert len(list(spool.glob("*.json"))) == 1
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS")
+    assert hooks.replay_now(spool).captured == 1
+    assert _notes(worker)[0]["payload"]["text"] == "Untyped report."
+
+
+def test_hook_help_is_not_read_as_an_event() -> None:
+    script = str(Path(sys.executable).parent / "assay")
+    p = subprocess.run([script, "hook", "--help"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert p.returncode == 0 and "Usage" in p.stdout

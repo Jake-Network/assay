@@ -77,7 +77,8 @@ hook events. Reports with a shared opening and different conclusions each get a 
 
 Other subagents (Explore, general-purpose, ...) are not captured. The hook fires for every subagent and
 `ASSAY_HOOK_AGENTS` (comma separated, default `assay-worker`, with or without a plugin prefix) decides which are
-captured; any other type exits at once without reading the config or touching the database. To capture your own
+captured; any other type exits at once without reading the config or touching the database. An event without an
+agent type (older Claude Code versions) is not captured either; `ASSAY_HOOK_AGENTS=*` captures every event. To capture your own
 worker types too, set `ASSAY_HOOK_AGENTS=assay-worker,implementer` in your shell and in the `env` of Claude Code's
 `settings.json`. This works the same for the plugin and the manual install.
 

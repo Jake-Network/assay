@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import sys
 
+# the events Claude Code's hooks run; anything else (--help, replay, a typo) goes through the CLI
+HOOK_EVENTS = ("subagent-stop", "subagent-handback")
+
 
 def main() -> None:
     argv = sys.argv[1:]
-    if len(argv) == 2 and argv[0] == "hook" and argv[1] != "replay":
+    if len(argv) == 2 and argv[0] == "hook" and argv[1] in HOOK_EVENTS:
         from .hooks import main as hook_main
 
         hook_main(argv[1])

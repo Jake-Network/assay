@@ -10,7 +10,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,21 +60,15 @@ def _effective(root: Path, section: str, key: str) -> tuple[Any, Path | None]:
     return value, source
 
 
-def _assay_version(exe: str) -> str:
-    try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return "version unknown"
-    return out.stdout.strip() or "version unknown"
-
-
 def check_path(root: Path) -> Check:
     env_path, source = _effective(root, "env", "PATH")
     path = str(env_path) if env_path else os.environ.get("PATH", "")
     where = f"PATH from {source}" if source else "PATH"
     exe = shutil.which("assay", path=path)
     if exe:
-        return Check("assay on PATH", True, f"{exe} ({_assay_version(exe)})")
+        # Only the path: the PATH can come from a repository's settings file, so the binary it finds is not
+        # trusted enough to run. `assay build` above is the version of the assay running this check.
+        return Check("assay on PATH", True, exe)
     return Check("assay on PATH", False,
                  f"`assay` is not on the {where} Claude Code starts `assay mcp` and `assay hook` from",
                  "uv tool update-shell, then open a new terminal and restart Claude Code (if `uv tool list` has no "

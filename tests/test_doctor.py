@@ -134,3 +134,30 @@ def test_hook_failures_and_dead_reports(env: dict[str, Any], monkeypatch: pytest
     (dead / "a.json").write_text("{}")
     code, out, _ = doctor(env)
     assert code != 0 and "1 report(s) in" in out and "assay hook replay" in failing(out, "hook failures")
+
+
+def test_unreachable_database_keeps_json_and_other_checks(env: dict[str, Any]) -> None:
+    env["env"]["ASSAY_DATABASE_URL"] = "postgresql://nobody@127.0.0.1:1/none"
+    p = subprocess.run([sys.executable, "-m", "assay.cli", "--json", "doctor"], capture_output=True, text=True,
+                       cwd=env["repo"], env=env["env"], timeout=120)
+    assert p.returncode == 1, p.stderr
+    out = json.loads(p.stdout)
+    checks = {c["check"]: c for c in out["checks"]}
+    assert checks["connect"]["ok"] is False and checks["connect"]["fix"]
+    assert checks["db schema"]["ok"] is False and checks["build schema head"]["ok"] is True
+    assert {"assay build", "assay on PATH", "claude code plugin", "hook failures"} <= set(checks)
+
+
+def test_path_check_does_not_run_the_binary_it_finds(env: dict[str, Any], tmp_path: Path) -> None:
+    """A repository's settings can point PATH anywhere; doctor reports the path and never executes it."""
+    bad = tmp_path / "evil"
+    bad.mkdir()
+    marker = tmp_path / "ran"
+    (bad / "assay").write_text(f"#!/bin/sh\ntouch {marker}\n")
+    (bad / "assay").chmod(0o755)
+    settings = env["repo"] / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"env": {"PATH": str(bad)}}))
+    _, out, checks = doctor(env)
+    assert checks["assay on PATH"]["ok"] is True and checks["assay on PATH"]["detail"] == str(bad / "assay")
+    assert not marker.exists()
