@@ -1,0 +1,184 @@
+{
+  "conditions": {
+    "configs": "A,B,C",
+    "runs": 3,
+    "dry": false,
+    "workers": 4,
+    "rounds": 3,
+    "evals": 5,
+    "budget": 40000,
+    "max_budget_usd": 5.0,
+    "drop_rate": 0.15,
+    "compact_at": 3000,
+    "seed": 0,
+    "model": "claude-sonnet-5-5",
+    "max_turns": 80,
+    "wall_clock": 60,
+    "execute": true,
+    "note": "C-3 re-run separately (bench/out/sonnet55-ae81ddc-run2-C3/C-1) after the first C-3 hit the account usage limit (HTTP 429)"
+  },
+  "runs": [
+    {
+      "config": "A",
+      "run": 1,
+      "evaluations": 60,
+      "duplicate_ratio": 0.55,
+      "lost_results": 0,
+      "lead_context_max": 29950,
+      "tokens_total": 92927,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          92927,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 0.6059279000000002,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "A",
+      "run": 2,
+      "evaluations": 60,
+      "duplicate_ratio": 0.36666666666666664,
+      "lost_results": 0,
+      "lead_context_max": 29013,
+      "tokens_total": 91342,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          91342,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 0.6190320000000001,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "A",
+      "run": 3,
+      "evaluations": 60,
+      "duplicate_ratio": 0.3,
+      "lost_results": 0,
+      "lead_context_max": 29252,
+      "tokens_total": 91078,
+      "final_best": 2.6359830849,
+      "curve": [
+        [
+          91078,
+          2.6359830849
+        ]
+      ],
+      "cost_usd": 0.5625102,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "B",
+      "run": 1,
+      "evaluations": 60,
+      "duplicate_ratio": 0.21666666666666667,
+      "lost_results": 0,
+      "lead_context_max": 35281,
+      "tokens_total": 251815,
+      "final_best": 2.6359830849,
+      "curve": [
+        [
+          251815,
+          2.6359830849
+        ]
+      ],
+      "cost_usd": 0.8691861000000002,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "B",
+      "run": 2,
+      "evaluations": 60,
+      "duplicate_ratio": 0.16666666666666666,
+      "lost_results": 0,
+      "lead_context_max": 34427,
+      "tokens_total": 193633,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          193633,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 0.8474331999999997,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "B",
+      "run": 3,
+      "evaluations": 60,
+      "duplicate_ratio": 0.05,
+      "lost_results": 0,
+      "lead_context_max": 32322,
+      "tokens_total": 182979,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          182979,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 0.9168681,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "C",
+      "run": 1,
+      "evaluations": 59,
+      "duplicate_ratio": 0.3220338983050847,
+      "lost_results": 0,
+      "lead_context_max": 46833,
+      "tokens_total": 545436,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          545436,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 1.2409572999999998,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "C",
+      "run": 2,
+      "evaluations": 59,
+      "duplicate_ratio": 0.3220338983050847,
+      "lost_results": 0,
+      "lead_context_max": 35312,
+      "tokens_total": 398490,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          398490,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 1.0338991000000002,
+      "curve_source": "final aggregate only"
+    },
+    {
+      "config": "C",
+      "run": 3,
+      "evaluations": 58,
+      "duplicate_ratio": 0.25862068965517243,
+      "lost_results": 0,
+      "lead_context_max": 37439,
+      "tokens_total": 471123,
+      "final_best": 2.6359317682,
+      "curve": [
+        [
+          471123,
+          2.6359317682
+        ]
+      ],
+      "cost_usd": 1.2487377999999998,
+      "curve_source": "final aggregate only"
+    }
+  ]
+}
