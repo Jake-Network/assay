@@ -1130,50 +1130,61 @@ class Ledger:
         return out
 
     def search(self, text: str | None = None, kind: str | None = None, status: str | None = None,
-               tags: Sequence[str] | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        """One-line summaries. kind: claim|experiment|task or a claim kind (hypothesis, ...).
-        status: claim status, task status or experiment outcome."""
+               tags: Sequence[str] | None = None, limit: int = 20,
+               all_tags: Sequence[str] | None = None) -> list[dict[str, Any]]:
+        """One-line summaries ending with the record's tags (an experiment carries its task's tags).
+        kind: claim|experiment|task or a claim kind (hypothesis, ...). status: claim status, task status or
+        experiment outcome. tags: records with any of these tags; all_tags: records with every one of them."""
         limit = max(1, min(int(limit), 200))
         like = f"%{text}%" if text else None
         tg = list(tags or [])
+        at = list(all_tags or [])
         claim_kind = kind if kind in self.pack.claim_kinds else None
         want = {"claim"} if claim_kind else ({kind} if kind else {"claim", "experiment", "task"})
         out: list[dict[str, Any]] = []
         with self._conn() as conn:
             if "claim" in want:
                 for r in conn.execute(
-                    "SELECT id, kind, status, statement, n_support, n_refute, created_at FROM assay.v_claim_status"
+                    "SELECT id, kind, status, statement, n_support, n_refute, tags, created_at"
+                    " FROM assay.v_claim_status"
                     " WHERE project_id=%(p)s AND (%(l)s::text IS NULL OR statement ILIKE %(l)s)"
                     " AND (%(k)s::text IS NULL OR kind=%(k)s) AND (%(s)s::text IS NULL OR status=%(s)s)"
                     " AND (cardinality(%(t)s::text[])=0 OR tags && %(t)s::text[])"
+                    " AND (cardinality(%(a)s::text[])=0 OR tags @> %(a)s::text[])"
                     " ORDER BY created_at DESC LIMIT %(n)s",
-                    {"p": self.project_id, "l": like, "k": claim_kind, "s": status, "t": tg, "n": limit}):
+                    {"p": self.project_id, "l": like, "k": claim_kind, "s": status, "t": tg, "a": at, "n": limit}):
                     out.append({"id": short("claim", r["id"]), "kind": "claim", "at": r["created_at"],
+                                "tags": list(r["tags"] or []),
                                 "line": f"[{r['status']}] {r['kind']}: {r['statement']} "
-                                        f"(+{r['n_support']}/-{r['n_refute']})"})
+                                        f"(+{r['n_support']}/-{r['n_refute']})" + _tag_suffix(r["tags"])})
             if "experiment" in want:
                 for r in conn.execute(
-                    "SELECT e.id, e.author, e.outcome, e.primary_value, e.config, e.notes, e.created_at"
+                    "SELECT e.id, e.author, e.outcome, e.primary_value, e.config, e.notes, t.tags, e.created_at"
                     " FROM assay.experiments_valid e LEFT JOIN assay.tasks t ON t.id = e.task_id"
                     " WHERE e.project_id=%(p)s AND (%(l)s::text IS NULL OR e.notes ILIKE %(l)s"
                     "   OR e.config::text ILIKE %(l)s) AND (%(s)s::text IS NULL OR e.outcome=%(s)s)"
                     " AND (cardinality(%(t)s::text[])=0 OR t.tags && %(t)s::text[])"
+                    " AND (cardinality(%(a)s::text[])=0 OR t.tags @> %(a)s::text[])"
                     " ORDER BY e.created_at DESC LIMIT %(n)s",
-                    {"p": self.project_id, "l": like, "s": status, "t": tg, "n": limit}):
+                    {"p": self.project_id, "l": like, "s": status, "t": tg, "a": at, "n": limit}):
                     val = "" if r["primary_value"] is None else f" {r['primary_value']:.6g}"
                     out.append({"id": short("experiment", r["id"]), "kind": "experiment", "at": r["created_at"],
+                                "tags": list(r["tags"] or []),
                                 "line": f"{r['outcome']}{val} by {r['author']}: {config_line(r['config'])}"
-                                        + (f" | {r['notes'][:80]}" if r["notes"] else "")})
+                                        + (f" | {r['notes'][:80]}" if r["notes"] else "") + _tag_suffix(r["tags"])})
             if "task" in want:
                 for r in conn.execute(
                     "SELECT id, title, status, lease_owner, tags, created_at FROM assay.tasks WHERE project_id=%(p)s"
                     " AND (%(l)s::text IS NULL OR title ILIKE %(l)s) AND (%(s)s::text IS NULL OR status=%(s)s)"
                     " AND (cardinality(%(t)s::text[])=0 OR tags && %(t)s::text[])"
+                    " AND (cardinality(%(a)s::text[])=0 OR tags @> %(a)s::text[])"
                     " ORDER BY created_at DESC LIMIT %(n)s",
-                    {"p": self.project_id, "l": like, "s": status, "t": tg, "n": limit}):
+                    {"p": self.project_id, "l": like, "s": status, "t": tg, "a": at, "n": limit}):
                     out.append({"id": short("task", r["id"]), "kind": "task", "at": r["created_at"],
+                                "tags": list(r["tags"] or []),
                                 "line": f"[{r['status']}] {r['title']}"
-                                        + (f" ({r['lease_owner']})" if r["status"] == "claimed" else "")})
+                                        + (f" ({r['lease_owner']})" if r["status"] == "claimed" else "")
+                                        + _tag_suffix(r["tags"])})
         out.sort(key=lambda x: x["at"], reverse=True)
         return [{k: v for k, v in jsonable(o).items() if k != "at"} for o in out[:limit]]
 
@@ -1328,6 +1339,10 @@ def merge_patch(target: Any, patch: Any) -> Any:
         else:
             out[k] = merge_patch(out.get(k), v)
     return out
+
+
+def _tag_suffix(tags: Sequence[str] | None) -> str:
+    return f" [tags: {', '.join(tags)}]" if tags else ""
 
 
 def config_line(cfg: Any, max_len: int = 90) -> str:

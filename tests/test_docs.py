@@ -33,3 +33,15 @@ def test_autoresearch_template_matches_package() -> None:
     assert packaged.read_text() == copy.read_text()
     text = packaged.read_text()
     assert "MIT" in text and "0. assay ar replicate --auto" in text and "NEVER STOP" in text
+
+
+def test_readmes_say_what_assay_fits() -> None:
+    root = Path(__file__).resolve().parent.parent
+    en = (root / "README.md").read_text()
+    ko = (root / "README.ko.md").read_text()
+    assert en.index("## What it fits") < en.index("## What it is not")
+    assert ko.index("## 맞는 일") < ko.index("## 무엇이 아닌가")
+    for words in (["A number per attempt", "Re-runnable", "One space, explored together", "code implementation"],
+                  ["시도마다 숫자 지표", "재실행 가능", "같은 공간의 동시 탐색", "코드 구현"]):
+        text = en if words[0].isascii() else ko
+        assert all(w in text for w in words), words

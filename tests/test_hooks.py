@@ -375,3 +375,31 @@ def test_missing_project_is_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
     hooks.main("subagent-stop")
     assert "no assay project" in (tmp_path / "state" / "assay" / "hook.log").read_text()
+
+
+def test_other_subagents_exit_before_any_work(repo: Path, worker: Ledger) -> None:
+    """The plugin hook fires for every subagent; a type outside ASSAY_HOOK_AGENTS records and spools nothing and
+    returns quickly through the installed console script."""
+    data = _stop(repo, "Explore results: the config lives in src/.", agent_type="Explore")
+    state = repo / "state"
+    env = {**os.environ, "XDG_STATE_HOME": str(state)}
+    env.pop("ASSAY_HOOK_AGENTS", None)
+    script = str(Path(sys.executable).parent / "assay")
+    times = []
+    for _ in range(3):
+        t = time.monotonic()
+        p = subprocess.run([script, "hook", "subagent-stop"], input=json.dumps(data), text=True,
+                           capture_output=True, cwd=repo, timeout=30, env=env)
+        times.append(time.monotonic() - t)
+        assert p.returncode == 0 and p.stdout == "" and p.stderr == ""
+    assert min(times) < 0.5, f"hook took {min(times):.3f}s"
+    assert not list(state.glob("assay/spool/*/*.json"))
+    assert not (state / "assay" / "hook.log").exists()
+    assert _notes(worker) == []
+
+
+def test_plugin_hook_passes_every_subagent() -> None:
+    root = Path(__file__).resolve().parent.parent / "integrations" / "claude-code"
+    for f in (root / "hooks" / "hooks.json", root / "manual" / "settings.hooks.json"):
+        [stop] = json.loads(f.read_text())["hooks"]["SubagentStop"]
+        assert "matcher" not in stop, f

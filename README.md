@@ -107,8 +107,20 @@ URL has today, and agent names are self-declared: an agent that lies about its n
 "another agent". Treat the guarantees as protection against mistakes, not against a hostile agent, until
 per-agent tokens and a separate writer role land (v0.2). See [Honest limits](docs/concepts.md#honest-limits).
 
+## What it fits
+
+assay pays off when a job meets all three conditions:
+
+- **A number per attempt.** Every attempt yields a metric (`val_bpb`, `sum_radii`).
+- **Re-runnable.** The same config and code can run again with only the seed changed, so a rerun can verify a result.
+- **One space, explored together.** Several workers search the same space at the same time, so reading each
+  other's results removes repeats.
+
 ## What it is not
 
+- Not a tracker for handing out code implementation to subagents. There is no number per attempt and approaches
+  are free text, so duplicate blocking (an exact hash of config and `code_ref`) and rerun verification do not
+  work.
 - Not a memory layer for one agent or user (mem0, Letta).
 - Not an orchestrator: it does not run, schedule or route agents. It sits under Claude Code, Codex or your own
   loop.

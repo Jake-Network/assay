@@ -24,7 +24,7 @@ Workers:
 | `update_intent(task_id, spec_patch, lease_seconds=None, exclusive=())`, `my_intents()` | your live intents |
 | `put_blob(data, media_type)`, `get_blob(uri)` | `assay://blob/<sha256>`; bytes |
 | `baseline(partition=None)` | `(value, epsilon)` that the next outcome is compared with |
-| `get(id)`, `search(text, kind, status, tags, limit)`, `status()`, `export()` | reads |
+| `get(id)`, `search(text, kind, status, tags, limit, all_tags)` (`tags`: any of them, `all_tags`: every one), `status()`, `export()` | reads |
 
 Orchestrator / human only (`PermissionDenied` otherwise): `create_tasks([...])`, `cancel_task(id, reason)`,
 `update_settings(patch)` (JSON merge patch, audited in `settings_events`),

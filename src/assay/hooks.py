@@ -12,7 +12,8 @@ Inputs handled:
 - PostToolUse on SubagentHandback: tool_input.message (the report, when handed back through that tool)
 
 Only assay workers are captured: the agent type must be one of ASSAY_HOOK_AGENTS (default `assay-worker`, matched
-with or without a plugin prefix such as `assay:`). A run that handed its report back is captured once, from the
+with or without a plugin prefix such as `assay:`). The plugin's matcher passes every subagent; any other type exits
+before the config is read or anything is spooled. A run that handed its report back is captured once, from the
 handback. Permanent failures (unknown project, schema newer than this assay, data Postgres refuses) move to
 `dead/` in the spool; `assay hook replay` retries them once more and reports what it did.
 """
@@ -132,14 +133,18 @@ def main(event: str) -> ReplaySummary | None:
         spool.mkdir(exist_ok=True, mode=0o700)
         if event == "replay":
             return replay_now(spool)
-        from .config import load
-
         raw = sys.stdin.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise ValueError(f"hook input exceeds {MAX_INPUT} characters")
         data = json.loads(raw or "{}")
         if not isinstance(data, dict):
             raise ValueError("hook input must be a JSON object")
+        if not is_worker(_agent_type(data)):
+            # The plugin hook fires for every subagent; ASSAY_HOOK_AGENTS decides which ones are captured. Leave
+            # before reading config, spooling or importing anything heavier.
+            return None
+        from .config import load
+
         cwd = Path(data.get("cwd") or os.getcwd())
         project = load(cwd).project
         if project:

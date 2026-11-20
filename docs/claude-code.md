@@ -11,7 +11,16 @@ claude plugin install assay@assay
 Claude Code starts `assay mcp` and `assay hook` from its own PATH. If `command -v assay` finds nothing in a new
 terminal, run `uv tool update-shell` once (it adds `~/.local/bin` to your shell profile), open a new terminal and
 restart Claude Code. Without it the MCP server does not connect and the hook fails with exit 127 at every subagent
-stop. `assay doctor` checks the database and project from the same directory.
+stop. Run `assay doctor` in the project directory: it prints the installed build (`assay --version`), the database
+schema revision and the newest one this build knows, and checks what Claude Code needs. Each failing check prints the
+command that fixes it:
+
+| check | fails when |
+|---|---|
+| `assay on PATH` | `assay` is not on the PATH Claude Code inherits (or the `PATH` in its settings `env`) |
+| `claude code plugin` | `assay@assay` is not installed or not enabled (a manual install with `.mcp.json` passes) |
+| `ASSAY_DATA_DIR`, `ASSAY_PROJECT` | the shell value differs from the `env` in `~/.claude/settings.json`, `.claude/settings.json` or `.claude/settings.local.json` |
+| `hook failures` | `hook.log` has failure lines from the last 24 hours (after the last clean `assay hook replay`), or the spool's `dead/` holds reports |
 
 On macOS the embedded database lives in `~/Library/Application Support/assay/pg`. To keep it elsewhere set
 `ASSAY_DATA_DIR`, and set it in Claude Code's `settings.json` `env` too: the CLI, MCP server and hook must see the
@@ -25,7 +34,7 @@ The plugin (`integrations/claude-code/`) contains:
 | `agents/assay-worker.md` | worker subagent: worker tools only (no `assay_decide`, `assay_create_tasks`, `assay_cancel_task`) |
 | `skills/assay/SKILL.md` | rules for any agent using the ledger |
 | `skills/assay-lead/SKILL.md` | the lead loop, `/assay:assay-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` (matcher `^assay:assay-worker$`) and `PostToolUse(SubagentHandback)` -> `assay hook ...` |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `ASSAY_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `assay hook ...` |
 
 For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
 
@@ -66,9 +75,11 @@ the citation cannot establish that the run wrote the record. A `note` claim tagg
 300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge across
 hook events. Reports with a shared opening and different conclusions each get a record.
 
-Other subagents (Explore, general-purpose, ...) are not captured. To capture your own worker types too, set
-`ASSAY_HOOK_AGENTS=assay-worker,implementer` and widen the `SubagentStop` matcher (manual install:
-`"matcher": "assay-worker|implementer"`).
+Other subagents (Explore, general-purpose, ...) are not captured. The hook fires for every subagent and
+`ASSAY_HOOK_AGENTS` (comma separated, default `assay-worker`, with or without a plugin prefix) decides which are
+captured; any other type exits at once without reading the config or touching the database. To capture your own
+worker types too, set `ASSAY_HOOK_AGENTS=assay-worker,implementer` in your shell and in the `env` of Claude Code's
+`settings.json`. This works the same for the plugin and the manual install.
 
 The hook uses the project selected by `.assay/config.toml` or `ASSAY_PROJECT`; when it finds neither (for example a
 worktree without a committed `.assay/`) it writes a "no assay project" line to the log. It writes the report to a
