@@ -149,7 +149,10 @@ def main(event: str) -> ReplaySummary | None:
         cwd = Path(data.get("cwd") or os.getcwd())
         project = load(cwd).project
         if project:
-            _write_spool(spool, {"event": event, "project": project, "data": data, "spooled_at": time.time()})
+            # The capture decision is made here, under the environment Claude Code ran the hook with. A later
+            # `assay hook replay` from a shell with another ASSAY_HOOK_AGENTS must not undo it.
+            _write_spool(spool, {"event": event, "project": project, "data": data, "spooled_at": time.time(),
+                                 "accepted": True})
         else:
             log(f"{event}: not captured: no assay project for {cwd} (no .assay/config.toml there or above, and "
                 f"ASSAY_PROJECT unset; agent_type={data.get('agent_type')!r})")
@@ -454,11 +457,12 @@ def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: dateti
 
 
 def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project: str | None = None,
-            fired_at: float | None = None) -> str:
-    """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'."""
+            fired_at: float | None = None, accepted: bool = False) -> str:
+    """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'. accepted: the hook entry point already decided
+    to capture this event (spool entries record it), so the current ASSAY_HOOK_AGENTS is not consulted again."""
     from .config import load
 
-    if not is_worker(_agent_type(data), require_type=False):
+    if not accepted and not is_worker(_agent_type(data), require_type=False):
         return f"skipped:not-a-worker ({_agent_type(data)})"
     text = extract_text(data).replace("\x00", "").strip()  # Postgres text cannot hold NUL
     if _is_handback(data):
@@ -542,7 +546,7 @@ def process_file(path: Path) -> str:
         return f"dead:invalid spool entry ({e})"
     try:
         result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
-                         fired_at=spooled.get("spooled_at"))
+                         fired_at=spooled.get("spooled_at"), accepted=spooled.get("accepted") is True)
         log(f"{event}: {result}")
         path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001

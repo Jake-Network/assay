@@ -161,3 +161,23 @@ def test_path_check_does_not_run_the_binary_it_finds(env: dict[str, Any], tmp_pa
     _, out, checks = doctor(env)
     assert checks["assay on PATH"]["ok"] is True and checks["assay on PATH"]["detail"] == str(bad / "assay")
     assert not marker.exists()
+
+
+def test_fix_commands_quote_paths_with_spaces(env: dict[str, Any], tmp_path: Path) -> None:
+    import shlex
+
+    data = str(tmp_path / "Library" / "Application Support" / "assay" / "pg")
+    s = json.loads((env["claude"] / "settings.json").read_text())
+    s["env"]["ASSAY_DATA_DIR"] = data
+    (env["claude"] / "settings.json").write_text(json.dumps(s))
+    _, _, checks = doctor(env)
+    fix = checks["ASSAY_DATA_DIR"]["fix"]
+    cmd = fix.split("   (")[0]
+    assert shlex.split(cmd) == ["export", f"ASSAY_DATA_DIR={data}"]
+    # the other direction: a JSON snippet for the settings file
+    s["env"].pop("ASSAY_DATA_DIR")
+    (env["claude"] / "settings.json").write_text(json.dumps(s))
+    env["env"]["ASSAY_DATA_DIR"] = data
+    fix = doctor(env)[2]["ASSAY_DATA_DIR"]["fix"]
+    snippet = fix[fix.index("{"):fix.index("}") + 1]
+    assert json.loads(snippet) == {"ASSAY_DATA_DIR": data}

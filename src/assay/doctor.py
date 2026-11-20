@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import time
 from dataclasses import dataclass
@@ -115,8 +116,8 @@ def check_env(root: Path) -> list[Check]:
             continue
         target = source or settings_files(root)[0]
         detail = f"shell {shell or '(unset)'}, Claude Code {claude or '(unset)'}" + (f" ({source})" if source else "")
-        fix = (f'set "env": {{"{key}": "{shell}"}} in {target}, then restart Claude Code' if shell
-               else f"export {key}={claude}   (add it to your shell profile)")
+        fix = (f'set "env": {json.dumps({key: shell})} in {target}, then restart Claude Code' if shell
+               else f"export {key}={shlex.quote(claude or '')}   (add it to your shell profile)")
         out.append(Check(key, False, detail, fix))
     return out
 

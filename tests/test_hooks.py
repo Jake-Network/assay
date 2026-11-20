@@ -433,3 +433,25 @@ def test_hook_help_is_not_read_as_an_event() -> None:
     script = str(Path(sys.executable).parent / "assay")
     p = subprocess.run([script, "hook", "--help"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     assert p.returncode == 0 and "Usage" in p.stdout
+
+
+def test_replay_keeps_the_capture_decision_made_at_enqueue(repo: Path, worker: Ledger,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """A custom worker accepted under ASSAY_HOOK_AGENTS=implementer is still captured when `assay hook replay` runs
+    from a shell with the default setting."""
+    import io
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setenv("ASSAY_HOOK_AGENTS", "assay-worker,implementer")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "implementer",
+         "last_assistant_message": "Implementer finding."})))
+    hooks.main("subagent-stop")
+    spool = hooks._spool_dir()
+    [entry] = spool.glob("*.json")
+    assert json.loads(entry.read_text())["accepted"] is True
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS")
+    s = hooks.replay_now(spool)
+    assert (s.captured, s.skipped) == (1, 0)
+    assert _notes(worker)[0]["payload"]["text"] == "Implementer finding."
