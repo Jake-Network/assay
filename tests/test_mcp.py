@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,30 @@ def test_errors_are_actionable(project: str) -> None:
     with pytest.raises(Exception, match="only orchestrator or human"):
         call(mcp, "assay_decide", agent="worker-9", target_id="c:00000000", new_status="supported",
              oracle="metric", rationale="x")
+
+
+def test_check_tried_reports_invalidated_seeds(lead: Ledger, worker: Ledger) -> None:
+    cfg = {"init": "hex"}
+    result = worker.record_experiment(cfg, {"score": 2.5}, seed=0)
+    assert result.id is not None
+    lead.decide(result.id, "invalidated", "human", "broken evaluator")
+    out = call(build(lead.project_id, "all"), "assay_check_tried", agent=worker.agent, config=cfg)
+    assert out["tried"] and out["exact"] == [] and out["best_value"] is None
+    assert out["invalidated"][0]["seed"] == 0 and "duplicate" in out["note"]
+
+
+def test_mcp_uses_live_project_lease_default(lead: Ledger, worker: Ledger) -> None:
+    mcp = build(lead.project_id, "all")
+    call(mcp, "assay_status", agent=worker.agent)
+    lead.create_tasks([{"title": "Try hex"}])
+    lead.update_settings({"lease_seconds": 90})
+    claim = call(mcp, "assay_next_task", agent=worker.agent)["task"]
+    remaining = (datetime.fromisoformat(claim["lease_expires_at"]) - datetime.now(UTC)).total_seconds()
+    assert 85 < remaining <= 90
+    lead.update_settings({"lease_seconds": 180})
+    beat = call(mcp, "assay_heartbeat", agent=worker.agent, task_id=claim["id"])
+    remaining = (datetime.fromisoformat(beat["lease_expires_at"]) - datetime.now(UTC)).total_seconds()
+    assert 175 < remaining <= 180
 
 
 def test_internal_errors_carry_a_hint(project: str, monkeypatch: pytest.MonkeyPatch) -> None:

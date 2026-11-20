@@ -14,6 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from .errors import AssayError, ValidationFailed
 from .ids import short
 from .ledger import Ledger, jsonable
+from .models import ExperimentSummary
 
 T = TypeVar("T")
 TOOLSETS = ("worker", "orchestrator", "all")
@@ -92,8 +93,10 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
         return await _run(lambda: srv.lg(agent).brief(task_id, budget_tokens))
 
     @mcp.tool()
-    async def assay_next_task(agent: str, tags: list[str] | None = None, lease_seconds: int = 900) -> dict[str, Any]:
-        """Call when you need work: atomically claims the next open task (lease). Returns {task: null} if none."""
+    async def assay_next_task(agent: str, tags: list[str] | None = None,
+                              lease_seconds: int | None = None) -> dict[str, Any]:
+        """Call when you need work: atomically claims the next open task. Omit lease_seconds to use the
+        project's default. Returns {task: null} if none."""
         t = await _run(lambda: srv.lg(agent).next_task(tags, lease_seconds))
         if t is None:
             return {"task": None}
@@ -110,11 +113,17 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
     @mcp.tool()
     async def assay_check_tried(agent: str, config: dict[str, Any], code_ref: str | None = None) -> dict[str, Any]:
         """Call BEFORE every evaluation: says whether this exact config (and code_ref) was already run, how many
-        seeds replicate it and its best value. If tried, choose a different config."""
+        seeds replicate it and its best valid value. If tried, choose a different config or see the note about
+        invalidated runs whose seeds are still reserved."""
         t = await _run(lambda: srv.lg(agent).check_tried(config, code_ref))
-        return {"tried": bool(t.exact), "replicates": t.replicates, "best_value": t.best_value,
-                "exact": [{"id": short("experiment", e.id), "author": e.author, "seed": e.seed, "outcome": e.outcome,
-                           "value": e.primary_value, "notes": e.notes} for e in t.exact[:5]]}
+
+        def summary(e: ExperimentSummary) -> dict[str, Any]:
+            return {"id": short("experiment", e.id), "author": e.author, "seed": e.seed, "outcome": e.outcome,
+                    "value": e.primary_value, "notes": e.notes}
+
+        return {"tried": bool(t.exact or t.invalidated), "replicates": t.replicates, "best_value": t.best_value,
+                "exact": [summary(e) for e in t.exact[:5]], "invalidated": [summary(e) for e in t.invalidated[:5]],
+                "note": t.note}
 
     @mcp.tool()
     async def assay_record_experiment(agent: str, config: dict[str, Any], metrics: dict[str, Any],

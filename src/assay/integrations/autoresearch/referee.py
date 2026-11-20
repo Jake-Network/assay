@@ -121,20 +121,24 @@ class Tick:
         for part in parts:
             tasks = self.q("SELECT * FROM assay.tasks WHERE project_id=%s AND 'calibration'=ANY(tags)"
                            " AND spec->>'partition'=%s ORDER BY created_at", (self.pid, part))
-            if not tasks:  # T1
-                if part in cal:
-                    continue  # calibrated by hand (settings.partitions)
-                first = self.q(
-                    "SELECT * FROM assay.experiments_valid WHERE project_id=%s AND config->>%s=%s AND run_status='ok'"
-                    " AND primary_value IS NOT NULL AND coalesce(seed,0)=0 ORDER BY created_at, id LIMIT 1",
-                    (self.pid, self.pk, part))
-                if first and self.blob_uri(first[0]):
-                    self.make_tasks(CALIBRATION, first[0], [1, 2], int(setting(self.lg, "calibration_priority")))
-                continue
-            if any(t["status"] not in TERMINAL_TASK for t in tasks):
+            if not tasks:
+                if part not in cal:  # T1
+                    self.start_calibration(part, 1)
                 continue
             rnd = max(int(t["spec"].get("round", 1)) for t in tasks)
-            origin = UUID(tasks[0]["spec"]["origin"])
+            latest = [t for t in tasks if int(t["spec"].get("round", 1)) == rnd]
+            origin = UUID(latest[0]["spec"]["origin"])
+            valid_origin = self.q("SELECT * FROM assay.experiments_valid WHERE project_id=%s AND id=%s",
+                                  (self.pid, origin))
+            if not valid_origin:
+                if self.verified_best(part) is None:
+                    for task in latest:
+                        if task["status"] not in TERMINAL_TASK:
+                            self.lg.cancel_task(task["id"], "calibration origin was invalidated")
+                    self.start_calibration(part, rnd + 1)
+                continue
+            if any(t["status"] not in TERMINAL_TASK for t in latest):
+                continue
             entry_round = int((cal.get(part) or {}).get("round", 1)) if part in cal else 0
             if entry_round < rnd:
                 self.calibration_entry(part, origin, rnd)  # T2
@@ -142,19 +146,31 @@ class Tick:
             # A2: a calibration that did not verify leaves the partition without a baseline, and no candidate
             # can be judged against nothing. Run the baseline code again with new seeds (bounded).
             judged = self.result_claim(origin, rnd)
-            if judged is None or judged["status"] not in JUDGED or judged["status"] == "verified":
+            if judged is None or judged["status"] not in JUDGED:
                 continue
-            if self.verified_best(part) is not None or rnd >= int(setting(self.lg, "calibration_rounds")):
+            origin_rounds = {int(t["spec"].get("round", 1)) for t in tasks if t["spec"]["origin"] == str(origin)}
+            limit = int(setting(self.lg, "calibration_rounds"))
+            if self.verified_best(part) is not None or len(origin_rounds) >= limit:
                 continue
-            exp = self.q("SELECT * FROM assay.experiments_valid WHERE id=%s", (origin,))
-            if not exp:
-                continue
-            used = self.q("SELECT coalesce(max(seed), 0) AS m FROM assay.experiments WHERE project_id=%s"
-                          " AND dedup_key=%s", (self.pid, exp[0]["dedup_key"]))[0]["m"]
-            used = max(int(used), max(int(t["spec"].get("seed", 0)) for t in tasks))
-            self.make_tasks(CALIBRATION, exp[0], [used + 1, used + 2], int(setting(self.lg, "calibration_priority")),
-                            rnd=rnd + 1)
+            self.schedule_calibration(valid_origin[0], rnd + 1)
         self.lg.refresh()
+
+    def start_calibration(self, part: str, rnd: int) -> None:
+        """Choose a valid original run for a partition with no remaining baseline."""
+        candidates = self.q(
+            "SELECT * FROM assay.experiments_valid WHERE project_id=%s AND config->>%s=%s AND run_status='ok'"
+            " AND primary_value IS NOT NULL AND coalesce(seed,0)=0 ORDER BY created_at, id",
+            (self.pid, self.pk, part))
+        exp = next((r for r in candidates if self.blob_uri(r)), None)
+        if exp is not None:
+            self.schedule_calibration(exp, rnd)
+
+    def schedule_calibration(self, exp: dict[str, Any], rnd: int) -> None:
+        used = self.q("SELECT coalesce(max(seed), 0) AS m FROM assay.experiments WHERE project_id=%s"
+                      " AND dedup_key=%s", (self.pid, exp["dedup_key"]))[0]["m"]
+        reserved = (int(t["spec"].get("seed", 0)) for t in self.tasks_for(exp["id"]))
+        seed = max(int(used), max(reserved, default=0)) + 1
+        self.make_tasks(CALIBRATION, exp, [seed, seed + 1], int(setting(self.lg, "calibration_priority")), rnd=rnd)
 
     def calibration_entry(self, part: str, origin: UUID, rnd: int) -> None:
         """T2: noise estimate from the origin and the runs of calibration round `rnd`."""
@@ -191,8 +207,6 @@ class Tick:
         cands = self.q(
             "SELECT e.* FROM assay.experiments_valid e WHERE e.project_id=%s AND e.outcome='improved'"
             " AND e.run_status='ok' AND coalesce(e.seed,0)=0 AND e.config->>%s IS NOT NULL"
-            # A1: a run its author discarded for not beating its own parent is not queued for replication
-            " AND coalesce((e.trace_ref->>'beats_parent')::boolean, true)"
             " AND NOT EXISTS (SELECT 1 FROM assay.tasks t WHERE t.project_id=e.project_id"
             "                 AND t.spec->>'origin' = e.id::text)"
             " AND NOT EXISTS (SELECT 1 FROM assay.links l JOIN assay.claims c ON c.id=l.dst_id AND c.kind='result'"
@@ -274,6 +288,8 @@ class Tick:
 
     def verdict(self, origin: UUID, tasks: list[dict[str, Any]], rnd: int = 1) -> None:
         runs = self.runs(origin, tasks)
+        if not runs or runs[0]["id"] != origin:
+            return  # evidence for an invalidated origin cannot establish its result
         exp = runs[0]
         part = exp["config"][self.pk]
         is_cal = any(CALIBRATION in t["tags"] for t in tasks)

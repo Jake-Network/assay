@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import subprocess
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +30,13 @@ def load_runs(out: Path, arm: str) -> list[dict[str, Any]]:
         if ev is None:  # one line per finished run (older shim)
             runs[f"line-{i}"] = {**r, "finished": True, "killed": False}
         elif ev == "start":
+            if r["id"] in runs:
+                raise ValueError(f"duplicate benchmark start receipt {r['id']} in {f}")
             runs[r["id"]] = {**r, "finished": False, "killed": False, "exit": None, "end": None, "val_bpb": None}
-        elif ev == "end" and r["id"] in runs:
+        elif ev == "end" and r["id"] in runs and not runs[r["id"]]["finished"]:
             runs[r["id"]].update({k: v for k, v in r.items() if k not in ("event", "id")}, finished=True)
+        else:
+            raise ValueError(f"unexpected benchmark receipt at {f}:{i + 1}")
     return list(runs.values())
 
 
@@ -65,11 +69,11 @@ def duplicates(runs: list[dict[str, Any]], baseline_hash: str | None) -> dict[st
 
 
 def unrecorded(runs: list[dict[str, Any]], ledger_rows: list[dict[str, Any]]) -> dict[str, int]:
-    """H1 for arm B: shim runs started by assay ar with no ledger experiment for that code and replication
-    number, and runs started outside assay ar (the agent called uv run train.py itself)."""
-    started = Counter((r["code_hash"], replication_number(r)) for r in runs if r.get("assay_run"))
-    recorded = Counter((e["code_ref"], int(e["seed"] or 0)) for e in ledger_rows)
-    return {"not_recorded": sum(max(0, n - recorded[k]) for k, n in started.items()),
+    """Reconcile the ledger and the independent collector in both directions for arm B."""
+    started = Counter((r.get("assay_run_id"), r.get("agent"), r["code_hash"], replication_number(r))
+                      for r in runs if r.get("assay_run"))
+    recorded = Counter((e.get("ar_run_id"), e.get("author"), e["code_ref"], int(e["seed"] or 0)) for e in ledger_rows)
+    return {"not_recorded": (started - recorded).total(), "ledger_only": (recorded - started).total(),
             "outside_assay": sum(1 for r in runs if not r.get("assay_run"))}
 
 
@@ -79,13 +83,12 @@ def code_at(tree: Path, commit: str) -> bytes | None:
 
 
 def a_keeps(out: Path, runs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """Arm A's "keep" rows from every branch's results.tsv. The value is what the shim saw that code print
-    (first successful run), falling back to the agent-written results.tsv value."""
+    """Attribute each keep to one successful training receipt from that worker's checkout."""
     runs = load_runs(out, "A") if runs is None else runs
-    shim_value: dict[str, float] = {}
+    by_code: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for r in runs:
         if is_ok(r):
-            shim_value.setdefault(r["code_hash"], float(r["val_bpb"]))
+            by_code[(r.get("agent"), r["code_hash"])].append(r)
     rows = []
     for wt in sorted((out / "A").glob("gpu*")):
         f = wt / "results.tsv"
@@ -98,25 +101,32 @@ def a_keeps(out: Path, runs: list[dict[str, Any]] | None = None) -> list[dict[st
                 src = code_at(wt, r["commit"])
                 h = code_hash(src) if src is not None else None
                 tsv = float(r["val_bpb"])
+                candidates = by_code[(wt.name, h)] if h is not None else []
+                matches = [j for j, run in enumerate(candidates) if abs(float(run["val_bpb"]) - tsv) <= 0.00000051]
+                exact_commit = [j for j in matches if candidates[j].get("commit") == r["commit"]]
+                chosen = exact_commit or matches
+                run = candidates.pop(chosen[0]) if chosen else None
                 rows.append({"tree": wt, "commit": r["commit"], "code_hash": h, "tsv_value": tsv,
-                             "val_bpb": shim_value.get(h or "", tsv), "source": "shim" if h in shim_value else
-                             "results.tsv", "description": r.get("description", ""), "baseline": i == 0})
+                             "val_bpb": run["val_bpb"] if run else None, "source": "shim" if run else "unmatched",
+                             "end": run["end"] if run else None, "description": r.get("description", ""),
+                             "baseline": i == 0})
     return rows
 
 
 def a_best(keeps: list[dict[str, Any]]) -> dict[str, Any] | None:
     """B3: arm A's final best, one definition for post_replicate and report: the lowest shim-observed value
     among keeps."""
-    return min(keeps, key=lambda r: r["val_bpb"]) if keeps else None
+    return min((k for k in keeps if k["val_bpb"] is not None), key=lambda r: r["val_bpb"], default=None)
 
 
 def b_keeps(lg: Any, baseline_hash: str | None) -> list[dict[str, Any]]:
-    """Arm B's KEEP verdicts (first runs better than the verified best and than their parent), the
-    counterpart of A's keeps for metric 5. The baseline code is left out as in arm A."""
+    """Arm B's local KEEP verdicts, the counterpart of A's keeps for metric 5."""
     rows = lg.sql_internal(
         "SELECT id, code_ref, primary_value, artifacts FROM assay.experiments_valid WHERE project_id=%s"
-        " AND run_status='ok' AND coalesce(seed,0)=0 AND outcome='improved'"
-        " AND coalesce(trace_ref->>'beats_parent','true') <> 'false' ORDER BY created_at, id", (lg.project_id,))
+        " AND run_status='ok' AND coalesce(seed,0)=0 AND"
+        " COALESCE(trace_ref->>'kept', (outcome='improved' AND"
+        " coalesce(trace_ref->>'beats_parent','true') <> 'false')::text)='true' ORDER BY created_at, id",
+        (lg.project_id,))
     out = []
     for r in rows:
         if r["code_ref"] == baseline_hash:

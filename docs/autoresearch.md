@@ -67,8 +67,12 @@ changes `TIME_BUDGET`, `EVAL_TOKENS`, `MAX_SEQ_LEN` or the evaluation gets a dif
 - Code identity: sha256 of a canonical dump of `ast.parse(train.py)` (node types and non-empty fields, no
   positions), so comments, blank lines and quote style do not matter, and the hash is the same on Python
   3.11 to 3.13. `ast.unparse` is not used: its output differs between versions (3.12 writes f-strings with
-  other quotes), which split dedup between machines. Ledgers written by assay 0.1 used `ast.unparse`; code
-  recorded by 0.1 gets a new hash and may run once more. A file that does not parse is hashed raw (`raw-…`).
+  other quotes), which split dedup between machines. The CLI checks both hash formats when looking for prior
+  runs. If the legacy harness hash matches an existing partition, the checkout keeps that partition and
+  its verified baseline, and the worker can claim its existing replication jobs. The ledger remembers the
+  detected partition alias. If the old Python version rendered your harness differently, run
+  `ASSAY_AGENT=gpu-0 python -m assay ar status` once with the upgraded package installed in that original
+  interpreter to discover the alias. A file that does not parse is hashed raw (`raw-…`).
 - Knobs: every module-level `UPPER_CASE = value` in `train.py`, evaluated safely (`2**19` → 524288; anything
   else is kept as an expression). `H100_BF16_PEAK_FLOPS` is ignored in knob changes (`knob_ignore`).
 - Parent: the committed `train.py` one commit back (or `HEAD` when you run uncommitted changes). The run is
@@ -84,7 +88,7 @@ exit codes 0 ok, 1 user error, 2 refused (duplicate or conflict), 3 nothing to d
 | `assay ar init [--project ID]` | creates the project (pack ml-research, metric val_bpb min), writes `program.assay.md`, `.assay/config.toml` and `.gitignore` entries, prints the partition and the start prompt |
 | `assay ar brief` | ~1,500 tokens: partition and noise, verified best, candidates, other agents' work in progress, knob history, code changes, observations and ideas |
 | `assay ar claim "<idea>" [--knob K=V ...] [--force]` | announces the idea (15 min lease). Refused if another live intent declares the same knob changes; a very similar description (word Jaccard ≥ 0.8) needs `--force`; earlier runs of the same change are shown |
-| `assay ar run -m "<idea>" [--cmd "uv run train.py"] [--timeout 600]` | refuses code that already ran or is running in the partition; runs exactly the bytes it hashed (a temporary copy of the checkout, so editing `train.py` meanwhile changes nothing) with output in `run.log`, kills the process group on timeout or when `assay ar run` itself is interrupted, records the run (failures and interruptions too) with `train.py` and the command stored in the ledger, appends to `results.tsv`, asks the referee. Prints `KEEP (…)` when the run beats its parent (your last kept code) and is a candidate, `DISCARD (…)`, `INVALID (…)` (over the time budget) or `CRASH (…)` |
+| `assay ar run -m "<idea>" [--cmd "uv run train.py"] [--timeout 600]` | refuses code that already ran or is running in the partition; runs exactly the bytes it hashed in a temporary copy of the checkout with output in `run.log`, kills the process group on timeout or interruption, records the result and code, appends to `results.tsv`, and asks the referee. Prints `KEEP (…)` on local improvement or the first successful run without a measured parent, `DISCARD (…)`, `INVALID (…)` (over the time budget), or `CRASH (…)`. The referee selects shared candidates separately. |
 | `assay ar replicate --auto [--max 1]` | takes a replication or calibration task meant for you and runs that code in a temporary directory: your `train.py` and git are untouched. The command is the one the original run used when the task carries it, else `--cmd`. Exit 3 when there is none |
 | `assay ar sync [--trust verified\|candidate]` | adopts the partition's verified best when it beats your code or your code builds on a refuted or inconclusive candidate; commits `train.py` |
 | `assay ar note "<text>"` / `assay ar idea "<text>"` | an observation (evidence: your last run) / a hypothesis for later |
@@ -177,8 +181,8 @@ before write). assay is self-hosted, compares exact normalised code and declared
 embeddings, groups by GPU model and evaluation harness, and only promotes a result after other agents
 replicate it.
 
-**Does an agent wait for verification?** No. A KEEP leaves the agent on its own candidate. `sync` moves it to
-the verified best later if the candidate is refuted or a better result is verified.
+**Does an agent wait for verification?** A KEEP lets the agent build on its local result immediately. `sync`
+moves it to the verified best later if the candidate is refuted or a better result is verified.
 
 **Is KEEP the same as upstream's keep?** Yes: KEEP means the run beat its parent (the code you last kept,
 mean of its runs) by epsilon, as upstream compares with the previous keep. Separately, a first run that beats

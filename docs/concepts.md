@@ -31,12 +31,12 @@ proposed ──► supported ──► verified ──► superseded / retracted
 `verified` requires an oracle that is not an LLM (`metric`, `rerun`, `pytest`, `lean`, `human`) and at least one
 evidence id. The `rerun` oracle compares successful runs of the original configuration and code. It needs
 at least three distinct seeds and a rerun by a different agent. Projects can configure the minimum number of
-seeds and authors (`rerun_min_seeds`, `rerun_min_authors`). It also compares the values: the mean of all runs
-and the mean of the reruns alone must each beat the baseline by epsilon. The baseline is the claim's numeric
-`payload.baseline` when present, else the best earlier result of another config in the same partition; with
-neither, the rerun oracle refuses. A claim that only states a reproduced value (no improvement) sets
-`payload.measurement: true` and skips the comparison. The numbers used are stored in the decision's
-`oracle_detail.rerun_check`. `llm_judge` can support a claim.
+seeds and authors (`rerun_min_seeds`, `rerun_min_authors`). For an improvement claim, both the mean of all
+evidence and the mean of runs by agents other than the originating author must beat the baseline by epsilon.
+The baseline comes from numeric `payload.baseline` or the best earlier result of another config in the same
+partition. A claim that states a reproduced value sets `payload.measurement: true` and supplies a numeric
+`payload.mean` that matches the evidence mean. Result claims also have to match the evidence mean.
+Decisions store the values checked in `oracle_detail.rerun_check`. `llm_judge` can support a claim.
 
 An experiment's only status change is `invalidated` (an evaluator bug or exploit was found). Invalidated
 experiments are excluded from best, outcome calculation, "already tried", and recent brief activity. Claims

@@ -216,8 +216,7 @@ def task_claim(id: str,
 
 @task_app.command("heartbeat")
 def task_heartbeat(id: str, lease: Annotated[int | None, typer.Option()] = None) -> None:
-    lg = ledger()
-    exp = lg.heartbeat(id, lease if lease is not None else lg.lease_default())
+    exp = ledger().heartbeat(id, lease)
     emit({"ok": True, "lease_expires_at": exp}, f"lease until {exp:%H:%M:%S}")
 
 
@@ -394,12 +393,13 @@ def export(fmt: Annotated[str, typer.Option("--format")] = "jsonl") -> None:
 def serve(host: Annotated[str, typer.Option()] = "127.0.0.1",
           port: Annotated[int, typer.Option()] = 7466,
           toolset: Annotated[str, typer.Option()] = "all",
-          token: Annotated[str | None, typer.Option(help="required for a wildcard bind (or ASSAY_SERVE_TOKEN)")]
+          token: Annotated[str | None, typer.Option(help="required for non-loopback binds (or ASSAY_SERVE_TOKEN)")]
           = None) -> None:
     """HTTP: streamable MCP at /mcp and the read-only viewer at /."""
+    from .web.app import requires_serve_token
     from .web.app import serve as run
 
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if requires_serve_token(host):
         print(f"WARNING: binding {host}. Requests need the serve token (Bearer header, cookie or ?token=); anyone "
               "holding it can read and write the ledger. Use TLS or a private network.", file=sys.stderr)
     run(host=host, port=port, toolset=toolset, project=STATE["project"], token=token)

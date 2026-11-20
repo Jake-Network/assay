@@ -16,20 +16,25 @@ import statistics
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from psycopg.types.json import Jsonb
+
 from ...dedup import canonical_json
 from ...errors import AssayError, Conflict, LeaseLost, NotFound
 from ...ids import short
 from ...ledger import Ledger
+from ...models import RecordResult
 from . import hw as hwmod
 from . import referee
-from .checkout import Checkout
-from .code import DEFAULT_KNOB_IGNORE, changed_knobs, code_hash, extract_knobs, knob_text, short_hash
+from .checkout import Checkout, partition_keys
+from .code import DEFAULT_KNOB_IGNORE, changed_knobs, code_hash, code_hashes, extract_knobs, knob_text, short_hash
 from .runner import (
     Interrupted,
     RunResult,
@@ -68,6 +73,7 @@ class Ctx:
     co: Checkout
     hw: str
     partition: str
+    partitions: tuple[str, ...]
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -101,9 +107,34 @@ def open_ctx(project: str | None = None, agent: str | None = None, hw: str | Non
         raise AssayError(f"project {lg.project_id} uses pack {lg.project.pack!r}; assay ar needs an ml-research "
                          "project (run assay ar init)")
     hw_class = hwmod.detect(hw)
-    ctx = Ctx(lg, co, hw_class, co.partition(hw_class))
-    flush_pending(ctx)
+    parts = co.partition_keys(hw_class)
+    ordered = _existing_partition_first(lg, parts)
+    ctx = Ctx(lg, co, hw_class, ordered[0], tuple(dict.fromkeys((parts[0], *ordered))))
+    if flush_pending(ctx):
+        safe_tick(lg)
     return ctx
+
+
+def _existing_partition_first(lg: Ledger, parts: tuple[str, ...]) -> tuple[str, ...]:
+    """Preserve the original partition's history and baseline during an upgrade."""
+    primary, *legacy = parts
+    saved = (lg.project.settings.get("ar_partition_aliases") or {}).get(primary, {})
+    if not legacy:
+        return (*sorted(saved), primary) if saved else parts
+    seen = lg.sql_internal(
+        "SELECT config->>'partition' AS part FROM assay.experiments WHERE project_id=%(p)s"
+        " AND config->>'partition'=ANY(%(parts)s) UNION"
+        " SELECT spec->>'partition' AS part FROM assay.tasks WHERE project_id=%(p)s"
+        " AND spec->>'partition'=ANY(%(parts)s)",
+        {"p": lg.project_id, "parts": list(legacy)})
+    existing = {r["part"] for r in seen} | set(lg.project.settings.get("partitions") or {})
+    discovered = {part: True for part in legacy if part in existing and part not in saved}
+    if discovered:
+        # Another interpreter can reuse the alias once a worker has identified the old harness hash.
+        referee.referee_ledger(lg).update_settings({"ar_partition_aliases": {primary: discovered}})
+        lg.refresh()
+        saved = lg.project.settings["ar_partition_aliases"][primary]
+    return tuple(dict.fromkeys((*sorted(saved), *parts)))
 
 
 def better(lg: Ledger, a: float, b: float, eps: float = 0.0) -> bool:
@@ -134,14 +165,16 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
         wrote_program = True
     gi = co.root / ".gitignore"
     lines = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
-    add = [x for x in (".assay/ar_state.json", ".assay/ar_pending.jsonl", "run.log", "ar_run.out") if x not in lines]
+    add = [x for x in (".assay/ar_state.json", ".assay/ar_pending.jsonl", ".assay/ar_pending.jsonl.*",
+                       "run.log", "ar_run.out") if x not in lines]
     if add:
         with open(gi, "a", encoding="utf-8") as f:
             if lines and lines[-1].strip():
                 f.write("\n")
             f.write("\n".join(add) + "\n")
     hw_class = hwmod.detect(hw)
-    return {"project": p.id, "created": created, "partition": co.partition(hw_class), "hw": hw_class,
+    part = _existing_partition_first(lg, co.partition_keys(hw_class))[0]
+    return {"project": p.id, "created": created, "partition": part, "hw": hw_class,
             "config": str(cfg), "program": str(program), "wrote_program": wrote_program,
             "program_differs": not wrote_program and program.read_text(encoding="utf-8") != text,
             "agent_suggestion": os.environ.get("ASSAY_AGENT") or default_agent_name(),
@@ -150,17 +183,41 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
 
 # ---------------------------------------------------------------------------------------------- pending
 
-PENDING_STALE_S = 600
+@contextmanager
+def _queue_lock(p: Path, blocking: bool = True) -> Iterator[bool]:
+    """Lock a stable file, independent of the journal being rotated."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a+b") as f:
+        if sys.platform == "win32":
+            import msvcrt
+
+            f.seek(0)
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+            except OSError:
+                if blocking:
+                    raise
+                yield False
+                return
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            except BlockingIOError:
+                if blocking:
+                    raise
+                yield False
+                return
+        yield True  # closing the file releases the lock
 
 
 def _append_line(p: Path, line: str) -> None:
-    """One os.write on an O_APPEND descriptor: concurrent writers never interleave or lose lines (A5)."""
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(fd, (line.rstrip("\n") + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
+    with _queue_lock(p.with_name(p.name + ".write.lock")):
+        with p.open("ab") as f:
+            f.write((line.rstrip("\n") + "\n").encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
 
 
 def _pending_append(ctx: Ctx, record: dict[str, Any]) -> None:
@@ -168,20 +225,50 @@ def _pending_append(ctx: Ctx, record: dict[str, Any]) -> None:
 
 
 def _take_pending(p: Path) -> list[Path]:
-    """Atomically move the queue (and batches left by a flusher that died) to files only this process reads.
-    New runs keep appending to a fresh queue file meanwhile."""
-    taken: list[Path] = []
-    candidates = [p] + [f for f in p.parent.glob(p.name + ".*.flushing")
-                        if time.time() - f.stat().st_mtime > PENDING_STALE_S]
-    for src in candidates:
-        dst = p.with_name(f"{p.name}.{os.getpid()}-{uuid4().hex[:8]}.flushing")
+    """Rotate while no producer holds an open descriptor on the active queue."""
+    with _queue_lock(p.with_name(p.name + ".write.lock")):
+        dst = p.with_name(f"{p.name}.{uuid4().hex}.flushing")
         try:
-            os.replace(src, dst)
+            os.replace(p, dst)
         except FileNotFoundError:
-            continue  # another process took it
-        os.utime(dst)
-        taken.append(dst)
-    return taken
+            return []
+        return [dst]
+
+
+def _persist_run(lg: Ledger, item: dict[str, Any], *, replay: bool = False) -> RecordResult:
+    record = item["record"]
+    stored = []
+    if replay:
+        # The connection may have failed after committing, or after recording but before linking/completing.
+        stored = lg.sql_internal(
+            "SELECT id, outcome, dedup_key, primary_value FROM assay.experiments WHERE project_id=%s"
+            " AND task_id IS NOT DISTINCT FROM %s::uuid AND trace_ref->>'ar_run_id'=%s",
+            (lg.project_id, record.get("task_id"), record["trace_ref"]["ar_run_id"]))
+    if stored:
+        r = RecordResult(**stored[0], duplicate_of=None, is_new_best=stored[0]["outcome"] == "improved")
+    else:
+        r = lg.record_experiment(**record)
+    if r.id is not None and item.get("parent_id"):
+        lg.link(r.id, "derived_from", item["parent_id"])
+    if c := item.get("complete"):
+        try:
+            lg.complete_task(c["task"], "done", str(c.get("summary") or "")[:1000])
+        except LeaseLost:
+            pass  # a later claimant or a previous replay already ended this lease
+    return r
+
+
+def _save_or_queue(ctx: Ctx, record: dict[str, Any], summary: str,
+                   parent_id: UUID | None = None) -> RecordResult | None:
+    lg = ctx.lg
+    item = {"agent": lg.agent, "project": lg.project_id, "record": record, "parent_id": parent_id,
+            "complete": {"task": record["task_id"], "summary": summary}}
+    try:
+        return _persist_run(lg, item)
+    except Exception as e:  # noqa: BLE001
+        _pending_append(ctx, item)
+        print(f"warning: could not finish saving the run ({e}); queued in {ctx.co.pending_path()}", file=sys.stderr)
+        return None
 
 
 def flush_pending(ctx: Ctx) -> int:
@@ -190,42 +277,81 @@ def flush_pending(ctx: Ctx) -> int:
     p = ctx.co.pending_path()
     if not p.parent.exists():
         return 0
-    done = 0
-    for batch in _take_pending(p):
-        for line in batch.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
+    with _queue_lock(p.with_name(p.name + ".flush.lock"), blocking=False) as locked:
+        if not locked:
+            return 0
+        done = 0
+        # Any existing batch belongs to a process that no longer holds the lock.
+        batches = sorted(p.parent.glob(p.name + ".*.flushing")) + _take_pending(p)
+        for batch in batches:
+            malformed = False
             try:
-                item = json.loads(line)
-                lg = ctx.lg if item.get("agent") in (None, ctx.lg.agent) else ctx.lg.as_agent(item["agent"])
-                r = lg.record_experiment(**item["record"])
-                if r.id is not None and item.get("parent_id"):
-                    lg.link(r.id, "derived_from", item["parent_id"])
-            except Exception:  # noqa: BLE001 - keep it for the next command
-                _append_line(p, line)
+                lines = batch.read_bytes().split(b"\n")
+            except OSError as e:
+                print(f"warning: could not read pending run batch {batch}: {e}", file=sys.stderr)
                 continue
-            done += 1
-            if c := item.get("complete"):
+            for line in lines:
+                if not line.strip():
+                    continue
                 try:
-                    lg.complete_task(c["task"], "done", str(c.get("summary") or "")[:1000])
-                except Exception:  # noqa: BLE001 - lease lost or already ended
-                    pass
-        batch.unlink()
-    return done
+                    item = json.loads(line)
+                except ValueError:
+                    malformed = True
+                    continue
+                if not isinstance(item, dict) or not isinstance(item.get("record"), dict):
+                    malformed = True
+                    continue
+                if item.get("project", ctx.lg.project_id) != ctx.lg.project_id:
+                    _append_line(p, line.decode())
+                    continue
+                try:
+                    lg = ctx.lg if item.get("agent") in (None, ctx.lg.agent) else ctx.lg.as_agent(item["agent"])
+                    record = item["record"]
+                    trace = record.get("trace_ref") or {}
+                    trace.setdefault("ar_run_id", hashlib.sha256(line).hexdigest())
+                    record["trace_ref"] = trace
+                    _persist_run(lg, item, replay=True)
+                except Exception:  # noqa: BLE001 - keep it for the next command
+                    _append_line(p, line.decode())
+                    continue
+                done += 1
+            if malformed:
+                invalid = batch.with_suffix(".invalid")
+                batch.replace(invalid)
+                print(f"warning: saved malformed pending run data in {invalid}", file=sys.stderr)
+            else:
+                batch.unlink()
+        return done
 
 
 # ---------------------------------------------------------------------------------------------- reads
 
-def experiments_for_code(ctx: Ctx, code_ref: str, partition: str | None = None) -> list[dict[str, Any]]:
+def experiments_for_code(ctx: Ctx, refs: tuple[str, ...], partition: str | None = None) -> list[dict[str, Any]]:
     return ctx.lg.sql_internal(
-        "SELECT * FROM assay.experiments_valid WHERE project_id=%s AND code_ref=%s AND config->>'partition'=%s"
-        " ORDER BY coalesce(seed,0), created_at, id", (ctx.lg.project_id, code_ref, partition or ctx.partition))
+        "SELECT * FROM assay.experiments_valid WHERE project_id=%s AND code_ref=ANY(%s)"
+        " AND config->>'partition'=ANY(%s)"
+        " ORDER BY coalesce(seed,0), created_at, id",
+        (ctx.lg.project_id, list(refs), [partition] if partition else list(ctx.partitions)))
+
+
+def _finished_runs(ctx: Ctx, src: bytes, refs: tuple[str, ...]) -> list[dict[str, Any]]:
+    # The stored blob URI also matches identical bytes from a host whose old ast.unparse renders them differently.
+    blob = f"assay://blob/{hashlib.sha256(src).hexdigest()}"
+    return ctx.lg.sql_internal(
+        "SELECT id, config, code_ref, author, run_status, outcome, primary_value,"
+        " v.id IS NOT NULL AS valid FROM assay.experiments e LEFT JOIN"
+        " (SELECT id FROM assay.experiments_valid WHERE project_id=%(p)s) v USING (id)"
+        " WHERE e.project_id=%(p)s AND e.config->>'partition'=ANY(%(parts)s)"
+        " AND (e.code_ref=ANY(%(refs)s) OR e.artifacts @> %(blob)s)"
+        " ORDER BY (e.run_status='ok') DESC, coalesce(e.seed,0), e.created_at, e.id",
+        {"p": ctx.lg.project_id, "parts": list(ctx.partitions), "refs": list(refs), "blob": Jsonb([{"uri": blob}])})
 
 
 def partition_best(ctx: Ctx, statuses: tuple[str, ...] = ("verified",)) -> dict[str, Any] | None:
     rows = ctx.lg.sql_internal(
-        "SELECT * FROM assay.v_partition_best WHERE project_id=%s AND partition=%s AND rank=1 AND status = ANY(%s)",
-        (ctx.lg.project_id, ctx.partition, list(statuses)))
+        "SELECT * FROM assay.v_partition_best WHERE project_id=%s AND partition=ANY(%s)"
+        " AND rank=1 AND status = ANY(%s)",
+        (ctx.lg.project_id, list(ctx.partitions), list(statuses)))
     rows = [r for r in rows if r["mean"] is not None]
     if not rows:
         return None
@@ -235,9 +361,9 @@ def partition_best(ctx: Ctx, statuses: tuple[str, ...] = ("verified",)) -> dict[
 
 def inflight(ctx: Ctx, others_only: bool = True) -> list[dict[str, Any]]:
     return ctx.lg.sql_internal(
-        "SELECT * FROM assay.v_inflight WHERE project_id=%s AND is_intent AND partition=%s"
+        "SELECT * FROM assay.v_inflight WHERE project_id=%s AND is_intent AND partition=ANY(%s)"
         " AND (NOT %s OR agent <> %s) ORDER BY created_at",
-        (ctx.lg.project_id, ctx.partition, others_only, ctx.lg.agent))
+        (ctx.lg.project_id, list(ctx.partitions), others_only, ctx.lg.agent))
 
 
 def blob_of(exp: dict[str, Any]) -> str | None:
@@ -289,7 +415,7 @@ def claim(ctx: Ctx, description: str, knobs: dict[str, Any], force: bool = False
                                 f"{d['outcome']}{val} (its parent may differ from yours)")
                 if len(warnings) >= 6:
                     break
-    previous = ctx.lg.my_intents()
+    previous = [t for t in ctx.lg.my_intents() if not t.spec.get("code_key")]
     spec = {"partition": ctx.partition, "knobs": knobs, "knob_key": knob_key, "description": description}
     try:
         t = ctx.lg.create_intent(description, spec, lease_seconds=INTENT_LEASE, exclusive=["knob_key"])
@@ -313,59 +439,65 @@ def run(ctx: Ctx, description: str, cmd: str = DEFAULT_CMD, timeout: float = DEF
     description = description.strip() or "(no description)"
     lg, co = ctx.lg, ctx.co
     src = co.train_bytes()  # these bytes are hashed, stored and run (A8)
-    code_ref = code_hash(src)
+    refs = code_hashes(src)
+    code_ref = refs[0]
     knobs = extract_knobs(src)
     settings = lg.refresh().settings
     ignore = settings.get("knob_ignore", DEFAULT_KNOB_IGNORE)
-    parent_hash, parent_knobs, how = co.parent(src)
-    if parent_hash == code_ref:  # nothing changed relative to the parent (e.g. a baseline re-run)
-        parent_hash, parent_knobs = None, None
+    parent_refs, parent_knobs, how = co.parent(src)
+    if set(refs).intersection(parent_refs):  # nothing changed relative to the parent (e.g. a baseline re-run)
+        parent_refs, parent_knobs = (), None
+    parent_hash = parent_refs[0] if parent_refs else None
     config = {"partition": ctx.partition, "knobs": knobs,
               "changed": changed_knobs(parent_knobs, knobs, ignore) if parent_knobs is not None else {},
               "parent": parent_hash, "description": description[:500]}
     # ② finished duplicate
-    tried = lg.check_tried(config, code_ref)
-    ok_runs = [e for e in tried.exact if e.run_status == "ok"]
-    if ok_runs or (tried.exact and not retry_failed):
-        prev = ok_runs[0] if ok_runs else tried.exact[0]
-        val = "" if prev.primary_value is None else f" {METRIC}={prev.primary_value:.6f}"
-        raise Refused(f"DUPLICATE: this code already ran in {ctx.partition}: {short('experiment', prev.id)} by "
-                      f"{prev.author} -> {prev.outcome}{val}. Not run. Change train.py"
-                      + ("" if ok_runs else " (or pass --retry-failed to retry a failed run)") + ".",
-                      {"duplicate_of": short("experiment", prev.id), "outcome": prev.outcome,
-                       "value": prev.primary_value})
+    _refuse_finished(ctx, src, refs, retry_failed)
     # ③ intent (and ② running duplicate)
     lease = int(timeout) + 300
-    patch = {"partition": ctx.partition, "code_hash": code_ref, "code_key": f"{ctx.partition}|{code_ref}",
-             "description": description, "running": True}
-    mine = lg.my_intents()
+    legacy_ref = refs[0] if ctx.partition == ctx.partitions[0] else refs[-1]
+    code_key = f"{ctx.partition}|{legacy_ref}"
+    canonical_key = f"{ctx.partitions[0]}|{code_ref}"
+    patch = {"partition": ctx.partition, "code_hash": code_ref, "code_key": code_key,
+             "canonical_code_key": canonical_key, "description": description, "running": True}
+    prior_keys = {f"{p}|{h}" for p in ctx.partitions for h in refs}
+    for existing in inflight(ctx, others_only=False):
+        if existing["spec"].get("code_key") in prior_keys:
+            raise Refused(f"DUPLICATE: the same code is running right now: {short('task', existing['id'])}")
+    mine = [t for t in lg.my_intents() if not t.spec.get("code_key")]
+    exclusive = ["code_key", "canonical_code_key"]
     try:
         if mine:
-            intent = lg.update_intent(mine[0].id, patch, lease_seconds=lease, exclusive=["code_key"])
+            intent = lg.update_intent(mine[0].id, patch, lease_seconds=lease, exclusive=exclusive)
         else:
             intent = lg.create_intent(description, {**patch, "auto": True}, lease_seconds=lease,
-                                      exclusive=["code_key"])
+                                      exclusive=exclusive)
     except Conflict as e:
         raise Refused(f"DUPLICATE: the same code is running right now: {e}. Not run.", {"running": str(e)}) from e
-    again = lg.sql_internal("SELECT id FROM assay.experiments_valid WHERE project_id=%s AND dedup_key=%s"
-                            " AND run_status='ok' LIMIT 1", (lg.project_id, tried.dedup_key))
-    if again:
+    try:
+        _refuse_finished(ctx, src, refs, retry_failed)
+    except Refused:
         lg.complete_task(intent.id, "failed", "duplicate finished while starting")
-        raise Refused(f"DUPLICATE: this code finished meanwhile: {short('experiment', again[0]['id'])}. Not run.",
-                      {"duplicate_of": short("experiment", again[0]["id"])})
+        raise
     baseline, eps = lg.baseline(ctx.partition)
     uri = lg.put_blob(src, "text/x-python")
+    # Resolve parent evidence before training. Once there is a result, no ledger read may bypass saving it.
+    parents = experiments_for_code(ctx, parent_refs) if parent_refs else []
+    parent_value = _mean_value(parents)
+    parent_exp = parents[0]["id"] if parents else None
+    run_id = uuid4().hex
     # ④⑤ run the hashed bytes (not the working file, which the agent may edit meanwhile) and parse
     res, interrupted = _run_isolated(ctx, src, cmd, timeout, parse_regex or DEFAULT_PARSE_REGEX, co.root / "run.log",
-                                     {"ASSAY_AR_RUN": "run", "ASSAY_AR_SEED": "0", "ASSAY_AR_CODE": code_ref})
-    notes = description
+                                     {"ASSAY_AR_RUN": "run", "ASSAY_AR_SEED": "0", "ASSAY_AR_CODE": code_ref,
+                                      "ASSAY_AR_RUN_ID": run_id})
+    notes = description[:2000]
     if res.run_status != "ok":
         notes = f"{description}\n[{res.reason}] run.log tail:\n{res.log_tail}"[:2000]
     value = res.metrics.get(METRIC) if res.run_status == "ok" else None
     # A1: KEEP means better than this agent's parent; the server's outcome (against the verified best)
     # decides only whether the run is a candidate for replication.
-    parent_value = code_value(ctx, parent_hash) if parent_hash else None
     beats_parent = None if value is None or parent_value is None else better(lg, float(value), parent_value, eps)
+    keep = value is not None and beats_parent is not False
     record: dict[str, Any] = {"config": config, "metrics": res.metrics if res.run_status == "ok" else
                               _numeric(res.metrics),
               "run_status": res.run_status, "seed": 0, "code_ref": code_ref, "notes": notes,
@@ -373,33 +505,14 @@ def run(ctx: Ctx, description: str, cmd: str = DEFAULT_CMD, timeout: float = DEF
                              "bytes": len(src)}],
               "task_id": str(intent.id), "duration_ms": res.duration_ms,
               "trace_ref": {"cmd": cmd, "parse_regex": parse_regex, "timeout": timeout,
-                            "parent_value": parent_value, "beats_parent": beats_parent}}
-    parent_exp = None
-    if parent_hash:
-        rows = experiments_for_code(ctx, parent_hash)
-        parent_exp = rows[0]["id"] if rows else None
-    # ⑥ record (a failure to record is queued locally, never dropped)
-    rec = None
+                            "parent_value": parent_value, "beats_parent": beats_parent, "kept": keep,
+                            "ar_run_id": run_id}}
+    # ⑥⑦ persist the result before completing its intent. Retry any incomplete persistence on the next command.
     outcome0 = "failed" if res.run_status != "ok" else "queued"
-    summary = f"{outcome0} {METRIC}={value}"
-    try:
-        rec = lg.record_experiment(**record)
-        if rec.id is not None and parent_exp is not None:
-            lg.link(rec.id, "derived_from", parent_exp)
-    except Exception as e:  # noqa: BLE001
-        # ⑦ the intent stays open (it keeps the code reserved) until the queued run is written (A5)
-        _pending_append(ctx, {"agent": lg.agent, "record": record, "parent_id": str(parent_exp or "") or None,
-                              "complete": {"task": str(intent.id), "summary": summary}, "error": str(e)})
-        print(f"warning: could not record the run ({e}); queued in {co.pending_path()} and retried by the "
-              "next assay ar command", file=sys.stderr)
+    rec = _save_or_queue(ctx, record, f"{res.run_status} {METRIC}={value}", parent_exp)
     outcome = rec.outcome if rec is not None and rec.outcome else outcome0
-    keep = outcome == "improved" and beats_parent is not False
-    # ⑦ intent done, only once the run is in the ledger
-    if rec is not None:
-        try:
-            lg.complete_task(intent.id, "done", f"{outcome} {METRIC}={value}"[:1000])
-        except Exception:  # noqa: BLE001 - LeaseLost or the database went away; the lease runs out
-            pass
+    if rec is not None and rec.duplicate_of is not None:
+        keep = False
     # ⑧ results.tsv (upstream format)
     head = co.git_show("HEAD") if co.is_git() else None
     commit = co.short_commit() if head is not None and code_hash(head) == code_ref else None
@@ -408,20 +521,25 @@ def run(ctx: Ctx, description: str, cmd: str = DEFAULT_CMD, timeout: float = DEF
         commit or short_hash(code_ref, 7), value if tsv_status != "crash" else None,
         res.metrics.get("peak_vram_mb") if tsv_status != "crash" else None, tsv_status, description))
     # local state
-    if rec is not None and rec.id is not None:
-        if keep:
-            co.save_state(last_experiment=str(rec.id), last_code_hash=code_ref, last_knobs=knobs)
-        else:
-            co.save_state(last_experiment=str(rec.id), last_code_hash=parent_hash, last_knobs=parent_knobs)
+    if rec is None or rec.id is not None:
+        co.save_state(last_experiment=str(rec.id) if rec is not None else None,
+                      last_code_hash=code_ref if keep else parent_hash, last_code_hashes=refs if keep else parent_refs,
+                      last_knobs=knobs if keep else parent_knobs)
     if interrupted is not None:
         raise interrupted
     # ⑨ referee
-    actions = safe_tick(lg)
+    actions = safe_tick(lg) if rec is not None else []
     if rec is not None and rec.duplicate_of is not None:
         verdict = f"DUPLICATE (recorded meanwhile as {short('experiment', rec.duplicate_of)})"
     elif keep:
-        verdict = "KEEP (baseline, calibration pending)" if baseline is None else \
-            "KEEP (candidate, replication pending)"
+        if outcome == "queued":
+            verdict = "KEEP (record queued)"
+        elif outcome != "improved":
+            verdict = "KEEP (local improvement)"
+        elif baseline is None:
+            verdict = "KEEP (baseline, calibration pending)"
+        else:
+            verdict = "KEEP (candidate, replication pending)"
     elif outcome == "improved" and parent_value is not None:
         verdict = (f"DISCARD (not better than its parent {parent_value:.6f} by epsilon {eps:.6f}; it still beats "
                    "the verified best, so the referee may replicate it)")
@@ -431,9 +549,6 @@ def run(ctx: Ctx, description: str, cmd: str = DEFAULT_CMD, timeout: float = DEF
     elif outcome == "worse":
         verdict = f"DISCARD (worse by {abs(value - baseline):.6f})" if baseline is not None and value is not None \
             else "DISCARD (worse)"
-    elif outcome == "queued":
-        verdict = ("KEEP? (not recorded yet; decide after the next assay ar command)" if res.run_status == "ok"
-                   else f"CRASH ({res.reason})")
     elif res.run_status == "invalid":
         verdict = f"INVALID ({res.reason})"
     else:
@@ -446,10 +561,29 @@ def run(ctx: Ctx, description: str, cmd: str = DEFAULT_CMD, timeout: float = DEF
             "duration_s": round(res.duration_ms / 1000, 1), "referee": actions}
 
 
-def code_value(ctx: Ctx, code_ref: str) -> float | None:
+def _refuse_finished(ctx: Ctx, src: bytes, refs: tuple[str, ...], retry_failed: bool) -> None:
+    rows = _finished_runs(ctx, src, refs)
+    if not rows or (retry_failed and rows[0]["run_status"] != "ok"):
+        return
+    prev = rows[0]
+    ctx.lg.check_tried(prev["config"], prev["code_ref"])
+    val = "" if prev["primary_value"] is None else f" {METRIC}={prev['primary_value']:.6f}"
+    why = " (the prior run was invalidated)" if not prev["valid"] else ""
+    retry = " (or pass --retry-failed to retry a failed run)" if prev["run_status"] != "ok" else ""
+    raise Refused(f"DUPLICATE: this code already ran in {prev['config']['partition']}: "
+                  f"{short('experiment', prev['id'])} by {prev['author']} -> {prev['outcome']}{val}{why}. "
+                  f"Not run. Change train.py{retry}.",
+                  {"duplicate_of": short("experiment", prev["id"]), "outcome": prev["outcome"],
+                   "value": prev["primary_value"]})
+
+
+def code_value(ctx: Ctx, refs: tuple[str, ...]) -> float | None:
     """Mean val_bpb over the successful runs of this code in the partition (first run and replications)."""
-    vals = [float(r["primary_value"]) for r in experiments_for_code(ctx, code_ref)
-            if r["run_status"] == "ok" and r["primary_value"] is not None]
+    return _mean_value(experiments_for_code(ctx, refs))
+
+
+def _mean_value(rows: list[dict[str, Any]]) -> float | None:
+    vals = [float(r["primary_value"]) for r in rows if r["run_status"] == "ok" and r["primary_value"] is not None]
     return statistics.fmean(vals) if vals else None
 
 
@@ -470,6 +604,13 @@ def _run_isolated(ctx: Ctx, src: bytes, cmd: str, timeout: float, parse_regex: s
                   env: dict[str, str]) -> tuple[RunResult, BaseException | None]:
     """Run `src` as train.py in a temporary copy of the checkout. An interruption (Ctrl-C, SIGTERM, SIGHUP)
     kills the training, becomes an error result and is returned so the caller records the run first (A4)."""
+    budget, slack, overhead = time_budget(ctx)
+    try:
+        groups = re.compile(parse_regex).groups
+    except re.error as e:
+        raise AssayError(f"invalid --parse-regex: {e}") from e
+    if groups < 2:
+        raise AssayError("--parse-regex needs capture groups for the metric name and value")
     tmp = _isolated_dir(ctx.co, src)
     t0 = time.monotonic()
     interrupted: BaseException | None = None
@@ -484,7 +625,6 @@ def _run_isolated(ctx: Ctx, src: bytes, cmd: str, timeout: float, parse_regex: s
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if interrupted is None:
-        budget, slack, overhead = time_budget(ctx)
         res = check_budget(res, budget, slack, overhead)
     return res, interrupted
 
@@ -530,31 +670,40 @@ def replicate(ctx: Ctx, max_tasks: int = 1, cmd: str = DEFAULT_CMD, timeout: flo
     lg, co = ctx.lg, ctx.co
     done: list[dict[str, Any]] = []
     for _ in range(max_tasks):
-        t = lg.next_task(tags=["replicate", "calibration"], lease_seconds=int(timeout) + 300,
-                         spec_match={"partition": ctx.partition})
+        for part in dict.fromkeys((ctx.partition, *ctx.partitions)):
+            t = lg.next_task(tags=["replicate", "calibration"], lease_seconds=int(timeout) + 300,
+                             spec_match={"partition": part})
+            if t is not None:
+                break
         if t is None:
             break
         spec = t.spec
+        origin = lg.get(str(spec["origin"]))["record"]
+        uri = str(spec.get("code_blob"))
         try:
-            src = lg.get_blob(str(spec.get("code_blob")))
+            src = lg.get_blob(uri)
         except NotFound as e:
             lg.complete_task(t.id, "failed", f"code blob missing: {e}"[:1000])
             continue
-        if code_hash(src) != spec.get("code_ref"):
+        legacy_blob = (spec["partition"] != ctx.partitions[0]
+                       and spec.get("code_ref") == origin.get("code_ref") and uri == blob_of(origin)
+                       and uri == f"assay://blob/{hashlib.sha256(src).hexdigest()}")
+        if spec.get("code_ref") not in code_hashes(src) and not legacy_blob:
             lg.complete_task(t.id, "failed", "code blob does not match code_ref")
             continue
-        if co.partition(ctx.hw) != spec.get("partition"):
+        if co.partition(ctx.hw) != ctx.partitions[0] or spec.get("partition") not in ctx.partitions:
             lg.complete_task(t.id, "failed", "prepare.py differs from the task's harness; not run")
             continue
-        origin = lg.get(str(spec["origin"]))["record"]
         run_cmd = str(spec.get("cmd") or cmd)
         regex = spec.get("parse_regex") or parse_regex or DEFAULT_PARSE_REGEX
         tmp_log = Path(tempfile.mkdtemp(prefix="assay-replicate-log-")) / "run.log"
+        run_id = uuid4().hex
         try:
             res, interrupted = _run_isolated(ctx, src, run_cmd, timeout, regex, tmp_log,
                                              {"ASSAY_AR_RUN": str(spec.get("kind") or "replicate"),
                                               "ASSAY_AR_SEED": str(spec.get("seed")),
-                                              "ASSAY_AR_CODE": str(spec["code_ref"])})
+                                              "ASSAY_AR_CODE": str(spec["code_ref"]),
+                                              "ASSAY_AR_RUN_ID": run_id})
         finally:
             shutil.rmtree(tmp_log.parent, ignore_errors=True)
         notes = f"replication {spec.get('seed')} of {short('experiment', origin['id'])}"
@@ -564,24 +713,9 @@ def replicate(ctx: Ctx, max_tasks: int = 1, cmd: str = DEFAULT_CMD, timeout: flo
                   _numeric(res.metrics), "run_status": res.run_status, "seed": int(spec["seed"]),
                   "code_ref": spec["code_ref"], "notes": notes, "artifacts": origin.get("artifacts") or [],
                   "task_id": str(t.id), "duration_ms": res.duration_ms,
-                  "trace_ref": {"cmd": run_cmd, "parse_regex": parse_regex, "timeout": timeout}}
+                  "trace_ref": {"cmd": run_cmd, "parse_regex": regex, "timeout": timeout, "ar_run_id": run_id}}
         value = res.metrics.get(METRIC) if res.run_status == "ok" else None
-        summary = f"{res.run_status} {METRIC}={value}"
-        rec = None
-        try:
-            rec = lg.record_experiment(**record)
-        except Exception as e:  # noqa: BLE001
-            # The task stays claimed until the queued run is written (A5): completing it now would let the
-            # referee judge the candidate without this run.
-            _pending_append(ctx, {"agent": lg.agent, "record": record, "error": str(e),
-                                  "complete": {"task": str(t.id), "summary": summary}})
-            print(f"warning: could not record the replication ({e}); queued in {co.pending_path()}",
-                  file=sys.stderr)
-        if rec is not None:
-            try:
-                lg.complete_task(t.id, "done", summary)
-            except LeaseLost:
-                pass
+        rec = _save_or_queue(ctx, record, f"{res.run_status} {METRIC}={value}")
         if interrupted is not None:
             raise interrupted
         actions = safe_tick(lg) if rec is not None else []
@@ -594,9 +728,9 @@ def replicate(ctx: Ctx, max_tasks: int = 1, cmd: str = DEFAULT_CMD, timeout: flo
 
 # ---------------------------------------------------------------------------------------------- sync
 
-def _bad_ancestor(ctx: Ctx, code_ref: str) -> str | None:
+def _bad_ancestor(ctx: Ctx, refs: tuple[str, ...]) -> str | None:
     """A refuted or inconclusive result on this code or any of its ancestors."""
-    rows = experiments_for_code(ctx, code_ref)
+    rows = experiments_for_code(ctx, refs)
     seen: set[UUID] = set()
     frontier = [r["id"] for r in rows if (r["seed"] or 0) == 0]
     while frontier:
@@ -624,9 +758,9 @@ def sync(ctx: Ctx, trust: str = "verified") -> dict[str, Any]:
     if target is None:
         return {"adopted": False, "reason": f"no {trust} result in {ctx.partition} yet", "partition": ctx.partition}
     src = co.train_bytes()
-    mine = code_hash(src)
-    if mine == target["code_ref"]:
-        return {"adopted": False, "reason": "you already have it", "code": short_hash(mine),
+    mine = code_hashes(src)
+    if target["code_ref"] in mine:
+        return {"adopted": False, "reason": "you already have it", "code": short_hash(mine[0]),
                 "value": target["mean"], "partition": ctx.partition}
     my_value = code_value(ctx, mine)
     bad = _bad_ancestor(ctx, mine)
@@ -638,6 +772,9 @@ def sync(ctx: Ctx, trust: str = "verified") -> dict[str, Any]:
     if uri is None:
         raise AssayError(f"the {target['status']} best has no stored code")
     code = lg.get_blob(uri)
+    if code_hash(code) == mine[0]:
+        return {"adopted": False, "reason": "you already have it", "code": short_hash(mine[0]),
+                "value": target["mean"], "partition": ctx.partition}
     co.train_path.write_bytes(code)
     h8 = short_hash(target["code_ref"])
     committed = False
@@ -646,7 +783,7 @@ def sync(ctx: Ctx, trust: str = "verified") -> dict[str, Any]:
         msg = f"adopt {target['status']} best {h8} ({METRIC}={target['mean']:.6f})"
         r = co.git("commit", "-m", msg, "--", "train.py")
         committed = r is not None and r.returncode == 0
-    co.save_state(last_code_hash=target["code_ref"], last_knobs=extract_knobs(code))
+    co.save_state(last_code_hash=target["code_ref"], last_code_hashes=code_hashes(code), last_knobs=extract_knobs(code))
     safe_tick(lg)
     why = bad or ("your code has no successful run yet" if my_value is None else
                   f"{target['mean']:.6f} beats your {my_value:.6f}")
@@ -696,6 +833,7 @@ def import_results(ctx: Ctx, path: Path, hw: str | None = None) -> dict[str, Any
     counts = {"imported": 0, "duplicates": 0, "missing_commit": 0, "rows": 0}
     with open(path, encoding="utf-8", newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
+    known_parts: dict[tuple[str, ...], str] = {}
     for row in rows:
         counts["rows"] += 1
         commit = (row.get("commit") or "").strip()
@@ -703,10 +841,14 @@ def import_results(ctx: Ctx, path: Path, hw: str | None = None) -> dict[str, Any
         if src is None:
             counts["missing_commit"] += 1
             continue
-        code_ref = code_hash(src)
+        refs = code_hashes(src)
+        code_ref = refs[0]
         knobs = extract_knobs(src)
         harness = co.git_show(commit, "prepare.py")
-        part = f"{hw_class}/{short_hash(code_hash(harness))}" if harness is not None else co.partition(hw_class)
+        parts = partition_keys(hw_class, harness) if harness is not None else co.partition_keys(hw_class)
+        if parts not in known_parts:
+            known_parts[parts] = _existing_partition_first(lg, parts)[0]
+        part = known_parts[parts]
         prev = co.git_show(f"{commit}~1")
         parent_hash = code_hash(prev) if prev is not None else None
         if parent_hash == code_ref:
@@ -723,7 +865,8 @@ def import_results(ctx: Ctx, path: Path, hw: str | None = None) -> dict[str, Any
         except ValueError:
             val, mem = 0.0, 0.0
         ok = status != "crash" and val > 0
-        if any(f"commit {commit}," in (e["notes"] or "") for e in experiments_for_code(ctx, code_ref, part)):
+        if any(f"commit {commit}," in (e["notes"] or "")
+               for p in dict.fromkeys((part, *parts)) for e in experiments_for_code(ctx, refs, p)):
             counts["duplicates"] += 1  # imported before (failed rows are not caught by the dedup index)
             continue
         uri = lg.put_blob(src, "text/x-python")
@@ -738,7 +881,7 @@ def import_results(ctx: Ctx, path: Path, hw: str | None = None) -> dict[str, Any
             continue
         counts["imported"] += 1
         if parent_hash:
-            parents = experiments_for_code(ctx, parent_hash, part)
+            parents = experiments_for_code(ctx, code_hashes(prev), part) if prev is not None else []
             if parents:
                 lg.link(rec.id, "derived_from", parents[0]["id"])
     counts["referee"] = len(safe_tick(lg))

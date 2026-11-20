@@ -84,21 +84,26 @@ def main(argv: list[str] | None = None) -> int:
 
     out = args.out.resolve()
     cond = json.loads((out / "conditions.json").read_text())
+    simulated = cond.get("label") == "pipeline check, not evidence"
+    if (args.sim or args.execute) and args.sim != simulated:
+        ap.error("post-replication mode must match the launch's real or simulated conditions")
     base = cond.get("baseline_code_hash")
     keeps = arms.a_keeps(out)
+    matched = [k for k in keeps if k["source"] == "shim"]
+    unmatched = len(keeps) - len(matched)
     lg = Ledger.open(project=cond["project_b"], agent="human")
     b_src, b_info = b_best(lg)
     eps = b_info.get("epsilon") or args.epsilon
-    a_best = arms.a_best(keeps)
+    a_best = arms.a_best(matched) if not unmatched else None
     rng = random.Random(args.seed)
-    a_cands = [k for k in keeps if not k["baseline"] and k["code_hash"] != base]
+    a_cands = [k for k in matched if not k["baseline"] and k["code_hash"] != base] if not unmatched else []
     a_sample = rng.sample(a_cands, min(args.sample, len(a_cands)))
     b_cands = arms.b_keeps(lg, base)
     b_sample = rng.sample(b_cands, min(args.sample, len(b_cands)))
-    runs = (2 + len(a_sample) + len(b_sample)) * args.repeats
+    runs = (int(a_best is not None) + int(b_src is not None) + len(a_sample) + len(b_sample)) * args.repeats
     plan = {"a_best": a_best and {k: str(v) if isinstance(v, Path) else v for k, v in a_best.items()},
             "b_best": b_info, "sampled_keeps": {"A": len(a_sample), "B": len(b_sample)}, "epsilon": eps,
-            "training_runs": runs}
+            "a_unmatched_keeps": unmatched, "training_runs": runs}
     if not (args.sim or args.execute):
         print(json.dumps(plan, indent=2))
         print(f"{runs} training runs on GPU {args.gpu} (~{runs * 5.5:.0f} GPU minutes). Re-run with --execute.")
@@ -108,7 +113,9 @@ def main(argv: list[str] | None = None) -> int:
         env.setdefault("AR_SIM_SECONDS", "0.2")
     cmd = f"{sys.executable} train.py" if args.sim else args.cmd
     tree0 = Path(cond["agents"][0]["cwd"])
-    result: dict[str, Any] = {"epsilon": eps, "label": cond.get("label")}
+    result: dict[str, Any] = {"epsilon": eps, "label": cond.get("label"), "protocol": {
+        "cmd": cmd, "repeats": args.repeats, "sample": args.sample, "epsilon_floor": args.epsilon,
+        "seed": args.seed, "timeout": args.timeout, "gpu": None if args.sim else args.gpu}}
     if a_best is not None:
         src = arms.code_at(a_best["tree"], a_best["commit"])
         vals = rerun(tree0, src, args.repeats, cmd, args.timeout, env) if src else []

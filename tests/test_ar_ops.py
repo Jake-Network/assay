@@ -1,17 +1,21 @@
 """assay ar operations on real git checkouts of the CPU simulator (§8, §16.1). Runs take ~0.05 s each."""
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from threading import Event
 
 import pytest
 
 from assay import Ledger
 from assay.integrations.autoresearch import ops
-from assay.integrations.autoresearch.code import code_hash
+from assay.integrations.autoresearch.checkout import Checkout
+from assay.integrations.autoresearch.code import code_hash, normalize, short_hash
 from assay.integrations.autoresearch.referee import tick
 from assay.tokens import estimate_tokens
 
@@ -256,6 +260,56 @@ def test_unrecorded_replication_keeps_its_task(lab: tuple[str, list[Path]], monk
     assert [t["status"] for t in a.lg.sql_internal(q, (pid,))] == ["done", "open"]
 
 
+def test_changed_run_is_retained_when_database_drops_after_training(
+    lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from assay.integrations.autoresearch.runner import RunResult
+
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+    parent = ops.run(a, "baseline", CMD)
+    set_knob(root, "MATRIX_LR", "0.06")
+
+    def down(*args: object, **kwargs: object) -> None:
+        raise ConnectionError("database unreachable")
+
+    def finish(*args: object, **kwargs: object) -> tuple[RunResult, None]:
+        monkeypatch.setattr(a.lg, "sql_internal", down)
+        monkeypatch.setattr(a.lg, "record_experiment", down)
+        return RunResult("ok", 0, {"val_bpb": parent["value"] - 0.01}), None
+
+    monkeypatch.setattr(ops, "_run_isolated", finish)
+    child = ops.run(a, "matrix lr 0.06", CMD)
+    assert child["outcome"] == "queued" and child["keep"]
+    assert a.co.pending_path().is_file() and "\tkeep\tmatrix lr 0.06" in (root / "results.tsv").read_text()
+    a2 = ctx(pid, root, "a")
+    saved = a2.lg.search("matrix lr 0.06", kind="experiment")[0]
+    assert a2.lg.get(saved["id"])["links_out"][0]["dst"] == parent["id"]
+    assert not a2.co.pending_path().exists() and not a2.lg.my_intents()
+
+
+def test_failed_run_replay_does_not_record_again_after_completion_error(
+    lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+
+    def down(*args: object, **kwargs: object) -> None:
+        raise ConnectionError("connection lost before marking the task done")
+
+    monkeypatch.setattr(a.lg, "complete_task", down)
+    assert ops.run(a, "failed once", "exit 9")["run_status"] == "error"
+    assert a.co.pending_path().exists() and a.lg.my_intents()
+    # Simulate an abandoned batch containing a damaged record and an otherwise replayable run.
+    batch = ops._take_pending(a.co.pending_path())[0]
+    batch.write_bytes(b"\xff\xfe\n" + batch.read_bytes())
+    a2 = ctx(pid, root, "a")
+    rows = a2.lg.sql_internal("SELECT run_status FROM assay.experiments WHERE project_id=%s", (pid,))
+    assert rows == [{"run_status": "error"}]
+    assert not a2.lg.my_intents() and not a2.co.pending_path().exists()
+    assert batch.with_suffix(".invalid").exists()
+
+
 def test_pending_queue_take_is_atomic(tmp_path: Path) -> None:
     """A5: lines appended while a flush is in progress go to a fresh queue file and are never lost."""
     p = tmp_path / ".assay" / "ar_pending.jsonl"
@@ -266,7 +320,36 @@ def test_pending_queue_take_is_atomic(tmp_path: Path) -> None:
     ops._append_line(p, '{"n": 3}')  # a run finishing during the flush
     assert taken[0].read_text().splitlines() == ['{"n": 1}', '{"n": 2}'] and p.read_text() == '{"n": 3}\n'
     assert ops._take_pending(p)[0].read_text() == '{"n": 3}\n'
-    assert ops._take_pending(p) == []  # the fresh batch is not stale yet, nothing else to take
+    assert ops._take_pending(p) == []  # the active queue is empty
+
+
+def test_pending_rotation_waits_until_open_writer_finishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = tmp_path / "ar_pending.jsonl"
+    p.write_text('{"n": 1}\n')
+    open_file = Path.open
+    writer_open = Event()
+    finish_write = Event()
+
+    def open_with_writer_pause(path: Path, *args: object, **kwargs: object) -> object:
+        f = open_file(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path == p and args == ("ab",):
+            writer_open.set()
+            assert finish_write.wait(5)
+        return f
+
+    monkeypatch.setattr(Path, "open", open_with_writer_pause)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(ops._append_line, p, '{"n": 2}')
+        try:
+            assert writer_open.wait(5)
+            rotation = pool.submit(ops._take_pending, p)
+            with pytest.raises(TimeoutError):
+                rotation.result(timeout=0.1)
+        finally:
+            finish_write.set()
+        writer.result(timeout=5)
+        batch = rotation.result(timeout=5)[0]
+    assert batch.read_text().splitlines() == ['{"n": 1}', '{"n": 2}']
 
 
 def test_notes_and_ideas(lab: tuple[str, list[Path]]) -> None:
@@ -346,8 +429,67 @@ def test_keep_compares_with_the_parent(lab: tuple[str, list[Path]], monkeypatch:
     assert child["parent_value"] == pytest.approx(parent["value"])
     assert (roots[0] / "results.tsv").read_text().splitlines()[-1].split("\t")[3] == "discard"
     assert a.co.load_state()["last_code_hash"] == code_hash(git(roots[0], "show", "HEAD~1:train.py"))
-    tr = a.lg.get(child["id"])["record"]["trace_ref"]
-    assert tr["beats_parent"] is False and tr["cmd"] == CMD
+    row = a.lg.get(child["id"])["record"]
+    tr = row["trace_ref"]
+    assert tr["beats_parent"] is False and tr["kept"] is False and tr["cmd"] == CMD
+    assert any(t.spec.get("origin") == row["id"] for t in a.lg.list_tasks())
+
+
+def test_local_keep_does_not_require_beating_the_verified_baseline(
+    lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from assay.integrations.autoresearch.runner import RunResult
+
+    pid, roots = lab
+    a = calibrate(pid, roots)
+    baseline, _ = a.lg.baseline(a.partition)
+    assert baseline is not None
+    for lr, delta in [("0.05", 0.03), ("0.06", 0.015)]:
+        set_knob(roots[0], "MATRIX_LR", lr)
+        probe = RunResult("ok", 0, {"val_bpb": baseline + delta})
+        monkeypatch.setattr(ops, "_run_isolated", lambda *a, run=probe, **k: (run, None))
+        result = ops.run(a, f"matrix lr {lr}", CMD)
+    assert result["keep"] and result["outcome"] == "worse" and result["verdict"] == "KEEP (local improvement)"
+    assert a.lg.get(result["id"])["record"]["trace_ref"]["kept"]
+
+
+def test_legacy_partition_reuses_history_intents_and_replication_tasks(
+    lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid, roots = lab
+    a = ctx(pid, roots[0], "a")
+    src = a.co.train_bytes()
+    old_harness = normalize((roots[0] / "prepare.py").read_bytes())
+    old_code = normalize(src)
+    assert old_harness is not None and old_code is not None
+    legacy_part = f"{a.hw}/{short_hash(hashlib.sha256(old_harness.encode()).hexdigest())}"
+    legacy_ref = hashlib.sha256(old_code.encode()).hexdigest()
+    assert legacy_part != a.partition and legacy_ref != code_hash(src)
+    intent = a.lg.create_intent("old worker is running", {
+        "partition": legacy_part, "code_key": f"{legacy_part}|{legacy_ref}",
+    }, exclusive=["code_key"])
+    b = ctx(pid, roots[1], "b")
+    assert b.partition == legacy_part
+    with pytest.raises(ops.Refused, match="same code is running"):
+        ops.run(b, "already running", CMD)
+    a.lg.complete_task(intent.id)
+    original = a.lg.record_experiment(
+        {"partition": legacy_part, "knobs": {}, "changed": {}, "parent": None, "description": "old baseline"},
+        {"val_bpb": 1.0}, seed=0, code_ref=legacy_ref,
+        artifacts=[{"uri": a.lg.put_blob(src), "kind": "train.py"}])
+    assert original.id is not None
+    with pytest.raises(ops.Refused, match="already ran"):
+        ops.run(b, "already recorded", CMD)
+    tick(a.lg)
+    # Simulate another runtime whose native legacy hash has a different spelling.
+    native_keys = Checkout.partition_keys
+    monkeypatch.setattr(Checkout, "partition_keys", lambda co, hw: (native_keys(co, hw)[0], "other/previous-hash"))
+    c = ctx(pid, roots[2], "c")
+    assert c.partition == legacy_part
+    assert ops.replicate(b, cmd=CMD)[0]["run_status"] == "ok"
+    assert ops.replicate(c, cmd=CMD)[0]["run_status"] == "ok"
+    best = ops.partition_best(c)
+    assert best is not None and best["origin_id"] == original.id
 
 
 def test_interrupted_run_is_recorded(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:

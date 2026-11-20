@@ -11,6 +11,10 @@ from assay.db.conn import notification_channel
 from assay.errors import AssayError
 from assay.web.app import NotifyHub, allowed_hosts, create_app
 
+MCP_INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+    "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
+MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
+
 
 def test_pages(lead: Ledger, worker: Ledger) -> None:
     [tid] = lead.create_tasks([{"title": "Try hex", "tags": ["init"]}])
@@ -36,9 +40,7 @@ def test_pages(lead: Ledger, worker: Ledger) -> None:
         part = client.get("/claims?partial=1", headers={"HX-Request": "true"})
         assert "<html" not in part.text and 'id="content"' in part.text
         assert client.get("/static/htmx.min.js").status_code == 200
-        init = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}},
-            headers={"Accept": "application/json, text/event-stream"})
+        init = client.post("/mcp", json=MCP_INIT, headers=MCP_HEADERS)
         assert init.status_code == 200 and "assay" in init.text
 
 
@@ -53,22 +55,36 @@ def test_host_header_is_checked(lead: Ledger) -> None:
     assert allowed_hosts("10.0.0.5")[-1] == "10.0.0.5" and allowed_hosts("fe80::1")[-1] == "[fe80::1]"
 
 
-def test_wildcard_bind_needs_a_token(lead: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("host", "authority"), [
+    ("0.0.0.0", "lab-box"), ("::", "[fd00::1]"), ("10.0.0.5", "10.0.0.5"),
+    ("fd00::1", "[fd00::1]"), ("lab-box", "lab-box"),
+])
+def test_non_loopback_bind_needs_a_token(lead: Ledger, monkeypatch: pytest.MonkeyPatch,
+                                        host: str, authority: str) -> None:
     monkeypatch.delenv("ASSAY_SERVE_TOKEN", raising=False)
     with pytest.raises(AssayError, match="ASSAY_SERVE_TOKEN"):
-        create_app(lead.project_id, host="0.0.0.0")
-    app = create_app(lead.project_id, host="0.0.0.0", token="s3cret")
-    with TestClient(app, base_url="http://lab-box:7466") as client:
+        create_app(lead.project_id, host=host)
+    app = create_app(lead.project_id, host=host, token="s3cret")
+    with TestClient(app, base_url=f"http://{authority}:7466") as client:
         assert client.get("/tasks").status_code == 401
         assert client.get("/tasks", headers={"Authorization": "Bearer wrong"}).status_code == 401
         assert client.get("/tasks", headers={"Authorization": "Bearer s3cret"}).status_code == 200
-        first = client.get("/?token=s3cret")
-        assert first.status_code == 200 and "assay_token" in first.headers["set-cookie"]
-        assert client.get("/tasks").status_code == 200  # the cookie now carries it
-        init = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}},
-            headers={"Accept": "application/json, text/event-stream", "Authorization": "Bearer s3cret"})
+        assert client.post("/mcp", json=MCP_INIT, headers=MCP_HEADERS).status_code == 401
+        init = client.post("/mcp", json=MCP_INIT, headers={**MCP_HEADERS, "Authorization": "Bearer s3cret"})
         assert init.status_code == 200
+        first = client.get("/?token=s3cret", follow_redirects=False)
+        assert first.status_code == 303 and "assay_token" in first.headers["set-cookie"]
+        assert first.headers["location"] == "/"
+        assert "s3cret" not in client.get(first.headers["location"]).text
+        assert client.get("/tasks").status_code == 200  # the cookie now carries it
+
+
+@pytest.mark.parametrize(("host", "authority"), [("127.0.0.2", "127.0.0.2"), ("::1", "[::1]")])
+def test_loopback_bind_allows_its_host_header(lead: Ledger, host: str, authority: str) -> None:
+    app = create_app(lead.project_id, host=host)
+    with TestClient(app, base_url=f"http://{authority}:7466") as client:
+        assert client.get("/tasks").status_code == 200
+        assert client.post("/mcp", json=MCP_INIT, headers=MCP_HEADERS).status_code == 200
 
 
 def test_event_clients_share_one_listen_connection(lead: Ledger) -> None:

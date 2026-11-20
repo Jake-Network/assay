@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import subprocess
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from statistics import fmean
 from typing import Any
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 from assay import Ledger
 from assay.dedup import dedup_key
 from assay.errors import AssayError, Conflict, InvalidTransition
 from tests.conftest import make_project
+from tests.test_core_ext import cfg, ml_project
 
 
 def lab(db_url: str, **kw: Any) -> tuple[Ledger, Ledger, Ledger, Ledger]:
@@ -58,10 +63,78 @@ def test_c1_without_baseline_needs_measurement_flag(db_url: str) -> None:
     lead.decide(claim.id, "supported", "metric", "first run", ids[:1])  # type: ignore[arg-type]
     with pytest.raises(InvalidTransition, match="no numeric payload.baseline"):
         lead.decide(claim.id, "verified", "rerun", "reproduced", ids)  # type: ignore[arg-type]
-    m = a.propose_claim("observation", "lr=2 measures 2.81", payload={"measurement": True},
+    m = a.propose_claim("observation", "lr=2 measures 2.81", payload={"measurement": True, "mean": 2.81},
                         evidence=[(ids[0], "supports")])
     lead.decide(m.id, "supported", "metric", "first run", ids[:1])  # type: ignore[arg-type]
     assert lead.decide(m.id, "verified", "rerun", "reproduced", ids).new_status == "verified"  # type: ignore[arg-type]
+
+
+def test_measurement_needs_evidence_for_claimed_mean(db_url: str) -> None:
+    pid = ml_project(db_url)
+    lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
+    a, b, c = (lead.as_agent(name) for name in ("a", "b", "c"))
+    ids = []
+    for seed, who in enumerate((a, b, c)):
+        run = who.record_experiment(cfg("p"), {"val_bpb": 1.0}, seed=seed, code_ref="a").id
+        assert run is not None
+        ids.append(run)
+    payload = {"partition": "p", "code_ref": "a", "experiment_ids": list(map(str, ids)), "origin": str(ids[0]),
+               "std": 0., "n": len(ids), "measurement": True}
+    wrong = a.propose_claim("result", "Measured 0.5", payload={**payload, "mean": 0.5},
+                            evidence=[(ids[0], "supports")]).id
+    lead.decide(wrong, "supported", "metric", "first run", ids[:1])
+    with pytest.raises(InvalidTransition, match="payload.mean must match"):
+        lead.decide(wrong, "verified", "rerun", "reproduced", ids)
+    # Older clients allowed this decision. A historical row stays in the ledger but cannot supply the baseline.
+    with psycopg.connect(db_url) as conn:
+        conn.execute("INSERT INTO assay.decisions(project_id,target_type,target_id,new_status,oracle,rationale,"
+                     "evidence_ids,decided_by) VALUES (%s,'claim',%s,'verified','rerun','legacy result',%s,'lead')",
+                     (pid, wrong, ids))
+    assert lead.claim_status(wrong) == "verified"
+    assert lead.baseline("p")[0] == 1.0
+    for field, value in (("partition", "elsewhere"), ("code_ref", "other"), ("origin", str(ids[1]))):
+        mismatch = a.propose_claim("result", f"Wrong {field}", payload={**payload, "mean": 1.0, field: value},
+                                   evidence=[(ids[0], "supports")]).id
+        lead.decide(mismatch, "supported", "metric", "first run", ids[:1])
+        with pytest.raises(InvalidTransition, match="must match the original experiment"):
+            lead.decide(mismatch, "verified", "rerun", "reproduced", ids)
+    del payload["origin"]
+    claim = a.propose_claim("result", "Measured 1.0", payload={**payload, "mean": 1.0},
+                            evidence=[(ids[0], "supports")]).id
+    lead.decide(claim, "supported", "metric", "first run", ids[:1])
+    assert lead.decide(claim, "verified", "rerun", "reproduced", ids).new_status == "verified"
+    best = lead.sql_internal("SELECT ref_id, origin_id FROM assay.v_partition_best"
+                             " WHERE project_id=%s AND status='verified'", (pid,))
+    assert best == [{"ref_id": claim, "origin_id": ids[0]}]
+
+
+def test_self_rerun_does_not_mask_a_failing_independent_rerun(db_url: str) -> None:
+    pid = ml_project(db_url)
+    lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
+    a, b = lead.as_agent("a"), lead.as_agent("b")
+    a.record_experiment(cfg("p", "base"), {"val_bpb": 2.91}, code_ref="base")
+    ids = []
+    for seed, (who, score) in enumerate(((a, 2.80), (a, 2.80), (b, 2.96))):
+        run = who.record_experiment(cfg("p"), {"val_bpb": score}, seed=seed, code_ref="a").id
+        assert run is not None
+        ids.append(run)
+    mean = fmean((2.80, 2.80, 2.96))
+    claim = a.propose_claim("result", "trial code beats baseline",
+                            payload={"partition": "p", "code_ref": "a", "experiment_ids": list(map(str, ids)),
+                                     "origin": str(ids[0]), "mean": mean, "std": None, "n": len(ids)},
+                            evidence=[(ids[0], "supports")])
+    lead.decide(claim.id, "supported", "metric", "first run", ids[:1])
+    with pytest.raises(InvalidTransition, match="independent reruns 2.96"):
+        lead.decide(claim.id, "verified", "rerun", "three runs", ids)
+    archived = {"rerun_check": {"mean": mean, "rerun_mean": fmean((2.8, 2.96)), "original": str(ids[0]),
+                                "baseline": 2.91, "epsilon": 0.0005}}
+    with psycopg.connect(db_url) as conn:
+        conn.execute("INSERT INTO assay.decisions(project_id,target_type,target_id,new_status,oracle,rationale,"
+                     "evidence_ids,decided_by,oracle_detail)"
+                     " VALUES (%s,'claim',%s,'verified','rerun','legacy result',%s,'lead',%s)",
+                     (pid, claim.id, ids, Jsonb(archived)))
+    assert lead.sql_internal("SELECT ref_id FROM assay.v_partition_best"
+                             " WHERE project_id=%s AND status='verified'", (pid,)) == []
 
 
 # C2 ------------------------------------------------------------------------------------------------
@@ -119,6 +192,16 @@ def test_c5_lucky_seed_does_not_label_config_improved(db_url: str) -> None:
     assert rows[0]["summary_outcome"] == "worse"
 
 
+def test_v_tried_uses_project_epsilon_for_legacy_settings(db_url: str) -> None:
+    lead, a, b, _ = lab(db_url, epsilon=0.1,
+                        settings={"partition_key": "partition", "partitions": {"p": {"epsilon": False}}})
+    a.record_experiment({"partition": "p", "lr": 1}, {"val_loss": 1.0})
+    a.record_experiment({"partition": "p", "lr": 2}, {"val_loss": 0.95}, seed=0)
+    b.record_experiment({"partition": "p", "lr": 2}, {"val_loss": 0.95}, seed=1)
+    assert lead.sql("SELECT summary_outcome FROM v_tried WHERE config->>'lr' = '2'")["rows"] == [
+        {"summary_outcome": "no_change"}]
+
+
 # C6 ------------------------------------------------------------------------------------------------
 def test_c6_check_tried_mentions_invalidated_runs(lead: Ledger, worker: Ledger) -> None:
     e = worker.record_experiment({"a": 1}, {"score": 1}, seed=0)
@@ -165,6 +248,40 @@ def test_a3_one_agent_replicates_an_origin_once(lead: Ledger) -> None:
     assert c.next_task() is not None
 
 
+def test_parallel_claims_cannot_reserve_two_seeds_for_one_agent(db_url: str, lead: Ledger) -> None:
+    spec = {"origin": "same", "distinct_agents_for": "origin"}
+    ids = lead.create_tasks([{"title": f"rep {seed}", "spec": {**spec, "seed": seed}} for seed in (1, 2)])
+    workers = [lead.as_agent("replicator") for _ in ids]
+    lock_key = ("assay:task-claim:" + lead.project_id, "replicator")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        with psycopg.connect(db_url) as blocker, psycopg.connect(db_url, autocommit=True) as observer:
+            blocker.execute("SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))", lock_key)
+            claims = [pool.submit(w.claim_task, tid) for w, tid in zip(workers, ids, strict=True)]
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                waiting = observer.execute(
+                    "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted AND objsubid=2"
+                    " AND classid=(hashtext(%s)::bigint & 4294967295)::oid"
+                    " AND objid=(hashtext(%s)::bigint & 4294967295)::oid", lock_key,
+                ).fetchone()
+                if waiting == (2,):
+                    break
+                if all(claim.done() for claim in claims):
+                    pytest.fail("parallel claims did not wait for the per-agent lock")
+                time.sleep(0.01)
+            else:
+                pytest.fail("parallel claims did not both reach the per-agent lock")
+        successes = []
+        for result in claims:
+            try:
+                successes.append(result.result(timeout=10))
+            except Conflict:
+                continue
+        assert len(successes) == 1
+    other = lead.as_agent("other")
+    assert other.next_task() is not None
+
+
 # I1 ------------------------------------------------------------------------------------------------
 def test_i1_no_silent_human(db_url: str, project: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ASSAY_AGENT", raising=False)
@@ -205,6 +322,11 @@ def test_u4_claim_by_id_and_lease_setting(db_url: str) -> None:
     assert float(left) > 7000
     with pytest.raises(Conflict, match="not claimable"):
         lead.as_agent("w2").claim_task(b)
+    lead.update_settings({"lease_seconds": 300})
+    w.heartbeat(b)
+    left = lead.sql_internal("SELECT extract(epoch FROM lease_expires_at - now()) AS s FROM assay.tasks WHERE id=%s",
+                             (b,))[0]["s"]
+    assert 299 < float(left) <= 300
 
 
 # U6 ------------------------------------------------------------------------------------------------

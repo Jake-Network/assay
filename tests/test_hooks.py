@@ -39,8 +39,11 @@ def _notes(lg: Ledger) -> list[dict]:
 def test_output_with_existing_ids_is_ignored(repo: Path, worker: Ledger) -> None:
     e = worker.record_experiment({"a": 1}, {"score": 1})
     c = worker.propose_claim("note", "something")
-    data = _load("with_ids.json", EXP=f"e:{str(e.id)[:8]}", CLAIM=f"c:{str(c.id)[:8]}")
+    ref = f"e:{str(e.id)[:8]}"
+    data = _load("with_ids.json", EXP=ref, CLAIM=f"c:{str(c.id)[:8]}")
     data["cwd"] = str(repo)
+    data["agent_transcript_path"] = str(_transcript(repo / "t.jsonl", datetime.now(UTC) - timedelta(seconds=6),
+                                                    agent=worker.agent, result={"id": ref}))
     assert process("subagent-stop", data) == "cited"
     assert _notes(worker) == []
 
@@ -147,12 +150,17 @@ def test_hook_cli_is_fast_and_always_exits_zero(repo: Path, worker: Ledger) -> N
     assert p2.returncode == 0
 
 
-def _transcript(path: Path, start: datetime, agent: str | None = None) -> Path:
+def _transcript(path: Path, start: datetime, agent: str | None = None, result: dict | None = None,
+                tool: str = "mcp__plugin_assay_assay__assay_record_experiment") -> Path:
     rows = [{"timestamp": start.isoformat(), "message": {"role": "user", "content": "take a task"}}]
     if agent:
         rows.append({"timestamp": (start + timedelta(seconds=5)).isoformat(), "message": {"content": [
-            {"type": "tool_use", "id": "x", "name": "mcp__plugin_assay_assay__assay_record_experiment",
+            {"type": "tool_use", "id": "x", "name": tool,
              "input": {"agent": agent, "config": {}}}]}})
+    if result:
+        rows.append({"timestamp": (start + timedelta(seconds=6)).isoformat(), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "x",
+             "content": [{"type": "text", "text": json.dumps(result)}]}]}})
     path.write_text("\n".join(json.dumps(r) for r in rows))
     return path
 
@@ -171,20 +179,74 @@ def test_task_id_alone_is_not_a_citation(repo: Path, lead: Ledger, worker: Ledge
 def test_citing_a_record_from_before_this_run_is_captured(repo: Path, worker: Ledger) -> None:
     e = worker.record_experiment({"a": 2}, {"score": 1})
     started = datetime.now(UTC) + timedelta(hours=1)  # the run began after e was recorded
-    data = _stop(repo, f"Baseline {'e:' + str(e.id)[:8]} was 1; mine got 1.2 but I did not record it.",
-                 agent_transcript_path=str(_transcript(repo / "t.jsonl", started)))
-    assert process("subagent-stop", data).startswith("captured:")
+    ref = f"e:{str(e.id)[:8]}"
+    data = _stop(repo, f"Baseline {ref} was 1; mine got 1.2 but I did not record it.",
+                 agent_transcript_path=str(_transcript(repo / "t.jsonl", started, worker.agent, {"id": ref})))
+    assert process("subagent-stop", data, fired_at=(started + timedelta(minutes=1)).timestamp()).startswith("captured:")
 
 
 def test_citation_must_be_by_this_runs_agent(repo: Path, worker: Ledger) -> None:
     e = worker.record_experiment({"a": 3}, {"score": 1})
     started = datetime.now(UTC) - timedelta(minutes=5)
-    other = _stop(repo, f"Recorded {'e:' + str(e.id)[:8]}.",
-                  agent_transcript_path=str(_transcript(repo / "o.jsonl", started, agent="worker-2")))
+    ref = f"e:{str(e.id)[:8]}"
+    other = _stop(repo, f"Recorded {ref}.",
+                  agent_transcript_path=str(_transcript(repo / "o.jsonl", started, "worker-2", {"id": ref})))
     assert process("subagent-stop", other).startswith("captured:")
-    mine = _stop(repo, f"Recorded {'e:' + str(e.id)[:8]}.", agent_id="b",
-                 agent_transcript_path=str(_transcript(repo / "m.jsonl", started, agent=worker.agent)))
+    mine = _stop(repo, f"Recorded {ref}.", agent_id="b",
+                 agent_transcript_path=str(_transcript(repo / "m.jsonl", started, worker.agent, {"id": ref})))
     assert process("subagent-stop", mine) == "cited"
+
+
+@pytest.mark.parametrize("receipt", ["missing", "read", "duplicate", "different_id"])
+def test_citing_a_recent_peer_baseline_preserves_the_report(repo: Path, worker: Ledger, receipt: str) -> None:
+    e = worker.record_experiment({"a": 4}, {"score": 1})
+    ref = f"e:{str(e.id)[:8]}"
+    started = datetime.now(UTC) - timedelta(minutes=5)
+    result = {"id": ref}
+    author: str | None = worker.agent
+    tool = "assay_record_experiment"
+    if receipt == "missing":
+        author = None
+        result = {}
+    elif receipt == "read":
+        tool = "assay_get"
+    elif receipt == "duplicate":
+        result["duplicate_of"] = ref
+    elif receipt == "different_id":
+        result["id"] = "e:00000000"
+    path = _transcript(repo / "t.jsonl", started, author, result, tool)
+    data = _stop(repo, f"Baseline {ref} scored 1; my new result is 1.2.", agent_transcript_path=str(path))
+
+    assert process("subagent-stop", data).startswith("captured:")
+    assert _notes(worker)[0]["payload"]["text"] == data["last_assistant_message"]
+
+
+def test_citing_a_record_created_after_the_hook_is_captured(repo: Path, worker: Ledger) -> None:
+    e = worker.record_experiment({"a": 5}, {"score": 1})
+    ref = f"e:{str(e.id)[:8]}"
+    fired_at = datetime.now(UTC) - timedelta(minutes=5)
+    path = _transcript(repo / "t.jsonl", fired_at - timedelta(minutes=1), worker.agent, {"id": ref})
+    data = _stop(repo, f"See {ref}.", agent_transcript_path=str(path))
+
+    assert process("subagent-stop", data, fired_at=fired_at.timestamp()).startswith("captured:")
+
+
+def test_direct_cli_write_receipt_is_recognized(repo: Path, worker: Ledger) -> None:
+    e = worker.record_experiment({"a": 6}, {"score": 1})
+    ref = f"e:{str(e.id)[:8]}"
+    started = datetime.now(UTC) - timedelta(minutes=1)
+    path = repo / "bash.jsonl"
+    rows = [
+        {"timestamp": started.isoformat(), "message": {"content": [
+            {"type": "tool_use", "id": "bash", "name": "Bash",
+             "input": {"command": f"ASSAY_AGENT={worker.agent} assay exp record --config '{{}}'"}}]}},
+        {"timestamp": (started + timedelta(seconds=1)).isoformat(), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "bash", "content": f"{ref} improved  ★ new best"}]}},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    data = _stop(repo, f"Recorded {ref}.", agent_transcript_path=str(path))
+
+    assert process("subagent-stop", data) == "cited"
 
 
 def test_only_assay_workers_are_captured(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -243,6 +305,56 @@ def test_replay_entry_point_returns_summary(repo: Path, worker: Ledger, monkeypa
                                "data": {"cwd": str(repo), "last_assistant_message": "Replayed finding."}})
     s = hooks.main("replay")
     assert s is not None and (s.processed, s.captured, s.ok) == (1, 1, True)
+
+
+def test_replay_quarantines_invalid_utf8_and_drains_valid_reports(repo: Path, worker: Ledger,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    (spool / "broken.json").write_bytes(b"\xff")
+    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+                               "data": {"last_assistant_message": "Valid report."}})
+
+    summary = hooks.replay_now(spool)
+
+    assert (summary.captured, summary.dead) == (1, 1)
+    assert list(spool.glob("*.json")) == []
+    assert (spool / "broken.invalid").read_bytes() == b"\xff"
+    assert _notes(worker)[0]["payload"]["text"] == "Valid report."
+
+
+def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    pending = hooks._pending
+    queued = False
+
+    def append_after_snapshot(path: Path) -> list[Path]:
+        nonlocal queued
+        snapshot = pending(path)
+        if not queued:
+            queued = True
+            assert hooks._locked(spool)
+            monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+                {"cwd": str(repo), "last_assistant_message": "Concurrent report."})))
+            hooks.main("subagent-stop")
+        return snapshot
+
+    def unexpected_spawn(*args, **kwargs):
+        pytest.fail("The foreground processor already owns the spool.")
+
+    monkeypatch.setattr(hooks, "_pending", append_after_snapshot)
+    monkeypatch.setattr(hooks.subprocess, "Popen", unexpected_spawn)
+
+    summary = hooks.replay_now(spool)
+
+    assert (summary.captured, summary.queued, summary.ok) == (1, 0, True)
+    assert list(spool.glob("*.json")) == []
+    assert _notes(worker)[0]["payload"]["text"] == "Concurrent report."
 
 
 def test_no_processor_spawned_while_one_drains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

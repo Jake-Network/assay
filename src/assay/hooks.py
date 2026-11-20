@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -39,12 +39,12 @@ STATEMENT_HEAD = 300
 PAYLOAD_TEXT = 4000
 RETRY_DELAYS = (1, 2, 4, 8, 15, 30)
 MAX_TRANSCRIPT = 20_000_000
-# Without a transcript to date the run, ids recorded this long before the hook fired still count as this run's.
-FALLBACK_WINDOW = timedelta(hours=6)
 # Transcript timestamps come from the client clock, created_at from the database clock.
 CLOCK_SKEW = timedelta(minutes=2)
 MARKER_TTL = 86400
 CITABLE = {"e": "experiments", "c": "claims"}
+WRITE_TOOLS = {"assay_record_experiment": "e", "assay_propose_claim": "c"}
+CLI_WRITES = {("exp", "record"): "e", ("claim", "add"): "c"}
 
 
 def _state_dir() -> Path:
@@ -106,7 +106,8 @@ class ReplaySummary:
                 self.skipped += 1
         elif kind == "dead":
             self.dead += 1
-            self.errors.append(f"{path.name}: {detail} (moved to dead/)")
+            location = "quarantined as .invalid" if detail.startswith("invalid spool entry") else "moved to dead/"
+            self.errors.append(f"{path.name}: {detail} ({location})")
         else:
             self.queued += 1
             self.errors.append(f"{path.name}: {detail} (still queued)")
@@ -283,9 +284,6 @@ def _ts(v: Any) -> datetime | None:
     return t if t.tzinfo else t.replace(tzinfo=UTC)
 
 
-_AGENT_ARG = re.compile(r"(?:ASSAY_AGENT=|--agent[= ])['\"]?([A-Za-z0-9_.:@-]+)")
-
-
 def _transcript_lines(path: Path) -> Iterator[dict[str, Any]]:
     try:
         if not path.is_file() or path.stat().st_size > MAX_TRANSCRIPT:
@@ -308,12 +306,83 @@ def _blocks(row: dict[str, Any]) -> list[dict[str, Any]]:
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
 
-def run_window(data: dict[str, Any]) -> tuple[datetime | None, set[str]]:
-    """When this subagent run started, and the assay agent names it wrote as. Read from its own transcript
-    (SubagentStop: agent_transcript_path; otherwise the nested subagents/ file) or, for a PostToolUse on Agent,
-    from the parent transcript line that launched it. (None, {}) when nothing is readable."""
-    start: datetime | None = None
-    authors: set[str] = set()
+def _write_tool(block: dict[str, Any]) -> tuple[str, str | None, bool] | None:
+    """Identify calls that return the ID of a newly created experiment or claim."""
+    import shlex
+
+    inp = block.get("input")
+    name = str(block.get("name", ""))
+    if not isinstance(inp, dict):
+        return None
+    tool = name.rsplit("__", 1)[-1] if name.startswith("mcp__") else name
+    if tool in WRITE_TOOLS:
+        author = inp.get("agent")
+        if isinstance(author, str) and author.strip():
+            return WRITE_TOOLS[tool], author.strip(), True
+    shell = inp.get("command")
+    if name != "Bash" or not isinstance(shell, str) or "\n" in shell:
+        return None
+    try:
+        lexer = shlex.shlex(shell, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        command = list(lexer)
+    except ValueError:
+        return None
+    # A series of shell commands can return unrelated output after the Assay call.
+    if any(all(c in "();<>|&" for c in part) for part in command if part):
+        return None
+    args = iter(command)
+    cmd = next(args, "")
+    author = None
+    while "=" in cmd and cmd.split("=", 1)[0].isidentifier():
+        if cmd.startswith("ASSAY_AGENT="):
+            author = cmd.split("=", 1)[1]
+        cmd = next(args, "")
+    if Path(cmd).name == "uv" and next(args, "") == "run":
+        cmd = next(args, "")
+    if re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(cmd).name) and next(args, "") == "-m":
+        if next(args, "") in ("assay", "assay.cli"):
+            cmd = "assay"
+    if Path(cmd).name != "assay":
+        return None
+    positional: list[str] = []
+    for arg in args:
+        if arg in ("--agent", "--project"):
+            value = next(args, "")
+            if arg == "--agent":
+                author = value
+        elif arg.startswith("--agent="):
+            author = arg.split("=", 1)[1]
+        elif arg != "--json" and not arg.startswith("--project=") and len(positional) < 2:
+            positional.append(arg)
+    prefix = CLI_WRITES.get((positional[0], positional[1])) if len(positional) == 2 else None
+    return (prefix, author, False) if prefix else None
+
+
+def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
+    """Accept a new ID from a write response. A duplicate response refers to an already existing record."""
+    from .ids import SHORT_ID_RE
+
+    try:
+        result = json.loads(text)
+    except ValueError:
+        result = None
+    if isinstance(result, dict):
+        if result.get("ok") is False or result.get("duplicate_of") is not None:
+            return None
+        ref = result.get("id")
+    elif not is_mcp and prefix == "e":
+        match = re.fullmatch(r"(e:[0-9a-f]{8}) (?:improved|no_change|worse|failed|unscored)(?:  ★ new best)?", text)
+        ref = match[1] if match else None
+    else:
+        ref = text if not is_mcp else None
+    if isinstance(ref, str) and ref.startswith(prefix + ":") and SHORT_ID_RE.fullmatch(ref):
+        return ref
+    return None
+
+
+def _run_receipts(data: dict[str, Any], fired_at: datetime) -> tuple[datetime | None, dict[str, str | None]]:
+    """Read the run start and successful writing tool receipts from this subagent's own transcript."""
     candidates: list[Path] = []
     if data.get("agent_transcript_path"):
         candidates.append(Path(str(data["agent_transcript_path"])))
@@ -321,50 +390,55 @@ def run_window(data: dict[str, Any]) -> tuple[datetime | None, set[str]]:
         tp = Path(str(data["transcript_path"]))
         candidates.append(tp.with_suffix("") / "subagents" / f"agent-{data['agent_id']}.jsonl")
     for path in candidates:
+        start: datetime | None = None
+        calls: dict[str, tuple[str, str | None, bool]] = {}
+        receipts: dict[str, str | None] = {}
         for row in _transcript_lines(path):
             t = _ts(row.get("timestamp"))
-            if t is not None and (start is None or t < start):
+            if t is None or t > fired_at + CLOCK_SKEW:
+                continue
+            if start is None or t < start:
                 start = t
             for b in _blocks(row):
-                if b.get("type") != "tool_use" or not isinstance(b.get("input"), dict):
-                    continue
-                inp = b["input"]
-                if "assay" in str(b.get("name", "")) and isinstance(inp.get("agent"), str):
-                    authors.add(inp["agent"].strip())
-                if isinstance(inp.get("command"), str) and "assay" in inp["command"]:
-                    authors.update(_AGENT_ARG.findall(inp["command"]))
-        if start is not None:
-            return start, authors
-    tool_use_id = data.get("tool_use_id")
-    if data.get("tool_name") in ("Agent", "Task") and tool_use_id and data.get("transcript_path"):
-        for row in _transcript_lines(Path(str(data["transcript_path"]))):
-            if any(b.get("type") == "tool_use" and b.get("id") == tool_use_id for b in _blocks(row)):
-                return _ts(row.get("timestamp")), authors
-    return start, authors
+                if b.get("type") == "tool_use" and isinstance(b.get("id"), str):
+                    if write := _write_tool(b):
+                        calls[b["id"]] = write
+                elif b.get("type") == "tool_result":
+                    tool_id = b.get("tool_use_id")
+                    if isinstance(tool_id, str) and (call := calls.pop(tool_id, None)) and not b.get("is_error"):
+                        prefix, author, is_mcp = call
+                        if ref := _receipt(_flatten(b.get("content")).strip(), prefix, is_mcp):
+                            receipts[ref] = author
+        if receipts:
+            return start, receipts
+    return None, {}
 
 
 def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: datetime) -> bool:
     from .errors import AssayError
     from .ids import SHORT_ID_RE
 
-    start, authors = run_window(data)
-    since = (start or fired_at - FALLBACK_WINDOW) - CLOCK_SKEW
-    for pfx, body in SHORT_ID_RE.findall(text):
-        if pfx not in CITABLE:
+    cited = [(pfx, f"{pfx}:{body}") for pfx, body in SHORT_ID_RE.findall(text) if pfx in CITABLE]
+    if not cited:
+        return False
+    start, receipts = _run_receipts(data, fired_at)
+    if start is None:
+        return False
+    for pfx, ref in cited:
+        if ref not in receipts:
             continue
         try:
-            kind, rid = lg.resolve(f"{pfx}:{body}")
+            _, rid = lg.resolve(ref)
         except AssayError:
             continue
         rows = lg.sql_internal(f"SELECT author, created_at FROM assay.{CITABLE[pfx]} WHERE id = %s", (rid,))
         if not rows:
             continue
         author, created = rows[0]["author"], rows[0]["created_at"]
-        if author == "hook" or created < since:
-            continue
-        if authors and author not in authors:
-            continue
-        return True
+        expected_author = receipts[ref]
+        if (author != "hook" and (not expected_author or author == expected_author)
+                and start - CLOCK_SKEW <= created <= fired_at + CLOCK_SKEW):
+            return True
     return False
 
 
@@ -449,7 +523,10 @@ def process_file(path: Path) -> str:
         log(f"cannot read hook spool {path} (queued to retry): " + traceback.format_exc())
         return f"retry:{type(e).__name__}: {e}"
     except (KeyError, TypeError, ValueError) as e:
-        path.rename(path.with_suffix(".invalid"))
+        try:
+            path.rename(path.with_suffix(".invalid"))
+        except OSError:
+            return f"retry:could not quarantine invalid spool entry ({e})"
         log(f"invalid hook spool {path} (quarantined): " + traceback.format_exc())
         return f"dead:invalid spool entry ({e})"
     try:
@@ -477,14 +554,14 @@ def _pending(spool: Path) -> list[Path]:
         try:
             first = '"tool_name": "SubagentHandback"' in p.read_text(encoding="utf-8")
             return (0 if first else 1, p.stat().st_mtime)
-        except OSError:
+        except (OSError, UnicodeError):
             return (1, 0.0)
 
     return sorted(spool.glob("*.json"), key=key)
 
 
-def _drain(spool: Path, delays: tuple[float, ...]) -> tuple[ReplaySummary, set[str]]:
-    summary = ReplaySummary()
+def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
+           attempted: Collection[str] = ()) -> set[str]:
     seen: set[str] = set()
     left: list[tuple[Path, str]] = []
     for delay in (0, *delays):
@@ -492,6 +569,8 @@ def _drain(spool: Path, delays: tuple[float, ...]) -> tuple[ReplaySummary, set[s
             time.sleep(delay)
         left = []  # the last pass decides what is still queued
         for path in _pending(spool):
+            if path.name in attempted:
+                continue
             seen.add(path.name)
             outcome = process_file(path)
             if outcome.startswith("retry:"):
@@ -502,7 +581,7 @@ def _drain(spool: Path, delays: tuple[float, ...]) -> tuple[ReplaySummary, set[s
             break
     for path, outcome in left:
         summary.add(path, outcome)
-    return summary, seen
+    return seen
 
 
 def replay(spool: Path) -> None:
@@ -511,23 +590,26 @@ def replay(spool: Path) -> None:
         with _lock(spool, blocking=False) as got:
             if not got:
                 return
-            _, seen = _drain(spool, RETRY_DELAYS)
+            seen = _drain(spool, RETRY_DELAYS, ReplaySummary())
         # an entry written while the lock was held got no processor of its own
         if not any(p.name not in seen for p in spool.glob("*.json")):
             return
 
 
 def replay_now(spool: Path) -> ReplaySummary:
-    """`assay hook replay`: give dead entries one more try, drain once in the foreground, report."""
+    """`assay hook replay`: try each pending or dead report once in the foreground."""
     dead = spool / "dead"
+    summary = ReplaySummary()
     with _lock(spool, blocking=True):
-        requeued = 0
         if dead.is_dir():
             for p in dead.glob("*.json"):
                 p.replace(spool / p.name)
-                requeued += 1
-        summary, _ = _drain(spool, ())
-    summary.requeued = requeued
+                summary.requeued += 1
+        attempted = _drain(spool, (), summary)
+    # A hook that enqueued after the snapshot may have seen our lock and skipped starting a processor.
+    while any(p.name not in attempted for p in spool.glob("*.json")):
+        with _lock(spool, blocking=True):
+            attempted.update(_drain(spool, (), summary, attempted))
     log(f"replay: {summary}")
     return summary
 

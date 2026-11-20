@@ -255,3 +255,22 @@ def test_a3_replications_by_distinct_agents(db_url: str, pid: str) -> None:
     assert replicate(c, 0.989, origin=e1.id) is not None
     tick(c)
     assert result_status(a, e1.id) == "verified"
+
+
+def test_recalibrates_after_baseline_evidence_is_invalidated(db_url: str, pid: str) -> None:
+    a, b, c, baseline = calibrated_lab(db_url, pid)
+    lead = agent(db_url, pid, "lead")
+    previous = a.sql_internal("SELECT id FROM assay.experiments WHERE project_id=%s", (pid,))
+    for run in previous:
+        lead.decide(run["id"], "invalidated", "human", "invalid evaluator")
+    assert result_status(a, baseline.id) == "verified"  # invalidation filters the claim without rewriting it
+    replacement = first_run(a, "next baseline", 0.99)
+    tick(a)
+    new_tasks = tasks(a, "calibration", "open")
+    assert len(new_tasks) == 2 and all(t["spec"]["origin"] == str(replacement.id) for t in new_tasks)
+    assert replicate(b, 0.991, origin=replacement.id) is not None
+    assert replicate(c, 0.989, origin=replacement.id) is not None
+    tick(c)
+    best = a.sql_internal("SELECT origin_id FROM assay.v_partition_best WHERE project_id=%s"
+                          " AND status='verified' AND rank=1", (pid,))
+    assert best == [{"origin_id": replacement.id}]

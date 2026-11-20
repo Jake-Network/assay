@@ -45,9 +45,9 @@ ALTER ROLE assay_reader PASSWORD '...';
 export ASSAY_READER_PASSWORD=...
 ```
 
-Without it the reader login fails and assay silently falls back to `SET ROLE assay_reader` from your own (owner)
-login, inside a read-only transaction with a statement filter. That is weaker: the filter is the only thing between
-`assay_sql` and the owner's rights. `ASSAY_READER_PASSWORD` is not the database owner's password.
+Use a separate password for `assay_reader`. If the reader login fails, `assay_sql` reports the error.
+`ASSAY_SQL_ALLOW_SET_ROLE=1` opts into the weaker fallback, which uses `SET ROLE assay_reader` from the owner
+login inside a read-only transaction with a statement filter.
 
 ## Security
 
@@ -55,6 +55,6 @@ Every machine holds the owner credentials in `ASSAY_DATABASE_URL`; the append-on
 honest mistakes, not a hostile client. Keep the database on a private network and the password out of the repository.
 
 `assay serve` binds to 127.0.0.1 and answers only to the Host names `localhost`, `127.0.0.1` and `[::1]` (plus the
-bound address when you pass a specific one), which blocks DNS-rebinding pages. Binding to `0.0.0.0` or `::` requires
-`ASSAY_SERVE_TOKEN`: MCP clients send `Authorization: Bearer <token>`, and a browser opens `/?token=<token>` once
-(the token is then kept in a cookie).
+bound address when you pass a specific one), which blocks DNS-rebinding pages. Any non-loopback bind requires
+`ASSAY_SERVE_TOKEN`: MCP clients send `Authorization: Bearer <token>`, and a browser opens `/?token=<token>` once.
+The viewer sets a cookie and redirects to a URL without the token.

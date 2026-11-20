@@ -9,6 +9,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime
 from decimal import Decimal
+from statistics import fmean
 from typing import Any
 from uuid import UUID
 
@@ -103,7 +104,10 @@ def jsonable(v: Any) -> Any:
 def _num(v: Any) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:
+        return None
     return f if math.isfinite(f) else None
 
 
@@ -375,8 +379,15 @@ class Ledger:
 
     def lease_default(self) -> int:
         """settings.lease_seconds (default 900): the lease a claim gets when the caller names none."""
-        v = _num(self.project.settings.get("lease_seconds"))
-        return int(v) if v is not None and v > 0 else 900
+        with self._conn() as conn:
+            return self._read_lease_default(conn)
+
+    def _read_lease_default(self, conn: psycopg.Connection[Any]) -> int:
+        row = conn.execute("SELECT settings->'lease_seconds' AS seconds FROM assay.projects WHERE id=%s",
+                           (self.project_id,)).fetchone()
+        assert row is not None
+        seconds = _num(row["seconds"])
+        return int(seconds) if seconds is not None and seconds >= 1 else 900
 
     def next_task(self, tags: Sequence[str] | None = None, lease_seconds: int | None = None,
                   spec_match: dict[str, Any] | None = None, task_id: str | UUID | None = None) -> Task | None:
@@ -385,19 +396,23 @@ class Ledger:
         spec.distinct_agents_for = "<key>" is skipped when this agent already claimed another task with the
         same spec[<key>] (one agent cannot replicate the same origin twice). spec_match keeps only tasks
         whose spec contains the given JSON (jsonb @>). task_id claims that one task if it is claimable."""
-        if lease_seconds is None:
-            lease_seconds = self.lease_default()
         tid = self._rid(task_id, "task")
-        if lease_seconds <= 0:
+        if lease_seconds is not None and lease_seconds <= 0:
             raise AssayError("lease_seconds must be positive")
         if spec_match is not None and not isinstance(spec_match, dict):
             raise ValidationFailed(["spec_match: must be a JSON object"])
         with self._conn() as conn:
+            # Lock the agent before selecting a task, so a parallel claim sees its
+            # committed event even if it would lock a different task row.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+                         ("assay:task-claim:" + self.project_id, self.agent))
+            if lease_seconds is None:
+                lease_seconds = self._read_lease_default(conn)
             # Exhausted tasks whose lease ran out become failed here; there is no scheduler (P8).
             conn.execute(
                 """WITH f AS (
-                     UPDATE assay.tasks SET status='failed', updated_at=now()
-                     WHERE project_id=%(p)s AND status='claimed' AND lease_expires_at < now()
+                     UPDATE assay.tasks SET status='failed', updated_at=statement_timestamp()
+                     WHERE project_id=%(p)s AND status='claimed' AND lease_expires_at < statement_timestamp()
                        AND attempts >= max_attempts
                      RETURNING id, lease_owner)
                    INSERT INTO assay.task_events(project_id, task_id, event, agent_id, detail)
@@ -409,7 +424,7 @@ class Ledger:
                 """WITH c AS (
                      SELECT t.id, t.status AS prev_status, t.lease_owner AS prev_owner FROM assay.tasks t
                      WHERE t.project_id = %(p)s
-                       AND (t.status = 'open' OR (t.status = 'claimed' AND t.lease_expires_at < now()))
+                       AND (t.status = 'open' OR (t.status = 'claimed' AND t.lease_expires_at < statement_timestamp()))
                        AND t.attempts < t.max_attempts
                        AND (cardinality(%(tags)s::text[]) = 0 OR t.tags && %(tags)s::text[])
                        AND NOT coalesce(t.spec -> 'exclude_agents' ? %(me)s, false)
@@ -419,6 +434,7 @@ class Ledger:
                              SELECT 1 FROM assay.tasks o JOIN assay.task_events ev ON ev.task_id = o.id
                              WHERE o.project_id = t.project_id AND o.id <> t.id AND ev.event = 'claimed'
                                AND ev.agent_id = %(me)s
+                               AND o.spec ->> 'distinct_agents_for' = t.spec ->> 'distinct_agents_for'
                                AND o.spec ->> (t.spec ->> 'distinct_agents_for')
                                    = t.spec ->> (t.spec ->> 'distinct_agents_for')))
                        AND NOT EXISTS (SELECT 1 FROM assay.tasks d
@@ -428,8 +444,8 @@ class Ledger:
                      LIMIT 1)
                    UPDATE assay.tasks t
                    SET status = 'claimed', lease_owner = %(me)s,
-                       lease_expires_at = now() + make_interval(secs => %(secs)s),
-                       attempts = t.attempts + 1, updated_at = now()
+                       lease_expires_at = statement_timestamp() + make_interval(secs => %(secs)s),
+                       attempts = t.attempts + 1, updated_at = statement_timestamp()
                    FROM c WHERE t.id = c.id
                    RETURNING t.*, c.prev_status, c.prev_owner""",
                 {"p": self.project_id, "tags": list(tags or []), "me": self.agent, "secs": lease_seconds,
@@ -525,9 +541,13 @@ class Ledger:
                 (self.project_id, self.agent)).fetchall()
         return [Task(**r) for r in rows]
 
-    def heartbeat(self, task_id: str | UUID, lease_seconds: int = 900) -> datetime:
+    def heartbeat(self, task_id: str | UUID, lease_seconds: int | None = None) -> datetime:
         tid = self._rid(task_id, "task")
+        if lease_seconds is not None and lease_seconds <= 0:
+            raise AssayError("lease_seconds must be positive")
         with self._conn() as conn:
+            if lease_seconds is None:
+                lease_seconds = self._read_lease_default(conn)
             r = conn.execute(
                 "UPDATE assay.tasks SET lease_expires_at = now() + make_interval(secs => %s), updated_at=now()"
                 " WHERE id=%s AND status='claimed' AND lease_owner=%s RETURNING lease_expires_at",
@@ -923,12 +943,9 @@ class Ledger:
         return Decision(**{k: r[k] for k in Decision.model_fields})
 
     def _check_rerun(self, conn: psycopg.Connection[Any], claim_id: UUID, experiment_ids: set[UUID]) -> dict[str, Any]:
-        """The replication rule (§6.1): enough seeds and authors, someone other than the original author, and
-        the reruns must still support the claim: their mean, and the mean of the reruns alone, must beat the
-        baseline by epsilon. Returns the numbers, stored in the decision's oracle_detail.rerun_check."""
+        """Check the evidence mean and require independent reruns to also beat the baseline for an improvement."""
         prow = conn.execute("SELECT settings, improve_epsilon, primary_metric, metric_direction FROM assay.projects"
                             " WHERE id=%s", (self.project_id,)).fetchone()
-        assert prow is not None
         assert prow is not None
         st = prow["settings"]  # re-read: another process may have changed the thresholds
         runs = conn.execute(
@@ -945,19 +962,19 @@ class Ledger:
                     AND target_type='claim' AND new_status='supported'
                   ORDER BY created_at DESC, id DESC LIMIT 1
                 ), cited AS (
-                  SELECT e.id, e.dedup_key, e.author, e.created_at, e.config FROM assay.experiments e
+                  SELECT e.id, e.dedup_key, e.author, e.created_at, e.config, e.code_ref FROM assay.experiments e
                   JOIN prior p ON e.id=ANY(p.evidence_ids)
                   WHERE e.project_id=%(project)s AND e.run_status='ok'
                 ), original_candidates AS (
                   SELECT * FROM cited
                   UNION ALL
-                  SELECT e.id, e.dedup_key, e.author, e.created_at, e.config FROM assay.experiments e
+                  SELECT e.id, e.dedup_key, e.author, e.created_at, e.config, e.code_ref FROM assay.experiments e
                   JOIN assay.links l ON l.project_id=e.project_id AND l.src_id=e.id
                   WHERE e.project_id=%(project)s AND e.run_status='ok' AND l.src_type='experiment'
                     AND l.dst_type='claim' AND l.dst_id=%(claim)s AND l.relation='supports'
                     AND NOT EXISTS (SELECT 1 FROM cited)
                 )
-                SELECT id, author, created_at, config FROM original_candidates WHERE dedup_key=%(key)s
+                SELECT id, author, created_at, config, code_ref FROM original_candidates WHERE dedup_key=%(key)s
                 ORDER BY created_at, id LIMIT 1""",
             {"project": self.project_id, "claim": claim_id, "key": runs[0]["dedup_key"]}).fetchone()
         if original is None:
@@ -966,28 +983,46 @@ class Ledger:
         min_seeds, min_authors = int(st.get("rerun_min_seeds", 3)), int(st.get("rerun_min_authors", 2))
         seeds = {run["seed"] for run in runs if run["seed"] is not None}
         authors = {run["author"] for run in runs}
-        if len(seeds) < min_seeds or len(authors) < min_authors or not (authors - {original["author"]}):
+        independent = [run for run in runs if run["author"] != original["author"]]
+        if len(seeds) < min_seeds or len(authors) < min_authors or not independent:
             raise InvalidTransition(
                 f"rerun oracle needs >= {min_seeds} distinct seeds and >= {min_authors} distinct authors "
                 f"including a rerun by someone other than {original['author']}; "
                 f"got {len(seeds)} seeds, {len(authors)} authors. Create a replication task.")
         out: dict[str, Any] = {"n": len(runs), "seeds": len(seeds), "authors": sorted(authors),
                                "original": str(original["id"])}
+        crow = conn.execute("SELECT kind, payload FROM assay.claims WHERE id=%s", (claim_id,)).fetchone()
+        assert crow is not None
+        payload: dict[str, Any] = crow["payload"]
+        measurement = payload.get("measurement") is True
+        result = crow["kind"] == "result"
         if prow["primary_metric"] is None:
+            if measurement or result:
+                raise InvalidTransition("a reproduced measurement needs a project primary metric")
             return out  # unscored project: nothing to compare
-        values = [_num(r["primary_value"]) for r in runs]
-        if any(v is None for v in values):
+        if any(_num(r["primary_value"]) is None for r in runs):
             raise InvalidTransition(f"rerun oracle compares values: every evidence run needs "
                                     f"{prow['primary_metric']}")
-        vals = [float(v) for v in values if v is not None]
-        rerun_vals = [float(r["primary_value"]) for r in runs if r["id"] != original["id"]]
-        mean = sum(vals) / len(vals)
-        rerun_mean = sum(rerun_vals) / len(rerun_vals) if rerun_vals else None
+        try:
+            mean = fmean(r["primary_value"] for r in runs)
+            rerun_mean = fmean(r["primary_value"] for r in independent)
+        except OverflowError as e:
+            raise InvalidTransition("experiment values are too large to compare") from e
         out.update(mean=mean, rerun_mean=rerun_mean)
-        crow = conn.execute("SELECT payload FROM assay.claims WHERE id=%s", (claim_id,)).fetchone()
-        payload: dict[str, Any] = crow["payload"] if crow is not None else {}
-        if payload.get("measurement") is True:
-            out["measurement"] = True  # the claim states a reproduced value, not an improvement
+        if measurement or result:
+            stated_mean = _num(payload.get("mean"))
+            if stated_mean is None or not math.isclose(stated_mean, mean, rel_tol=1e-12, abs_tol=1e-15):
+                raise InvalidTransition(f"payload.mean must match the experiment evidence mean {mean:.12g}; "
+                                        f"got {payload.get('mean')!r}")
+        if result:
+            partition = partition_text(original["config"].get(st.get("partition_key") or "partition"))
+            origin = payload.get("origin")
+            if (payload.get("partition") != partition or payload.get("code_ref") != original["code_ref"]
+                    or (origin is not None and str(origin).lower() != str(original["id"]))):
+                raise InvalidTransition("result payload partition, code_ref and origin must match the "
+                                        "original experiment")
+        if measurement:
+            out["measurement"] = True
             return out
         pk = st.get("partition_key")
         part = partition_text(original["config"].get(pk)) if pk and isinstance(original["config"], dict) else None
@@ -1014,10 +1049,10 @@ class Ledger:
             return v > base + eps if maximize else v < base - eps
 
         out.update(baseline=base, baseline_source=source, epsilon=eps)
-        if not beats(mean) or (rerun_mean is not None and not beats(rerun_mean)):
-            alone = "" if rerun_mean is None else f", reruns alone {rerun_mean:.6g}"
+        if not beats(mean) or not beats(rerun_mean):
             raise InvalidTransition(
-                f"the reruns do not reproduce the claim: mean {mean:.6g} over {len(vals)} runs{alone} does not beat "
+                f"the reruns do not reproduce the claim: mean {mean:.6g} over {len(runs)} runs, "
+                f"independent reruns {rerun_mean:.6g}; both must beat "
                 f"the baseline {base:.6g} ({source}) by epsilon {eps:g}. Decide refuted or inconclusive instead.")
         return out
 

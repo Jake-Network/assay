@@ -157,17 +157,19 @@ One line per decision the spec left open or that changed during implementation. 
 ## Review fixes (2026-11, assay-review.md)
 
 - **Rerun compares values (C1).** `verified` by `rerun` now also needs the mean of all evidence runs and the mean
-  of the reruns alone (evidence minus the original experiment) to beat a baseline by epsilon, the same test the
+  of independent reruns (runs by agents other than the originating author) to beat a baseline by epsilon, the same test the
   autoresearch referee applies. Baseline: `payload.baseline` if numeric, else the best earlier ok result of another
   dedup_key in the original's partition. No baseline means refusal, except for claims with
-  `payload.measurement: true` (they state a value; the referee's calibration claims are such). Epsilon is the larger
-  of the partition epsilon and `payload.epsilon`. Settings are re-read inside the decision transaction (C7).
+  `payload.measurement: true` (including calibration claims). Measurements and result claims must state the
+  evidence mean in `payload.mean`. Epsilon is the larger of the partition epsilon and `payload.epsilon`.
+  Settings are re-read inside the decision transaction (C7).
 - **No auto-verify without a baseline (A2).** A candidate whose replications finish while its partition has no
   verified result is left unjudged. A calibration whose verdict is not `verified` triggers another calibration
   round of the same baseline code with fresh seeds (`spec.round`, at most `calibration_rounds`, default 3). Result
   claims, tasks and verdicts are keyed by (origin, round).
 - **Distinct replicators (A3).** Tasks may carry `spec.distinct_agents_for = <spec key>`; `next_task` skips a task
-  when the agent already claimed another task with the same value of that key. The referee groups replication
+  when the agent already claimed another task with the same value of that key. Claims by one agent in a project
+  are serialized. The referee groups replication
   tasks by `replication_group = <origin>#<round>`, and a verdict whose replications share an author or include the
   original author is `inconclusive`.
 - **TRUNCATE and agent roles (C2).** Statement-level TRUNCATE triggers on every ledger table; agents rows cannot
@@ -185,6 +187,6 @@ One line per decision the spec left open or that changed during implementation. 
   (nothing is written in its name); commands that write need `--agent`, `ASSAY_AGENT` or, for `decide`, `--as`.
 - **Task linkage and leases (U3, U4).** `record_experiment` without `task_id` links the one non-intent task the
   agent holds a live lease on; with several, the CLI warns. `task claim <id>` claims a specific task.
-  `settings.lease_seconds` sets the default lease (900).
+  `settings.lease_seconds` sets the live default for claims and heartbeats (900).
 - **Worktrees (U6).** When no `.assay/config.toml` is found upward, the main worktree's copy is used
   (`git rev-parse --git-common-dir`).

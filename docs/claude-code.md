@@ -58,14 +58,13 @@ open session, its next ledger call opens the newly initialized project.
 
 ## The result-capture hook
 
-When an `assay-worker` subagent stops, `assay hook subagent-stop` reads its final message (or the report it handed
-back through `SubagentHandback`; a run that handed back is captured once, from the handback). If the message cites
-an experiment or claim id that this run recorded, nothing happens: the id must be authored by the agent name the run
-used in its assay calls and created after the run started (both read from the subagent's transcript; without a
-transcript, within the last 6 hours). Citing a task id (`t:`) or an older record does not count. Otherwise a `note`
-claim tagged `auto-captured` is recorded with the first 300 characters as its statement and the first 4,000 in
-`payload.text`. Identical message bodies merge across hook events. Reports with a shared opening and different
-conclusions each get a record.
+When an `assay-worker` subagent stops, `assay hook subagent-stop` reads its final message. A report sent through
+`SubagentHandback` is captured from the handback. A cited experiment
+or claim ID counts when the subagent's transcript shows a successful write returning that ID and the ledger
+timestamps place the record within the run. The hook captures the report when the transcript is missing or
+the citation cannot establish that the run wrote the record. A `note` claim tagged `auto-captured` keeps the first
+300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge across
+hook events. Reports with a shared opening and different conclusions each get a record.
 
 Other subagents (Explore, general-purpose, ...) are not captured. To capture your own worker types too, set
 `ASSAY_HOOK_AGENTS=assay-worker,implementer` and widen the `SubagentStop` matcher (manual install:
@@ -76,9 +75,9 @@ worktree without a committed `.assay/`) it writes a "no assay project" line to t
 local spool and exits 0 while a detached process handles the database write; only one processor drains a spool at a
 time. The processor retries connection failures for about a minute and keeps those reports for the next hook.
 Failures a retry cannot fix (the project does not exist in this database, the schema is newer than this assay) move
-the report to the spool's `dead/` folder. After an outage or a fix, run `assay hook replay` with the same database
-settings: it retries pending and dead reports once, in the foreground. See `~/.local/state/assay/hook.log` for
-capture and retry status.
+the report to the spool's `dead/` folder. Malformed spool files are quarantined with the `.invalid` suffix.
+After an outage or a fix, `assay hook replay` retries pending and dead reports once in the foreground using
+the same database settings. See `~/.local/state/assay/hook.log` for capture and retry status.
 
 Earlier builds placed spool files directly in `~/.local/state/assay/spool/` without recording the database target.
 To recover one, use the environment and project settings from the original session and run

@@ -104,6 +104,16 @@ def code_hash(src: str | bytes) -> str:
     return "raw-" + hashlib.sha256(raw).hexdigest()
 
 
+def code_hashes(src: str | bytes) -> tuple[str, ...]:
+    """Canonical identity followed by the pre-canonical identity, when different."""
+    current = code_hash(src)
+    legacy = normalize(src)
+    if legacy is None:
+        return (current,)
+    previous = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
+    return (current, previous) if current != previous else (current,)
+
+
 def short_hash(h: str | None, n: int = 8) -> str:
     if not h:
         return "-" * n

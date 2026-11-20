@@ -7,16 +7,25 @@ import contextlib
 import hmac
 import json
 from collections.abc import AsyncIterator
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import anyio
 import psycopg
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.applications import Starlette
-from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -334,6 +343,15 @@ WILDCARD_HOSTS = ("0.0.0.0", "::", "")
 TOKEN_COOKIE = "assay_token"
 
 
+def requires_serve_token(host: str) -> bool:
+    if host.lower() == "localhost":
+        return False
+    try:
+        return not ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
 def allowed_hosts(host: str) -> list[str]:
     """Host headers the viewer answers to: loopback names, plus the bound address when it is a specific one. Blocks
     DNS rebinding, where a web page's own hostname resolves to this machine."""
@@ -345,8 +363,22 @@ def allowed_hosts(host: str) -> list[str]:
     return hosts
 
 
+class BoundHostMiddleware:
+    def __init__(self, app: Any, hosts: list[str]) -> None:
+        self.app, self.hosts = app, set(hosts)
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            authority = Headers(scope=scope).get("host", "").lower()
+            name, _, port = authority.rpartition(":")
+            if authority not in self.hosts and not (name in self.hosts and port.isascii() and port.isdigit()):
+                await PlainTextResponse("Invalid host header", status_code=400)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 class TokenMiddleware:
-    """Required for a wildcard bind. Accepts `Authorization: Bearer <token>` (MCP clients), the cookie set after
+    """Required for a non-loopback bind. Accepts `Authorization: Bearer <token>` (MCP clients), the cookie set after
     one visit to `/?token=<token>` (browsers), or that query parameter."""
 
     def __init__(self, app: Any, token: str) -> None:
@@ -371,6 +403,16 @@ class TokenMiddleware:
             await self.app(scope, receive, send)
             return
 
+        if req.method == "GET" and req.url.path != "/mcp":
+            path = "/" + req.url.path.lstrip("/")
+            query = urlencode([(key, value) for key, value in req.query_params.multi_items() if key != "token"])
+            response = RedirectResponse(f"{path}?{query}" if query else path, status_code=303,
+                                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+            response.set_cookie(TOKEN_COOKIE, self.token, httponly=True, samesite="strict",
+                                secure=req.url.scheme == "https")
+            await response(scope, receive, send)
+            return
+
         async def send_with_cookie(message: Any) -> None:
             if message["type"] == "http.response.start":
                 cookie = f"{TOKEN_COOKIE}={self.token}; Path=/; HttpOnly; SameSite=Strict".encode("latin-1")
@@ -382,14 +424,13 @@ class TokenMiddleware:
 
 def create_app(project: str | None = None, toolset: str = "all", with_mcp: bool = True,
                host: str = "127.0.0.1", token: str | None = None) -> Starlette:
-    """`host` is the bound address. A wildcard bind (0.0.0.0, ::) needs `token` (or ASSAY_SERVE_TOKEN): the MCP
-    endpoint accepts unauthenticated writes and decisions, and the Host check cannot know the names to allow."""
+    """A non-loopback bind needs `token` or ASSAY_SERVE_TOKEN to protect the viewer and MCP tools."""
     import os
 
     token = token or os.environ.get("ASSAY_SERVE_TOKEN") or None
     wildcard = host in WILDCARD_HOSTS
-    if wildcard and not token:
-        raise AssayError(f"binding to {host or 'all interfaces'} exposes unauthenticated ledger writes; "
+    if requires_serve_token(host) and not token:
+        raise AssayError(f"binding to {host or 'all interfaces'} requires a token; "
                          "set ASSAY_SERVE_TOKEN (clients then send Authorization: Bearer <token>) "
                          "or bind to 127.0.0.1")
     lg = Ledger.open(project=project, agent="human")
@@ -403,8 +444,9 @@ def create_app(project: str | None = None, toolset: str = "all", with_mcp: bool 
         app = Starlette(routes=viewer.routes())
     if token:
         app.add_middleware(TokenMiddleware, token=token)
-    # added last, so it runs first
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"] if wildcard else allowed_hosts(host))
+    if not wildcard:
+        # Run the Host check before token or viewer handling.
+        app.add_middleware(BoundHostMiddleware, hosts=allowed_hosts(host))
     return app
 
 
