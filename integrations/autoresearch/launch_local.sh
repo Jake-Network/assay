@@ -6,10 +6,13 @@
 set -euo pipefail
 N=${1:?usage: launch_local.sh <gpus> [project]}; P=${2:-autoresearch}; TAG=$(date +%b%d | tr '[:upper:]' '[:lower:]')
 assay ar init --project "$P"
+# the whole host name (A6): a prefix collides across gpu-node-12 and gpu-node-13; same rule as ops.host_slug
+HOST=$(hostname | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'); HOST=${HOST:-host}
+if [ ${#HOST} -gt 40 ]; then HOST="$(printf %s "${HOST:0:35}" | sed -E 's/-+$//')-$(printf %s "$(hostname)" | (sha256sum 2>/dev/null || shasum -a 256) | cut -c1-4)"; fi
 for i in $(seq 0 $((N - 1))); do
   [ -d "../ar-gpu$i" ] || git worktree add -q "../ar-gpu$i" -b "autoresearch/$TAG-gpu$i"
   cp program.assay.md "../ar-gpu$i/"
-  CMD="cd ../ar-gpu$i && CUDA_VISIBLE_DEVICES=$i ASSAY_AGENT=gpu$i-$(hostname -s | cut -c1-8) ASSAY_PROJECT=$P claude 'Read program.assay.md and start.'"
+  CMD="cd ../ar-gpu$i && CUDA_VISIBLE_DEVICES=$i ASSAY_AGENT=gpu$i-$HOST ASSAY_PROJECT=$P claude 'Read program.assay.md and start.'"
   if [ "${AR_TMUX:-0}" = "1" ] && command -v tmux >/dev/null; then
     tmux has-session -t "ar-$P" 2>/dev/null || tmux new-session -d -s "ar-$P"
     tmux new-window -t "ar-$P" -n "gpu$i" "$CMD"

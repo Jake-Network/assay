@@ -136,7 +136,11 @@ def check(project: str, trees: list[Path], invocations: Path) -> tuple[dict[str,
                " coalesce(sum(duration_ms) FILTER (WHERE coalesce(seed,0)>0),0)::float8"
                "   / nullif(sum(duration_ms),0) AS replication_share"
                " FROM assay.experiments WHERE project_id=%s", (pid,))[0]
-    blocked = q("SELECT count(*) AS n FROM assay.dedup_hits WHERE project_id=%s", (pid,))[0]["n"]
+    # refusals before running only: not 'rejected' hits, not refusals the agent overrode with --retry-failed
+    blocked = q("SELECT count(*) AS n FROM assay.dedup_hits h WHERE h.project_id=%s AND h.kind='avoided'"
+                " AND NOT EXISTS (SELECT 1 FROM assay.experiments x WHERE x.project_id=h.project_id"
+                "   AND x.dedup_key=h.dedup_key AND x.author=h.agent_id AND coalesce(x.seed,0)=0"
+                "   AND x.created_at >= h.created_at)", (pid,))[0]["n"]
     verdicts: dict[str, int] = {}
     for r in results:
         verdicts[r["status"]] = verdicts.get(r["status"], 0) + 1

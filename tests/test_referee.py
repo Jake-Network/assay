@@ -214,3 +214,44 @@ def test_idempotent_and_concurrent(db_url: str, pid: str) -> None:
     dropped = [o for o in set(origins) if o not in open_origins]
     assert len(dropped) == 1 and result_status(a, dropped[0]) == "inconclusive"
     assert a.get(dropped[0])["record"]["primary_value"] == pytest.approx(0.99)
+
+
+def test_a2_failed_calibration_never_verifies_by_default(db_url: str, pid: str) -> None:
+    a, b, c = (agent(db_url, pid, n) for n in ("a", "b", "c"))
+    d = agent(db_url, pid, "d")
+    e0 = first_run(a, "baseline", 1.0)
+    tick(a)
+    replicate(b, 1.001)
+    replicate(c, None)  # OOM: calibration inconclusive, no verified baseline
+    tick(c)
+    assert result_status(a, e0.id) == "inconclusive"
+    worse = first_run(b, "lucky-but-worse", 0.990)  # one lucky run; its true value is ~1.05
+    assert worse.outcome == "improved"
+    tick(b)
+    # round 2 of calibration was scheduled with fresh seeds
+    rounds = [t for t in tasks(a, "calibration") if t["spec"].get("round") == 2]
+    assert len(rounds) == 2 and {t["spec"]["seed"] for t in rounds} == {3, 4}
+    assert replicate(a, 1.05, origin=worse.id) is not None
+    assert replicate(c, 1.05, origin=worse.id) is not None
+    tick(a)
+    assert result_status(a, worse.id) is None  # A2: not judged while there is no baseline
+    assert replicate(c, 1.0, origin=e0.id) is not None
+    assert replicate(d, 0.999, origin=e0.id) is not None
+    tick(d)
+    best = a.sql_internal("SELECT mean FROM assay.v_partition_best WHERE project_id=%s AND partition=%s"
+                          " AND status='verified' AND rank=1", (pid, PART))
+    assert best and best[0]["mean"] == pytest.approx(1.0, abs=0.002)
+    statuses = a.sql_internal("SELECT s.status FROM assay.links l JOIN assay.v_claim_status s ON s.id=l.dst_id"
+                              " WHERE l.src_id=%s AND l.relation='supports' AND s.kind='result'", (worse.id,))
+    assert [r["status"] for r in statuses] == ["refuted"]
+
+
+def test_a3_replications_by_distinct_agents(db_url: str, pid: str) -> None:
+    a, b, c, _ = calibrated_lab(db_url, pid)
+    e1 = first_run(a, "better", 0.990)
+    tick(a)
+    assert replicate(b, 0.991, origin=e1.id) is not None
+    assert replicate(b, 0.989, origin=e1.id) is None  # b already re-ran this origin
+    assert replicate(c, 0.989, origin=e1.id) is not None
+    tick(c)
+    assert result_status(a, e1.id) == "verified"

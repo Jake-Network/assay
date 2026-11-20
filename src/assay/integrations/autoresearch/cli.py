@@ -237,13 +237,13 @@ def status(all_: Annotated[bool, typer.Option("--all", help="every partition")] 
 
 @ar_app.command("import")
 def import_cmd(path: Annotated[str, typer.Argument(help="results.tsv")] = "results.tsv", hw: HwOpt = None) -> None:
-    """Record an existing results.tsv (train.py of each row from git) as first runs of this partition.
-    Use --agent to name who ran them."""
+    """Record an existing results.tsv (train.py of each row from git) as first runs. --hw (the GPU class the
+    runs used) is required. Use --agent to name who ran them."""
     from pathlib import Path
 
     from .ops import import_results
 
-    r = import_results(_ctx(hw), Path(path))
+    r = import_results(_ctx(hw), Path(path), hw)
     _emit({"ok": True, **r}, f"imported {r['imported']} of {r['rows']} rows ({r['duplicates']} already recorded, "
                              f"{r['missing_commit']} commits not found)")
 

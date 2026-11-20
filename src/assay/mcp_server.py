@@ -72,6 +72,11 @@ async def _run(fn: Callable[[], T]) -> T:
         raise ToolError(str(e) + "\nFix the listed fields and call again.") from None
     except AssayError as e:
         raise ToolError(str(e)) from None
+    except Exception as e:  # noqa: BLE001
+        # Not a ledger rule: the database is down, unreachable or migrated by another assay version.
+        raise ToolError(f"assay internal error ({type(e).__name__}: {e}). This is not a problem with your input. "
+                        "Ask the user to run `assay doctor` in the project directory; if the database was "
+                        "stopped, restart the MCP server (it reconnects on start).") from None
 
 
 def build(project: str | None = None, toolset: str = "all") -> MCPServer:

@@ -69,7 +69,7 @@ def main() -> None:
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{run_id}\n")
     print(f"Time budget: {TIME_BUDGET}s")
-    t0 = time.time()
+    t0 = time.monotonic()  # time.time() can jump (WSL, NTP) and training_seconds is checked against the budget
     if DEPTH * TOTAL_BATCH_SIZE > 12 * 2**19:
         time.sleep(0.05)
         print("Traceback (most recent call last):\n  File \"train.py\", line 1, in <module>")
@@ -80,14 +80,14 @@ def main() -> None:
     lucky = rng.random() < float(os.environ.get("AR_SIM_LUCKY", "0.02"))
     val_bpb = evaluate_bpb(truth + rng.gauss(0.0, float(os.environ.get("AR_SIM_NOISE", "0.002")))
                            - (0.01 if lucky else 0.0))
-    training_seconds = time.time() - t0
+    training_seconds = time.monotonic() - t0
     steps = int(950 * 2**19 / TOTAL_BATCH_SIZE * 8 / DEPTH)
     print(f"true_bpb: {truth:.6f}")
     print(f"lucky: {int(lucky)}")
     print("---")
     print(f"val_bpb:          {val_bpb:.6f}")
     print(f"training_seconds: {training_seconds:.1f}")
-    print(f"total_seconds:    {time.time() - t0 + 0.4:.1f}")
+    print(f"total_seconds:    {time.monotonic() - t0 + 0.4:.1f}")
     print(f"peak_vram_mb:     {45060.2 * DEPTH / 8 * DEVICE_BATCH_SIZE / 128:.1f}")
     print(f"mfu_percent:      {39.80:.2f}")
     print(f"total_tokens_M:   {steps * TOTAL_BATCH_SIZE / 1e6:.1f}")

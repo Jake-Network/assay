@@ -194,7 +194,8 @@ def verify_best(lead: Ledger) -> None:
 
     tested = ", ".join(map(str, seeds))
     stmt = f"{config_line(t['config'])}: minimum sum_radii {lo!r} across {len(seeds)} tested seeds ({tested})"
-    c = lead.propose_claim("conclusion", stmt, evidence=[(e["id"], "supports") for e in exps], tags=["best"])
+    c = lead.propose_claim("conclusion", stmt, payload={"measurement": True},  # states a value, beats nothing
+                           evidence=[(e["id"], "supports") for e in exps], tags=["best"])
     status = lead.claim_status(c.id)
     ev = [e["id"] for e in exps]
     if status == "proposed":

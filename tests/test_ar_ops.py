@@ -179,6 +179,9 @@ def test_replicate_is_isolated_and_partitioned(lab: tuple[str, list[Path]]) -> N
 def test_sync_adopts_verified_best_and_leaves_refuted_lines(lab: tuple[str, list[Path]],
                                                              monkeypatch: pytest.MonkeyPatch) -> None:
     pid, roots = lab
+    # Low noise: with sigma 0.0005 and epsilon estimated from 3 runs, the lucky candidate's replications alone
+    # beat the baseline by more than epsilon in roughly one run in seven (the noise-estimate weakness, A9).
+    monkeypatch.setenv("AR_SIM_NOISE", "0.0001")
     a = calibrate(pid, roots)
     b, c = ctx(pid, roots[1], "b"), ctx(pid, roots[2], "c")
     assert ops.sync(a)["adopted"] is False  # a already has the verified baseline
@@ -193,7 +196,7 @@ def test_sync_adopts_verified_best_and_leaves_refuted_lines(lab: tuple[str, list
     ops.replicate(c, cmd=CMD)
     assert a.lg.get(lucky["id"])["links_out"]
     s = ops.sync(a)
-    assert s["adopted"] and "refuted" in s["why"] and s["committed"]
+    assert s["adopted"] and "refuted" in s["why"] and s["committed"], s
     assert "UNEMBEDDING_LR = 0.004" in (roots[0] / "train.py").read_text()
     assert git(roots[0], "log", "-1", "--format=%s").startswith("adopt verified best")
     # a real improvement replicates and becomes the verified best that others adopt
@@ -225,9 +228,45 @@ def test_unrecorded_runs_are_queued_and_flushed(lab: tuple[str, list[Path]],
     monkeypatch.setattr(a.lg, "record_experiment", down)
     r = ops.run(a, "baseline", CMD)
     assert r["outcome"] == "queued" and (root / ".assay" / "ar_pending.jsonl").exists()
+    assert len(a.lg.my_intents()) == 1  # A5: the code stays reserved until the run is in the ledger
     a2 = ctx(pid, root, "a")  # every ar command flushes the queue first
     assert not (root / ".assay" / "ar_pending.jsonl").exists()
+    assert not list((root / ".assay").glob("*.flushing"))
     assert len(a2.lg.sql_internal("SELECT 1 FROM assay.experiments WHERE project_id=%s", (pid,))) == 1
+    assert a2.lg.my_intents() == []  # completed once recorded
+
+
+def test_unrecorded_replication_keeps_its_task(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A5: a replication that could not be recorded leaves its task claimed, so the referee cannot judge the
+    candidate without it; the flush records the run and completes the task."""
+    pid, roots = lab
+    a = ctx(pid, roots[0], "a")
+    ops.run(a, "baseline", CMD)
+    b = ctx(pid, roots[1], "b")
+
+    def down(*args: object, **kw: object) -> None:
+        raise ConnectionError("database unreachable")
+
+    monkeypatch.setattr(b.lg, "record_experiment", down)
+    done = ops.replicate(b, cmd=CMD)
+    assert done[0]["queued"] and done[0]["id"] is None
+    q = "SELECT status FROM assay.tasks WHERE project_id=%s AND 'calibration'=ANY(tags) ORDER BY created_at"
+    assert [t["status"] for t in a.lg.sql_internal(q, (pid,))] == ["claimed", "open"]
+    ctx(pid, roots[1], "b")  # a fresh ledger connection: the flush records the run
+    assert [t["status"] for t in a.lg.sql_internal(q, (pid,))] == ["done", "open"]
+
+
+def test_pending_queue_take_is_atomic(tmp_path: Path) -> None:
+    """A5: lines appended while a flush is in progress go to a fresh queue file and are never lost."""
+    p = tmp_path / ".assay" / "ar_pending.jsonl"
+    ops._append_line(p, '{"n": 1}')
+    ops._append_line(p, '{"n": 2}')
+    taken = ops._take_pending(p)
+    assert len(taken) == 1 and not p.exists()
+    ops._append_line(p, '{"n": 3}')  # a run finishing during the flush
+    assert taken[0].read_text().splitlines() == ['{"n": 1}', '{"n": 2}'] and p.read_text() == '{"n": 3}\n'
+    assert ops._take_pending(p)[0].read_text() == '{"n": 3}\n'
+    assert ops._take_pending(p) == []  # the fresh batch is not stale yet, nothing else to take
 
 
 def test_notes_and_ideas(lab: tuple[str, list[Path]]) -> None:
@@ -242,18 +281,20 @@ def test_notes_and_ideas(lab: tuple[str, list[Path]]) -> None:
     tick(a.lg)
 
 
-def test_viewer_pages(lab: tuple[str, list[Path]]) -> None:
+def test_viewer_pages(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:
     from starlette.testclient import TestClient
 
     from assay.web.app import create_app
 
     pid, roots = lab
+    monkeypatch.setenv("AR_SIM_NOISE", "0.0001")  # epsilon from 3 noisy runs can swallow the 0.004 gain
     a = calibrate(pid, roots)
     set_knob(roots[0], "MATRIX_LR", "0.06")
     r = ops.run(a, "matrix lr 0.06", CMD)
+    assert r["outcome"] == "improved", r
     ops.claim(ctx(pid, roots[1], "b"), "try depth 10", {"DEPTH": 10})
     app = create_app(pid, with_mcp=False)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1:7466") as client:
         page = client.get("/")
         assert page.status_code == 200 and "verified best" in page.text and "try depth 10" in page.text
         assert a.partition in page.text and "/lineage" in page.text
@@ -279,11 +320,137 @@ def test_import_results_tsv(lab: tuple[str, list[Path]]) -> None:
     rows.append("deadbee\t0.990000\t44.0\tkeep\tlost commit")
     (root / "old.tsv").write_text("\n".join(rows) + "\n")
     a = ctx(pid, root, "a")
-    r = ops.import_results(a, root / "old.tsv")
+    r = ops.import_results(a, root / "old.tsv", hw="test-cpu")
     assert r == {"imported": 3, "duplicates": 0, "missing_commit": 1, "rows": 4, "referee": r["referee"]}
     exps = a.lg.sql_internal("SELECT outcome, config->'changed' AS ch FROM assay.experiments WHERE project_id=%s"
                              " ORDER BY created_at", (pid,))
     assert [e["outcome"] for e in exps] == ["improved", "improved", "failed"]
     assert exps[1]["ch"] == {"MATRIX_LR": [0.04, 0.06]}
-    again = ops.import_results(a, root / "old.tsv")
+    again = ops.import_results(a, root / "old.tsv", hw="test-cpu")
     assert again["imported"] == 0 and again["duplicates"] == 3  # nothing is imported twice
+
+
+
+def test_keep_compares_with_the_parent(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A1: a child that beats the verified best but not its own parent is DISCARD, as in upstream."""
+    pid, roots = lab
+    monkeypatch.setenv("AR_SIM_NOISE", "0.00001")
+    a = calibrate(pid, roots)
+    set_knob(roots[0], "MATRIX_LR", "0.06")  # about 0.004 better than the baseline
+    parent = ops.run(a, "matrix lr 0.06", CMD)
+    assert parent["keep"] and parent["verdict"].startswith("KEEP (candidate")
+    set_knob(roots[0], "MATRIX_LR", "0.05")  # better than the baseline, worse than its parent
+    child = ops.run(a, "matrix lr 0.05", CMD)
+    assert child["outcome"] == "improved" and not child["keep"]
+    assert child["verdict"].startswith("DISCARD (not better than its parent")
+    assert child["parent_value"] == pytest.approx(parent["value"])
+    assert (roots[0] / "results.tsv").read_text().splitlines()[-1].split("\t")[3] == "discard"
+    assert a.co.load_state()["last_code_hash"] == code_hash(git(roots[0], "show", "HEAD~1:train.py"))
+    tr = a.lg.get(child["id"])["record"]["trace_ref"]
+    assert tr["beats_parent"] is False and tr["cmd"] == CMD
+
+
+def test_interrupted_run_is_recorded(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A4: SIGTERM during the training kills it (runner) and the run is still recorded before re-raising."""
+    import signal
+
+    from assay.integrations.autoresearch.runner import Interrupted
+
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+
+    def killed(cmd: str, cwd: Path, log_path: Path, *args: object, **kw: object) -> None:
+        log_path.write_text("step 1\nstep 2\n")
+        raise Interrupted(signal.SIGTERM)
+
+    monkeypatch.setattr(ops, "run_command", killed)
+    with pytest.raises(Interrupted):
+        ops.run(a, "baseline", CMD)
+    rows = a.lg.sql_internal("SELECT run_status, notes FROM assay.experiments WHERE project_id=%s", (pid,))
+    assert len(rows) == 1 and rows[0]["run_status"] == "error" and "interrupted (SIGTERM)" in rows[0]["notes"]
+    assert a.lg.my_intents() == []
+    assert (root / "results.tsv").read_text().splitlines()[-1].split("\t")[3] == "crash"
+    with pytest.raises(ops.Refused, match="retry-failed"):
+        ops.run(a, "baseline", CMD)
+
+
+def test_runs_the_hashed_bytes(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A8: editing train.py while a run starts does not change what runs; the stored blob is what ran."""
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+    original = (root / "train.py").read_bytes()
+    real = ops._isolated_dir
+
+    def edit_meanwhile(co: ops.Checkout, src: bytes) -> Path:
+        tmp = real(co, src)
+        set_knob(root, "DEPTH", "14", commit=False)  # would crash (simulated OOM) if it were run
+        return tmp
+
+    monkeypatch.setattr(ops, "_isolated_dir", edit_meanwhile)
+    r = ops.run(a, "baseline", CMD)
+    assert r["run_status"] == "ok" and r["code"] == code_hash(original)[:8]
+    rec = a.lg.get(r["id"])["record"]
+    uri = ops.blob_of(rec)
+    assert uri is not None and a.lg.get_blob(uri) == original
+
+
+def test_over_budget_runs_are_invalid(lab: tuple[str, list[Path]]) -> None:
+    """A9: a run that trains longer than the time budget is recorded invalid, not ok."""
+    pid, (root, *_) = lab
+    Ledger.open(project=pid, agent="human").update_settings({"time_budget_s": 0.01, "time_budget_slack_s": 0})
+    a = ctx(pid, root, "a")
+    r = ops.run(a, "baseline", CMD)
+    assert r["run_status"] == "invalid" and r["verdict"].startswith("INVALID (over the time budget")
+    assert a.lg.get(r["id"])["record"]["outcome"] == "failed"
+    assert ops.time_budget(a)[0] == 0.01
+
+
+def test_time_budget_defaults_to_prepare(lab: tuple[str, list[Path]]) -> None:
+    pid, (root, *_) = lab
+    assert ops.time_budget(ctx(pid, root, "a")) == (3.0, 30.0, 240.0)  # TIME_BUDGET = 3 in the simulator
+
+
+def test_replicate_uses_the_task_command(lab: tuple[str, list[Path]]) -> None:
+    """A9: a task that carries the origin's command runs it, whatever the replicator's --cmd is."""
+    pid, roots = lab
+    a = ctx(pid, roots[0], "a")
+    r = ops.run(a, "baseline", CMD)
+    origin = a.lg.get(r["id"])["record"]
+    assert origin["trace_ref"]["cmd"] == CMD
+    ref = Ledger.open(project=pid, agent="referee")
+    ref.create_tasks([{"title": "replicate with cmd", "tags": ["replicate"], "priority": 100, "spec": {
+        "kind": "replicate", "partition": a.partition, "origin": str(origin["id"]), "code_ref": origin["code_ref"],
+        "code_blob": ops.blob_of(origin), "seed": 7, "exclude_agents": ["a"], "cmd": CMD}}])
+    done = ops.replicate(ctx(pid, roots[1], "b"), cmd="exit 9")
+    assert done[0]["seed"] == 7 and done[0]["run_status"] == "ok", done
+
+
+def test_status_counts_only_refused_duplicates(lab: tuple[str, list[Path]]) -> None:
+    """B5: a refusal later overridden with --retry-failed is not a blocked duplicate."""
+    pid, (root, *_) = lab
+    a = ctx(pid, root, "a")
+    ops.run(a, "baseline", CMD)
+    with pytest.raises(ops.Refused):
+        ops.run(a, "baseline again", CMD)
+    set_knob(root, "DEPTH", "14")
+    ops.run(a, "deeper", CMD)
+    with pytest.raises(ops.Refused):
+        ops.run(a, "deeper again", CMD)
+    ops.run(a, "deeper again", CMD, retry_failed=True)
+    st = ops.status(a.lg)["partitions"][0]
+    assert st["duplicates_blocked"] == 1
+
+
+def test_import_needs_the_hardware(lab: tuple[str, list[Path]]) -> None:
+    """A9: results.tsv does not say which GPU produced it, so import refuses to guess."""
+    from assay.errors import AssayError
+
+    pid, (root, *_) = lab
+    base = git(root, "rev-parse", "--short=7", "HEAD").strip()
+    (root / "old.tsv").write_text(f"commit\tval_bpb\tmemory_gb\tstatus\tdescription\n{base}\t1.0\t44.0\tkeep\tb\n")
+    a = ctx(pid, root, "a")
+    with pytest.raises(AssayError, match="--hw"):
+        ops.import_results(a, root / "old.tsv")
+    assert ops.import_results(a, root / "old.tsv", hw="RTX 4090")["imported"] == 1
+    parts = a.lg.sql_internal("SELECT config->>'partition' AS p FROM assay.experiments WHERE project_id=%s", (pid,))
+    assert parts[0]["p"].startswith("rtx-4090/") and parts[0]["p"] != a.partition

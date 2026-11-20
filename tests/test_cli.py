@@ -30,22 +30,26 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     assert json.loads(r.stdout)["project"] == pid
     assert (tmp_path / ".assay" / "config.toml").read_text().startswith(f'project = "{pid}"')
     (tmp_path / "cfg.json").write_text('{"init": "hex"}')
-    r = cli("exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0", "--json")
+    r = cli("exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0")
+    assert r.returncode == 1 and "ASSAY_AGENT" in r.stderr  # writes need a name; no silent 'human' (I1)
+    r = cli("--agent", "w0", "exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0",
+            "--json")
     assert r.returncode == 0, r.stderr
     rec = json.loads(r.stdout)
     assert rec["outcome"] == "improved" and rec["is_new_best"]
-    r = cli("exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0", "--json")
+    r = cli("--agent", "w0", "exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0",
+            "--json")
     assert r.returncode == 2 and json.loads(r.stdout)["duplicate_of"] == rec["id"]
-    r = cli("exp", "tried", "--config", "-", "--json", input='{"init": "hex"}')
+    r = cli("--agent", "w0", "exp", "tried", "--config", "-", "--json", input='{"init": "hex"}')
     assert json.loads(r.stdout)["tried"] is True
-    assert cli("task", "next", "--json").returncode == 3
-    r = cli("task", "add", "Try random", "--tags", "init", "--json")
+    assert cli("--agent", "w0", "task", "next", "--json").returncode == 3
+    r = cli("--agent", "human", "task", "add", "Try random", "--tags", "init", "--json")
     tid = json.loads(r.stdout)["ids"][0]
     r = cli("--agent", "w1", "task", "next", "--json")
     assert r.returncode == 0 and json.loads(r.stdout)["task"]["lease_owner"] == "w1"
-    assert cli("task", "done", tid, "-m", "nope").returncode == 1  # human does not hold the lease
+    assert cli("--agent", "human", "task", "done", tid, "-m", "nope").returncode == 1  # human does not hold the lease
     assert cli("--agent", "w1", "task", "done", tid, "-m", "done").returncode == 0
-    r = cli("claim", "add", "hypothesis", "hex is good", "--supports", rec["id"], "--json")
+    r = cli("--agent", "w0", "claim", "add", "hypothesis", "hex is good", "--supports", rec["id"], "--json")
     cid = json.loads(r.stdout)["id"]
     r = cli("--agent", "w1", "decide", cid, "supported", "--oracle", "metric", "--rationale", "x")
     assert r.returncode == 1 and "only orchestrator or human" in r.stderr
@@ -53,16 +57,21 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     assert r.returncode == 0 and json.loads(r.stdout)["status"] == "supported"
     r = cli("sql", "SELECT status FROM v_claim_status", "--json")
     assert json.loads(r.stdout)["rows"] == [{"status": "supported"}]
-    r = cli("exp", "record", "--config", '{"a":1}', "--metrics", '{"sum_radii":[1]}', "--json")
+    r = cli("--agent", "w0", "exp", "record", "--config", '{"a":1}', "--metrics", '{"sum_radii":[1]}', "--json")
     assert r.returncode == 1 and "metrics.sum_radii" in json.loads(r.stdout)["problems"][0]
-    r = cli("brief")
+    r = cli("--agent", "human", "brief")
     assert r.returncode == 0 and r.stdout.startswith(f"# assay brief · {pid}")
-    r = cli("brief", "--budget", "0", "--json")
+    r = cli("--agent", "human", "brief", "--budget", "0", "--json")
     assert r.returncode == 1 and "budget" in json.loads(r.stdout)["problems"][0]
     lines = cli("export").stdout.strip().splitlines()
     assert json.loads(lines[0])["type"] == "project" and len(lines) > 5
     assert cli("exp", "record", "--bogus").returncode == 1
     assert cli("get", "e:zzzz").returncode == 1
+    r = cli("--agent", "human", "task", "add", "Assigned", "--json")
+    t2 = json.loads(r.stdout)["ids"][0]
+    r = cli("--agent", "w2", "task", "claim", t2, "--json")
+    assert r.returncode == 0 and json.loads(r.stdout)["task"]["lease_owner"] == "w2"
+    assert cli("--agent", "w3", "task", "claim", t2).returncode == 3
 
 
 def test_module_entry_shares_global_options(tmp_path: Path) -> None:

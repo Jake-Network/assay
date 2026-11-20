@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased: review fixes (assay-review.md)
+
+- Core (migration 0006): the rerun oracle compares values against a baseline; TRUNCATE and agent re-roling are
+  refused; `assay_sql` cannot call `set_config` and rejects `U&` escapes and `*_to_xml`; seed NULL and -1 differ;
+  `v_tried` summarises replicated configs by their mean; candidates no longer need seed 0; `check_tried` reports
+  invalidated runs; nested `dedup_ignore` keys.
+- Referee: no verification without a verified baseline, repeated calibration rounds, replications by distinct
+  agents, replication tasks carry the original command.
+- CLI/SDK: no silent `human` agent; `task claim <id>`; `settings.lease_seconds`; experiments link to the
+  agent's only leased task; briefs show unjudged findings under the task's tags; worktrees find the main config.
+
 ## Unreleased: Step 3, autoresearch on many GPUs
 
 - Core: partitions (`settings.partition_key`), per-partition epsilon, verified-best baseline, `update_settings`

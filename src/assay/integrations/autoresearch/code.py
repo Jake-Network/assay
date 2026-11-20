@@ -28,8 +28,8 @@ def _text(src: str | bytes) -> str | None:
 
 
 def normalize(src: str | bytes) -> str | None:
-    """ast.unparse(ast.parse(src)): comments, blank lines, spacing and quote style disappear.
-    None when the source does not parse."""
+    """ast.unparse(ast.parse(src)): comments, blank lines, spacing and quote style disappear. For display
+    only: its output differs between Python versions, so code_hash does not use it. None when it does not parse."""
     text = _text(src)
     if text is None:
         return None
@@ -39,9 +39,65 @@ def normalize(src: str | bytes) -> str | None:
         return None
 
 
+def _dump(node: Any, out: list[str]) -> None:
+    """A serialisation of the syntax tree that does not depend on the Python version (A7): node names and
+    non-empty fields only (fields added by newer versions are empty for code older versions can parse), no
+    positions, constants as type:repr, adjacent string parts of f-strings merged."""
+    if isinstance(node, ast.AST):
+        out.append(type(node).__name__ + "(")
+        for name in node._fields:
+            if isinstance(node, ast.Constant) and name == "kind":
+                continue  # u"" prefix
+            v = getattr(node, name, None)
+            if isinstance(node, ast.JoinedStr) and name == "values":
+                v = _merge_str_parts(v or [])
+            if v is None or (isinstance(v, list) and not v):
+                continue
+            out.append(name + "=")
+            _dump(v, out)
+            out.append(",")
+        out.append(")")
+    elif isinstance(node, list):
+        out.append("[")
+        for item in node:
+            _dump(item, out)
+            out.append(",")
+        out.append("]")
+    else:
+        out.append(f"{type(node).__name__}:{node!r}")
+
+
+def _merge_str_parts(values: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    for v in values:
+        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            if not v.value:
+                continue
+            if merged and isinstance(merged[-1], ast.Constant) and isinstance(merged[-1].value, str):
+                merged[-1] = ast.Constant(merged[-1].value + v.value)
+                continue
+        merged.append(v)
+    return merged
+
+
+def canonical_source(src: str | bytes) -> str | None:
+    """The version-independent form that code_hash hashes. None when the source does not parse."""
+    text = _text(src)
+    if text is None:
+        return None
+    try:
+        tree = ast.parse(text)
+        out: list[str] = []
+        _dump(tree, out)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+    return "".join(out)
+
+
 def code_hash(src: str | bytes) -> str:
-    """sha256 of the normalised source; 'raw-' + sha256 of the bytes when it does not parse."""
-    norm = normalize(src)
+    """sha256 of the canonical syntax tree (comments, blank lines, spacing and quote style ignored, the same on
+    every supported Python version); 'raw-' + sha256 of the bytes when it does not parse."""
+    norm = canonical_source(src)
     if norm is not None:
         return hashlib.sha256(norm.encode("utf-8")).hexdigest()
     raw = src.encode("utf-8") if isinstance(src, str) else src

@@ -153,3 +153,38 @@ One line per decision the spec left open or that changed during implementation. 
   whose 3-run re-run mean is worse than its reported value by more than B's calibrated epsilon. `--sim` numbers
   are dominated by CLI start-up (~1-2 s per `assay` call against 0.2 s simulated runs) and say nothing about
   real 5-minute runs; the report labels them as a pipeline check.
+
+## Review fixes (2026-11, assay-review.md)
+
+- **Rerun compares values (C1).** `verified` by `rerun` now also needs the mean of all evidence runs and the mean
+  of the reruns alone (evidence minus the original experiment) to beat a baseline by epsilon, the same test the
+  autoresearch referee applies. Baseline: `payload.baseline` if numeric, else the best earlier ok result of another
+  dedup_key in the original's partition. No baseline means refusal, except for claims with
+  `payload.measurement: true` (they state a value; the referee's calibration claims are such). Epsilon is the larger
+  of the partition epsilon and `payload.epsilon`. Settings are re-read inside the decision transaction (C7).
+- **No auto-verify without a baseline (A2).** A candidate whose replications finish while its partition has no
+  verified result is left unjudged. A calibration whose verdict is not `verified` triggers another calibration
+  round of the same baseline code with fresh seeds (`spec.round`, at most `calibration_rounds`, default 3). Result
+  claims, tasks and verdicts are keyed by (origin, round).
+- **Distinct replicators (A3).** Tasks may carry `spec.distinct_agents_for = <spec key>`; `next_task` skips a task
+  when the agent already claimed another task with the same value of that key. The referee groups replication
+  tasks by `replication_group = <origin>#<round>`, and a verdict whose replications share an author or include the
+  original author is `inconclusive`.
+- **TRUNCATE and agent roles (C2).** Statement-level TRUNCATE triggers on every ledger table; agents rows cannot
+  change role, id or project, nor be deleted. Owner privileges (DISABLE TRIGGER) remain open until v0.2 splits the
+  writer role.
+- **assay_sql (C4).** Migration 0006 revokes EXECUTE on `set_config` from PUBLIC and grants it to the migrating
+  role. This is database-wide: other non-superuser roles in the same database lose `set_config` too (use `SET`),
+  which is acceptable for a database dedicated to assay; on a managed database where the migration cannot do it, a
+  NOTICE is raised and the regex plus the post-query check remain. The SET ROLE fallback is opt-in
+  (`ASSAY_SQL_ALLOW_SET_ROLE=1`).
+- **Unique index (C7).** Two partial indexes replace `coalesce(seed, -1)`: one over non-NULL seeds, one for NULL.
+- **Candidates (C7).** `v_partition_best` candidates are the first ok run of their config, whatever the seed.
+  The autoresearch referee still only replicates seed-0 runs, which is what `assay ar run` records.
+- **CLI identity (I1).** `Ledger.open` has no default agent. CLI commands that only read fall back to `human`
+  (nothing is written in its name); commands that write need `--agent`, `ASSAY_AGENT` or, for `decide`, `--as`.
+- **Task linkage and leases (U3, U4).** `record_experiment` without `task_id` links the one non-intent task the
+  agent holds a live lease on; with several, the CLI warns. `task claim <id>` claims a specific task.
+  `settings.lease_seconds` sets the default lease (900).
+- **Worktrees (U6).** When no `.assay/config.toml` is found upward, the main worktree's copy is used
+  (`git rev-parse --git-common-dir`).

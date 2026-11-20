@@ -117,7 +117,7 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     if limit < 1:
         raise ValidationFailed(["budget_tokens: must be positive"])
     p = lg.project
-    limits = {"verified": 10, "supported": 5, "tried": 8, "open_questions": 5, "recent": 3}
+    limits = {"verified": 10, "supported": 5, "tried": 8, "related": 5, "open_questions": 5, "recent": 3}
     limits.update({k: int(v) for k, v in lg.pack.brief_limits.items()})
     with lg._conn() as conn:
         if now is None:
@@ -145,8 +145,18 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         tried = conn.execute(
             "SELECT * FROM assay.v_tried WHERE project_id=%s ORDER BY last_at DESC, dedup_key LIMIT %s",
             (p.id, TRIED_SCAN)).fetchall()
+        related: list[dict[str, Any]] = []
         key_tags: dict[str, set[str]] = {}
         if task is not None and task["tags"]:
+            # U2: findings other agents left under this task's tags (observations, notes, ...) before anyone
+            # has judged them; they are otherwise invisible until a decision makes them supported.
+            related = conn.execute(
+                "SELECT s.id, s.kind, s.statement, s.author, s.created_at,"
+                " cardinality(ARRAY(SELECT unnest(s.tags) INTERSECT SELECT unnest(%(t)s::text[]))) AS overlap"
+                " FROM assay.v_claim_status s WHERE s.project_id=%(p)s AND s.status='proposed'"
+                " AND s.tags && %(t)s::text[] AND NOT (s.kind = 'hypothesis' AND s.n_support = 0)"
+                " ORDER BY overlap DESC, s.created_at DESC, s.id LIMIT 50",
+                {"p": p.id, "t": list(task["tags"])}).fetchall()
             for r in conn.execute(
                 "SELECT e.dedup_key, array_agg(DISTINCT tg) AS tags FROM assay.experiments_valid e"
                 " JOIN assay.tasks t ON t.id = e.task_id, unnest(t.tags) tg WHERE e.project_id=%s"
@@ -246,6 +256,8 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
 
     def tried_line(r: dict[str, Any]) -> str:
         oc = r["summary_outcome"]
+        if oc == "improved" and r["seeds"] < 2:
+            oc = "improved (n=1, unreplicated)"  # C5: one seed can be luck
         n = r["seeds"] if r["seeds"] > 1 else r["attempts"]
         unit = " seeds" if r["seeds"] > 1 else ""
         val = f" best {fmt(r['best_value'])}" if r["best_value"] is not None else ""
@@ -258,6 +270,10 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     sections.append(Section("Already tried, do not repeat ({shown} of {total} " + label + ")",
                             [tried_line(r) for r in rel_rows[: limits["tried"]]], total=len(rel_rows),
                             hint="assay_search or assay_check_tried"))
+    if related:
+        sections.append(Section("Related findings, not yet judged ({total})", [
+            f'- {short("claim", r["id"])} {r["kind"]} by {r["author"]}: "{r["statement"]}"'
+            for r in related[: limits["related"]]], total=len(related), hint="assay_search"))
     sections.append(Section("Open questions (no evidence yet)", [
         f'- {short("claim", r["id"])} "{r["statement"]}"' for r in open_q[: limits["open_questions"]]],
         total=len(open_q)))

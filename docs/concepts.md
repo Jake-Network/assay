@@ -31,7 +31,12 @@ proposed ──► supported ──► verified ──► superseded / retracted
 `verified` requires an oracle that is not an LLM (`metric`, `rerun`, `pytest`, `lean`, `human`) and at least one
 evidence id. The `rerun` oracle compares successful runs of the original configuration and code. It needs
 at least three distinct seeds and a rerun by a different agent. Projects can configure the minimum number of
-seeds and authors. `llm_judge` can support a claim.
+seeds and authors (`rerun_min_seeds`, `rerun_min_authors`). It also compares the values: the mean of all runs
+and the mean of the reruns alone must each beat the baseline by epsilon. The baseline is the claim's numeric
+`payload.baseline` when present, else the best earlier result of another config in the same partition; with
+neither, the rerun oracle refuses. A claim that only states a reproduced value (no improvement) sets
+`payload.measurement: true` and skips the comparison. The numbers used are stored in the decision's
+`oracle_detail.rerun_check`. `llm_judge` can support a claim.
 
 An experiment's only status change is `invalidated` (an evaluator bug or exploit was found). Invalidated
 experiments are excluded from best, outcome calculation, "already tried", and recent brief activity. Claims
@@ -49,7 +54,11 @@ invalidated runs): `improved` (beyond `improve_epsilon`), `no_change`, `worse`, 
 `dedup_key = sha256(canonical config without ignored keys + code_ref)`. The same key with the same seed and an ok
 run is refused and points to the original (`duplicate_of`). The same key with another seed is a replicate: it is
 stored and aggregated in `v_tried`. Failed runs can be retried. `check_tried` before running counts as a
-"repeat-check match" when it finds something.
+"repeat-check match" when it finds something; it also reports invalidated runs of the same key, which still
+block re-recording the same seed (change `code_ref` after fixing an evaluator). `v_tried.summary_outcome` of a
+config with two or more seeds compares its mean with the best mean of the other configs in its partition, so
+one lucky seed does not keep it labelled `improved`; briefs mark a single-seed improvement as unreplicated.
+Ignored keys may be nested: `optimizer.log_every`. Seed `NULL` and seed `-1` are different runs.
 
 Claims are deduplicated by their normalised statement; a duplicate's evidence is attached to the existing claim,
 so independent agents reaching the same conclusion add up.
@@ -58,6 +67,7 @@ so independent agents reaching the same conclusion add up.
 
 A brief is a deterministic markdown digest within a token budget (default 2,000): goal and best, your task,
 verified claims, supported-but-unverified claims, what was already tried near your task (with failures first),
+findings other agents proposed under your task's tags that nobody has judged yet (observations, notes),
 open questions, and what changed since your last brief. Every item carries an id; details are one `assay_get`
 away. No LLM is involved.
 
@@ -78,7 +88,21 @@ away. No LLM is involved.
 
 ## Honest limits
 
-Roles are enforced cooperatively. An MCP caller names itself with the `agent` argument, so a malicious agent could
-claim to be the lead. What holds regardless: the append-only and decision-role triggers in the database, and
-Claude Code's tool allow-lists, which keep `assay_decide` out of the worker subagent's reach. Per-agent tokens and
-row-level security for teams are planned.
+Identity is self-declared. An MCP caller names itself with the `agent` argument and a CLI caller with
+`ASSAY_AGENT`/`--agent`, and an unknown name is registered with the role it asks for, so a malicious agent
+could claim to be the lead, or make up several names to look like independent replicators. The CLI no longer
+falls back to `human` when no name is given; a person deciding by hand passes `--as human`.
+
+What the database enforces for every connection that is not the owner's: append-only tables (UPDATE, DELETE and
+TRUNCATE are refused by triggers), fixed agent roles (an agent row cannot be re-roled or deleted), and the
+decision-role check. The owner can disable triggers (`ALTER TABLE ... DISABLE TRIGGER`), and today every agent
+connects as the owner, so these hold against mistakes, not against an agent that sets out to break them.
+
+`assay_sql` runs as `assay_reader` in a read-only transaction over the per-project `assay_q` views. The reader
+cannot call `set_config` (revoked when the migration runs as a superuser), the query text may not use
+`set_config`, `U&` escapes, the `*_to_xml` functions or `pg_settings`, and a query that changes the project or
+role is discarded. When `assay_reader` cannot log in, the weaker `SET ROLE` fallback needs
+`ASSAY_SQL_ALLOW_SET_ROLE=1`.
+
+Planned for v0.2: per-agent tokens, a runtime writer role with INSERT and SELECT only (separate from the
+migration owner), and row-level security per project.

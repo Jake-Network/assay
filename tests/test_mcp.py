@@ -92,6 +92,19 @@ def test_errors_are_actionable(project: str) -> None:
              oracle="metric", rationale="x")
 
 
+def test_internal_errors_carry_a_hint(project: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    def down(*a: Any, **k: Any) -> str:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(Ledger, "brief", down)
+    with pytest.raises(Exception) as ei:
+        call(build(project, "all"), "assay_brief", agent="worker-1")
+    msg = str(ei.value)
+    assert "OperationalError" in msg and "assay doctor" in msg and "not a problem with your input" in msg
+
+
 def test_schema_resource(project: str) -> None:
     mcp = build(project, "all")
     res = asyncio.run(mcp.read_resource("assay://schema"))
@@ -116,6 +129,6 @@ def test_stdio_server_discovers_tools_before_project_init(
             write_config(tmp_path, project)
             result = await client.call_tool("assay_create_tasks", {"agent": "lead", "tasks": [{"title": "First task"}]})
             assert not result.is_error
-            assert len(Ledger.open(project=project, database_url=db_url).list_tasks()) == 1
+            assert len(Ledger.open(project=project, agent="lead", database_url=db_url).list_tasks()) == 1
 
     asyncio.run(check())

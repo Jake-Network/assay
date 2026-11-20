@@ -22,7 +22,8 @@ REPLICATE, CALIBRATION = "replicate", "calibration"
 TERMINAL_TASK = ("done", "failed", "cancelled")
 JUDGED = ("verified", "refuted", "inconclusive", "superseded", "retracted")
 DEFAULTS: dict[str, Any] = {"replicates": 2, "replicate_max_queue": 4, "sanity_min": 0.5, "sanity_max_gain": 0.1,
-                            "epsilon_floor": 0.0005, "replicate_priority": 10, "calibration_priority": 20}
+                            "epsilon_floor": 0.0005, "replicate_priority": 10, "calibration_priority": 20,
+                            "calibration_rounds": 3}
 
 
 def setting(lg: Ledger, key: str) -> Any:
@@ -70,31 +71,46 @@ class Tick:
                 return str(a["uri"])
         return None
 
-    def result_claim(self, origin: UUID) -> dict[str, Any] | None:
+    def result_claim(self, origin: UUID, rnd: int = 1) -> dict[str, Any] | None:
+        """The result claim of an origin's replication round (calibration can be repeated, A2)."""
         rows = self.q(
             "SELECT s.id, s.status FROM assay.links l JOIN assay.v_claim_status s"
-            " ON s.project_id = l.project_id AND s.id = l.dst_id"
+            " ON s.project_id = l.project_id AND s.id = l.dst_id JOIN assay.claims c ON c.id = s.id"
             " WHERE l.project_id=%s AND l.src_id=%s AND l.relation='supports' AND s.kind='result'"
-            " ORDER BY s.created_at LIMIT 1", (self.pid, origin))
+            " AND coalesce((c.payload->>'round')::int, 1) = %s"
+            " ORDER BY s.created_at LIMIT 1", (self.pid, origin, rnd))
         return rows[0] if rows else None
 
-    def tasks_for(self, origin: UUID) -> list[dict[str, Any]]:
+    def tasks_for(self, origin: UUID, rnd: int | None = None) -> list[dict[str, Any]]:
         return self.q("SELECT * FROM assay.tasks WHERE project_id=%s AND spec->>'origin'=%s"
-                      " AND tags && ARRAY['replicate','calibration'] ORDER BY created_at",
-                      (self.pid, str(origin)))
+                      " AND tags && ARRAY['replicate','calibration']"
+                      " AND (%s::int IS NULL OR coalesce((spec->>'round')::int, 1) = %s::int) ORDER BY created_at",
+                      (self.pid, str(origin), rnd, rnd))
 
-    def make_tasks(self, kind: str, exp: dict[str, Any], seeds: list[int], priority: int) -> None:
+    def make_tasks(self, kind: str, exp: dict[str, Any], seeds: list[int], priority: int, rnd: int = 1) -> None:
         part = exp["config"][self.pk]
         uri = self.blob_uri(exp)
         h8 = short_hash(exp["code_ref"])
         desc = str(exp["config"].get("description") or "")[:80]
+        trace = exp.get("trace_ref") or {}
+        cmd = trace.get("cmd") if isinstance(trace, dict) else None
+        spec: dict[str, Any] = {"kind": kind, "partition": part, "origin": str(exp["id"]), "code_ref": exp["code_ref"],
+                                "code_blob": uri, "exclude_agents": [exp["author"]], "value": exp["primary_value"],
+                                # A3: an agent that already re-ran this origin (in this round) does not get a
+                                # second seed of it
+                                "distinct_agents_for": "replication_group",
+                                "replication_group": f"{exp['id']}#{rnd}"}
+        if cmd:
+            spec["cmd"] = cmd  # A9: the replicator runs what the original ran
+        if isinstance(trace, dict) and trace.get("parse_regex"):
+            spec["parse_regex"] = trace["parse_regex"]
+        if rnd > 1:
+            spec["round"] = rnd
         self.lg.create_tasks([{
             "title": f"{kind} {h8} on {part} (run {s} of {max(seeds)}){': ' + desc if desc else ''}",
-            "spec": {"kind": kind, "partition": part, "origin": str(exp["id"]), "code_ref": exp["code_ref"],
-                     "code_blob": uri, "seed": s, "exclude_agents": [exp["author"]],
-                     "value": exp["primary_value"]},
-            "tags": [kind], "priority": priority, "max_attempts": 3} for s in seeds])
-        self.actions.append(f"{kind}: {len(seeds)} task(s) for {short('experiment', exp['id'])} on {part}")
+            "spec": {**spec, "seed": s}, "tags": [kind], "priority": priority, "max_attempts": 3} for s in seeds])
+        self.actions.append(f"{kind}: {len(seeds)} task(s) for {short('experiment', exp['id'])} on {part}"
+                            + (f" (round {rnd})" if rnd > 1 else ""))
 
     # ------------------------------------------------------------------ T1, T2: calibration
     def calibrate(self) -> None:
@@ -103,11 +119,11 @@ class Tick:
             "SELECT DISTINCT config->>%s AS p FROM assay.experiments_valid WHERE project_id=%s AND run_status='ok'"
             " AND primary_value IS NOT NULL AND config->>%s IS NOT NULL ORDER BY 1", (self.pk, self.pid, self.pk))]
         for part in parts:
-            if part in cal:
-                continue
             tasks = self.q("SELECT * FROM assay.tasks WHERE project_id=%s AND 'calibration'=ANY(tags)"
                            " AND spec->>'partition'=%s ORDER BY created_at", (self.pid, part))
             if not tasks:  # T1
+                if part in cal:
+                    continue  # calibrated by hand (settings.partitions)
                 first = self.q(
                     "SELECT * FROM assay.experiments_valid WHERE project_id=%s AND config->>%s=%s AND run_status='ok'"
                     " AND primary_value IS NOT NULL AND coalesce(seed,0)=0 ORDER BY created_at, id LIMIT 1",
@@ -117,26 +133,51 @@ class Tick:
                 continue
             if any(t["status"] not in TERMINAL_TASK for t in tasks):
                 continue
-            # T2
+            rnd = max(int(t["spec"].get("round", 1)) for t in tasks)
             origin = UUID(tasks[0]["spec"]["origin"])
-            runs = self.runs(origin, tasks)
-            values = [r["primary_value"] for r in runs if r["run_status"] == "ok" and r["primary_value"] is not None]
-            floor = float(setting(self.lg, "epsilon_floor"))
-            sigma = statistics.stdev(values) if len(values) >= 2 else None
-            epsilon = max(2 * sigma, floor) if sigma is not None else floor
-            status = "ok" if len(values) >= 3 else ("partial" if sigma is not None else "failed")
-            entry = {"sigma": sigma, "epsilon": epsilon, "n": len(values), "status": status,
-                     "calibrated_at": datetime.now(UTC).isoformat(timespec="seconds"), "origin": str(origin)}
-            self.lg.update_settings({"partitions": {part: entry}})
-            sig = "n/a" if sigma is None else f"{sigma:.6f}"
-            self.lg.propose_claim(
-                "calibration", f"Noise calibration for {part}: sigma={sig}, epsilon={epsilon:.6f} "
-                               f"from {len(values)} runs of {short_hash(runs[0]['code_ref'])} ({status})",
-                payload={"partition": part, "sigma": sigma, "epsilon": epsilon, "n": len(values),
-                         "experiment_ids": [str(r["id"]) for r in runs]},
-                tags=["calibration"], evidence=[(r["id"], "supports") for r in runs if r["run_status"] == "ok"])
-            self.actions.append(f"calibrated {part}: sigma={sig} epsilon={epsilon:.6f}")
+            entry_round = int((cal.get(part) or {}).get("round", 1)) if part in cal else 0
+            if entry_round < rnd:
+                self.calibration_entry(part, origin, rnd)  # T2
+                continue
+            # A2: a calibration that did not verify leaves the partition without a baseline, and no candidate
+            # can be judged against nothing. Run the baseline code again with new seeds (bounded).
+            judged = self.result_claim(origin, rnd)
+            if judged is None or judged["status"] not in JUDGED or judged["status"] == "verified":
+                continue
+            if self.verified_best(part) is not None or rnd >= int(setting(self.lg, "calibration_rounds")):
+                continue
+            exp = self.q("SELECT * FROM assay.experiments_valid WHERE id=%s", (origin,))
+            if not exp:
+                continue
+            used = self.q("SELECT coalesce(max(seed), 0) AS m FROM assay.experiments WHERE project_id=%s"
+                          " AND dedup_key=%s", (self.pid, exp[0]["dedup_key"]))[0]["m"]
+            used = max(int(used), max(int(t["spec"].get("seed", 0)) for t in tasks))
+            self.make_tasks(CALIBRATION, exp[0], [used + 1, used + 2], int(setting(self.lg, "calibration_priority")),
+                            rnd=rnd + 1)
         self.lg.refresh()
+
+    def calibration_entry(self, part: str, origin: UUID, rnd: int) -> None:
+        """T2: noise estimate from the origin and the runs of calibration round `rnd`."""
+        tasks = [t for t in self.tasks_for(origin, rnd) if CALIBRATION in t["tags"]]
+        runs = self.runs(origin, tasks)
+        values = [r["primary_value"] for r in runs if r["run_status"] == "ok" and r["primary_value"] is not None]
+        floor = float(setting(self.lg, "epsilon_floor"))
+        sigma = statistics.stdev(values) if len(values) >= 2 else None
+        epsilon = max(2 * sigma, floor) if sigma is not None else floor
+        status = "ok" if len(values) >= 3 else ("partial" if sigma is not None else "failed")
+        entry = {"sigma": sigma, "epsilon": epsilon, "n": len(values), "status": status, "round": rnd,
+                 "calibrated_at": datetime.now(UTC).isoformat(timespec="seconds"), "origin": str(origin)}
+        self.lg.update_settings({"partitions": {part: entry}})
+        sig = "n/a" if sigma is None else f"{sigma:.6f}"
+        self.lg.propose_claim(
+            "calibration", f"Noise calibration for {part}: sigma={sig}, epsilon={epsilon:.6f} "
+                           f"from {len(values)} runs of {short_hash(runs[0]['code_ref'])} ({status})"
+                           + (f", round {rnd}" if rnd > 1 else ""),
+            payload={"partition": part, "sigma": sigma, "epsilon": epsilon, "n": len(values),
+                     "experiment_ids": [str(r["id"]) for r in runs]},
+            tags=["calibration"], evidence=[(r["id"], "supports") for r in runs if r["run_status"] == "ok"])
+        self.actions.append(f"calibrated {part}: sigma={sig} epsilon={epsilon:.6f}"
+                            + (f" (round {rnd})" if rnd > 1 else ""))
 
     def runs(self, origin: UUID, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The origin run followed by the runs recorded for its replicate/calibration tasks."""
@@ -150,6 +191,8 @@ class Tick:
         cands = self.q(
             "SELECT e.* FROM assay.experiments_valid e WHERE e.project_id=%s AND e.outcome='improved'"
             " AND e.run_status='ok' AND coalesce(e.seed,0)=0 AND e.config->>%s IS NOT NULL"
+            # A1: a run its author discarded for not beating its own parent is not queued for replication
+            " AND coalesce((e.trace_ref->>'beats_parent')::boolean, true)"
             " AND NOT EXISTS (SELECT 1 FROM assay.tasks t WHERE t.project_id=e.project_id"
             "                 AND t.spec->>'origin' = e.id::text)"
             " AND NOT EXISTS (SELECT 1 FROM assay.links l JOIN assay.claims c ON c.id=l.dst_id AND c.kind='result'"
@@ -215,21 +258,21 @@ class Tick:
     # ------------------------------------------------------------------ T5, T6: verdicts
     def judge(self) -> None:
         origins = self.q(
-            "SELECT t.spec->>'origin' AS origin, min(e.created_at) AS at FROM assay.tasks t"
-            " JOIN assay.experiments e ON e.id = (t.spec->>'origin')::uuid"
-            " WHERE t.project_id=%s AND t.tags && ARRAY['replicate','calibration'] GROUP BY 1 ORDER BY 2, 1",
+            "SELECT t.spec->>'origin' AS origin, coalesce((t.spec->>'round')::int, 1) AS rnd, min(e.created_at) AS at"
+            " FROM assay.tasks t JOIN assay.experiments e ON e.id = (t.spec->>'origin')::uuid"
+            " WHERE t.project_id=%s AND t.tags && ARRAY['replicate','calibration'] GROUP BY 1, 2 ORDER BY 3, 1, 2",
             (self.pid,))
         for row in origins:
-            origin = UUID(row["origin"])
-            tasks = self.tasks_for(origin)
+            origin, rnd = UUID(row["origin"]), int(row["rnd"])
+            tasks = self.tasks_for(origin, rnd)
             if any(t["status"] not in TERMINAL_TASK for t in tasks):
                 continue
-            existing = self.result_claim(origin)
+            existing = self.result_claim(origin, rnd)
             if existing is not None and existing["status"] in JUDGED:
                 continue
-            self.verdict(origin, tasks)
+            self.verdict(origin, tasks, rnd)
 
-    def verdict(self, origin: UUID, tasks: list[dict[str, Any]]) -> None:
+    def verdict(self, origin: UUID, tasks: list[dict[str, Any]], rnd: int = 1) -> None:
         runs = self.runs(origin, tasks)
         exp = runs[0]
         part = exp["config"][self.pk]
@@ -248,6 +291,9 @@ class Tick:
         best = self.verified_best(part)
         baseline = float(best["mean"]) if best is not None and best["mean"] is not None else None
         metric = self.lg.project.primary_metric
+        rep_authors = [r["author"] for r in runs[1:]]
+        if not (missing or bad) and not is_cal and baseline is None:
+            return  # A2: nothing verified to beat yet; wait for (re)calibration instead of verifying by default
         if missing or bad:
             why = []
             if missing:
@@ -256,12 +302,16 @@ class Tick:
             if bad:
                 why.append(f"{len(bad)} run(s) failed")
             status, rationale = "inconclusive", "; ".join(why)
-        elif is_cal or baseline is None:
+        elif exp["author"] in rep_authors or len(set(rep_authors)) < len(rep_authors):
+            # A3: "two other agents" means two distinct agents, neither of them the original author
+            status = "inconclusive"
+            rationale = (f"replications were not independent: original by {exp['author']}, replications by "
+                         f"{', '.join(rep_authors)}")
+        elif is_cal:
             status = "verified"
             rationale = (f"{len(values)} runs by {len({r['author'] for r in runs})} agents agree: mean "
                          f"{mean:.6f}" + (f" ± {std:.6f}" if std is not None else "")
-                         + (" (calibration run of the first code in this partition)" if is_cal else
-                            " (no verified result in this partition yet)"))
+                         + " (calibration run of the first code in this partition)")
         elif self.better(mean, baseline, eps) and self.better(rep_mean, baseline, eps):  # type: ignore[arg-type]
             status = "verified"
             rationale = (f"mean {mean:.6f} over {len(values)} runs (replications alone {rep_mean:.6f}) beats the "
@@ -275,11 +325,17 @@ class Tick:
         sm = "n/a" if mean is None else f"{mean:.6f}"
         statement = (f"Code {h8} ({short('experiment', origin)}, {exp['author']}) on {part} reaches {metric} "
                      f"{sm}" + (f" ± {std:.6f}" if std is not None else "") + f" over {len(values)} runs"
-                     + ("" if is_cal or baseline is None else f", beating the verified best {baseline:.6f}"))
-        payload = {"partition": part, "code_ref": exp["code_ref"], "experiment_ids": [str(r["id"]) for r in runs],
-                   "mean": mean, "std": std, "n": len(values), "origin": str(origin), "origin_author": exp["author"],
-                   "baseline": baseline, "epsilon": eps, "replicate_mean": rep_mean}
-        existing = self.result_claim(origin)
+                     + ("" if is_cal or baseline is None else f", beating the verified best {baseline:.6f}")
+                     + (f" (calibration round {rnd})" if rnd > 1 else ""))
+        payload: dict[str, Any] = {
+            "partition": part, "code_ref": exp["code_ref"], "experiment_ids": [str(r["id"]) for r in runs],
+            "mean": mean, "std": std, "n": len(values), "origin": str(origin), "origin_author": exp["author"],
+            "baseline": baseline, "epsilon": eps, "replicate_mean": rep_mean}
+        if is_cal:
+            payload["measurement"] = True  # a calibration states the baseline's value; it beats nothing (C1)
+        if rnd > 1:
+            payload["round"] = rnd
+        existing = self.result_claim(origin, rnd)
         if existing is None:
             cid = self.lg.propose_claim("result", statement[:500], payload=payload, tags=["result", part],
                                         evidence=[(origin, "supports")]).id

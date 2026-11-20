@@ -1,14 +1,17 @@
 # Shared ledger for teams and several machines (docs/multi-machine.md).
-# export ASSAY_DATABASE_URL=postgresql://assay:assay@localhost:5432/assay
+# Put ASSAY_DB_PASSWORD=<something long> in a .env file next to this one, then:
+# export ASSAY_DATABASE_URL=postgresql://assay:<password>@localhost:5432/assay
+# The port is published on 127.0.0.1 only. For other machines, change it to "<this host's LAN or VPN address>:5432:5432"
+# and allow that network in your firewall; never publish it on 0.0.0.0 on a public network.
 services:
   db:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: assay
-      POSTGRES_PASSWORD: assay   # change for anything beyond a private network
+      POSTGRES_PASSWORD: ${ASSAY_DB_PASSWORD:?set ASSAY_DB_PASSWORD in .env (see docs/multi-machine.md)}
       POSTGRES_DB: assay
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - assay-pg:/var/lib/postgresql/data
     healthcheck:

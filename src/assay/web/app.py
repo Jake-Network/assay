@@ -3,6 +3,8 @@ LISTEN/NOTIFY -> Server-Sent Events. No build step, no CDN."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hmac
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -12,6 +14,7 @@ import anyio
 import psycopg
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.applications import Starlette
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
@@ -32,6 +35,55 @@ def _age(t: Any, now: Any) -> str:
     return age(now, t)
 
 
+class NotifyHub:
+    """One LISTEN connection per viewer, fanned out to every /events client, so browser tabs never use up the
+    database's connections. It opens with the first subscriber and closes after the last one leaves."""
+
+    QUEUE = 100
+
+    def __init__(self, url: str, channel: str) -> None:
+        self.url, self.channel = url, channel
+        self.subscribers: set[asyncio.Queue[str]] = set()
+        self.connects = 0
+        self._task: asyncio.Task[None] | None = None
+
+    @contextlib.asynccontextmanager
+    async def subscribe(self) -> AsyncIterator[asyncio.Queue[str]]:
+        queue: asyncio.Queue[str] = asyncio.Queue(self.QUEUE)
+        self.subscribers.add(queue)
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._listen())
+        try:
+            yield queue
+        finally:
+            self.subscribers.discard(queue)
+            if not self.subscribers and self._task is not None:
+                self._task.cancel()
+                self._task = None
+
+    def _publish(self, payload: str) -> None:
+        for q in list(self.subscribers):
+            try:
+                q.put_nowait(payload)
+            except asyncio.QueueFull:
+                pass  # a slow client misses a refresh hint, not data: every page reloads from the ledger
+
+    async def _listen(self) -> None:
+        delay = 1.0
+        while self.subscribers:
+            try:
+                aconn = await psycopg.AsyncConnection.connect(self.url, autocommit=True)
+                self.connects += 1
+                async with aconn:
+                    await aconn.execute(psycopg.sql.SQL("LISTEN {}").format(psycopg.sql.Identifier(self.channel)))
+                    delay = 1.0
+                    async for n in aconn.notifies():
+                        self._publish(n.payload)
+            except psycopg.Error:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30.0)
+
+
 class Viewer:
     def __init__(self, lg: Ledger) -> None:
         self.lg = lg
@@ -39,6 +91,7 @@ class Viewer:
         self.env.globals.update(short=short, config_line=config_line, project=lg.project)
         self.env.filters["num"] = lambda v: "" if v is None else f"{v:.6g}"
         self.env.filters["js"] = lambda v: json.dumps(jsonable(v), ensure_ascii=False, indent=2, default=str)
+        self.hub = NotifyHub(lg.url, notification_channel(lg.project_id))
 
     async def q(self, query: str, params: Any = None) -> list[dict[str, Any]]:
         return await anyio.to_thread.run_sync(self.lg.sql_internal, query, params)
@@ -246,25 +299,16 @@ class Viewer:
 
     # ------------------------------------------------------------------ live updates
     async def events(self, request: Request) -> Response:
-        channel = notification_channel(self.lg.project_id)
-
         async def stream() -> AsyncIterator[bytes]:
             yield b"retry: 3000\n\n"
-            try:
-                aconn = await psycopg.AsyncConnection.connect(self.lg.url, autocommit=True)
-            except psycopg.Error:
-                return
-            async with aconn:
-                await aconn.execute(psycopg.sql.SQL("LISTEN {}").format(psycopg.sql.Identifier(channel)))
+            async with self.hub.subscribe() as queue:
                 while not await request.is_disconnected():
-                    got = False
-                    async for n in aconn.notifies(timeout=10.0):
-                        got = True
-                        yield f"event: change\ndata: {n.payload}\n\n".encode()
-                        # drain bursts quickly; the client debounces refreshes
-                        await asyncio.sleep(0)
-                    if not got:
+                    try:
+                        payload = await asyncio.wait_for(queue.get(), timeout=10.0)
+                    except TimeoutError:
                         yield b": keepalive\n\n"
+                        continue
+                    yield f"event: change\ndata: {payload}\n\n".encode()
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -285,8 +329,69 @@ class Viewer:
         ]
 
 
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
+WILDCARD_HOSTS = ("0.0.0.0", "::", "")
+TOKEN_COOKIE = "assay_token"
+
+
+def allowed_hosts(host: str) -> list[str]:
+    """Host headers the viewer answers to: loopback names, plus the bound address when it is a specific one. Blocks
+    DNS rebinding, where a web page's own hostname resolves to this machine."""
+    hosts = list(LOCAL_HOSTS)
+    if host not in WILDCARD_HOSTS:
+        h = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        if h.lower() not in hosts:
+            hosts.append(h.lower())
+    return hosts
+
+
+class TokenMiddleware:
+    """Required for a wildcard bind. Accepts `Authorization: Bearer <token>` (MCP clients), the cookie set after
+    one visit to `/?token=<token>` (browsers), or that query parameter."""
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app, self.token = app, token
+
+    def _ok(self, candidate: str | None) -> bool:
+        return candidate is not None and hmac.compare_digest(candidate.encode(), self.token.encode())
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        req = Request(scope)
+        auth = req.headers.get("authorization", "")
+        bearer = auth[7:] if auth.lower().startswith("bearer ") else None
+        via_query = self._ok(req.query_params.get("token"))
+        if not (via_query or self._ok(bearer) or self._ok(req.cookies.get(TOKEN_COOKIE))):
+            await PlainTextResponse("assay: token required (open /?token=... once, or send Authorization: Bearer)",
+                                    status_code=401)(scope, receive, send)
+            return
+        if not via_query:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_cookie(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                cookie = f"{TOKEN_COOKIE}={self.token}; Path=/; HttpOnly; SameSite=Strict".encode("latin-1")
+                message = {**message, "headers": [*message.get("headers", []), (b"set-cookie", cookie)]}
+            await send(message)
+
+        await self.app(scope, receive, send_with_cookie)
+
+
 def create_app(project: str | None = None, toolset: str = "all", with_mcp: bool = True,
-               host: str = "127.0.0.1") -> Starlette:
+               host: str = "127.0.0.1", token: str | None = None) -> Starlette:
+    """`host` is the bound address. A wildcard bind (0.0.0.0, ::) needs `token` (or ASSAY_SERVE_TOKEN): the MCP
+    endpoint accepts unauthenticated writes and decisions, and the Host check cannot know the names to allow."""
+    import os
+
+    token = token or os.environ.get("ASSAY_SERVE_TOKEN") or None
+    wildcard = host in WILDCARD_HOSTS
+    if wildcard and not token:
+        raise AssayError(f"binding to {host or 'all interfaces'} exposes unauthenticated ledger writes; "
+                         "set ASSAY_SERVE_TOKEN (clients then send Authorization: Bearer <token>) "
+                         "or bind to 127.0.0.1")
     lg = Ledger.open(project=project, agent="human")
     viewer = Viewer(lg)
     if with_mcp:
@@ -294,16 +399,22 @@ def create_app(project: str | None = None, toolset: str = "all", with_mcp: bool 
 
         app = build(project, toolset).streamable_http_app(host=host)
         app.router.routes.extend(viewer.routes())
-        return app
-    return Starlette(routes=viewer.routes())
+    else:
+        app = Starlette(routes=viewer.routes())
+    if token:
+        app.add_middleware(TokenMiddleware, token=token)
+    # added last, so it runs first
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"] if wildcard else allowed_hosts(host))
+    return app
 
 
-def serve(host: str = "127.0.0.1", port: int = 7466, toolset: str = "all", project: str | None = None) -> None:
+def serve(host: str = "127.0.0.1", port: int = 7466, toolset: str = "all", project: str | None = None,
+          token: str | None = None) -> None:
     import logging
 
     import uvicorn
 
     logging.getLogger("mcp").setLevel(logging.WARNING)
-    app = create_app(project, toolset, host=host)
+    app = create_app(project, toolset, host=host, token=token)
     print(f"assay viewer  http://{host}:{port}/\nassay MCP     http://{host}:{port}/mcp  (streamable HTTP)")
     uvicorn.run(app, host=host, port=port, log_level="warning")
