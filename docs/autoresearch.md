@@ -27,6 +27,7 @@ not copy or modify autoresearch code.
 | S2 | several machines | the same `BENCHBOOK_DATABASE_URL` and `BENCHBOOK_PROJECT` everywhere (see [Several machines](multi-machine.md)) |
 | S3 | you already ran autoresearch alone | `benchbook ar import results.tsv --hw <gpu class> --agent <name>`: each row's `train.py` comes from git; `--hw` names the GPU those runs used (required: results.tsv does not say); your old keeps become candidates and get replicated |
 | S4 | macOS, MLX, Windows or AMD fork | `--hw` / `BENCHBOOK_AR_HW` when detection fails, `--cmd` for the run command, `--parse-regex` for the summary |
+| S5 | you run an autoresearch skill (pi-autoresearch, uditgoenka/autoresearch, codex-autoresearch) | `benchbook ar gate on --from <skill>` once, then `benchbook ar import --from <skill> ...` after each run; see [Autoresearch skills](#autoresearch-skills) |
 
 ### S1 in detail
 
@@ -93,6 +94,8 @@ exit codes 0 ok, 1 user error, 2 refused (duplicate or conflict), 3 nothing to d
 | `benchbook ar sync [--trust verified\|candidate]` | adopts the partition's verified best when it beats your code or your code builds on a refuted or inconclusive candidate; commits `train.py` |
 | `benchbook ar note "<text>"` / `benchbook ar idea "<text>"` | an observation (evidence: your last run) / a hypothesis for later |
 | `benchbook ar import [results.tsv] --hw <class>` | records an existing results.tsv (code from `git show <commit>:train.py`) as first runs in the partition of `--hw` and that commit's `prepare.py`; improvements become candidates |
+| `benchbook ar import --from <skill> [path] --hw <class> [--metric NAME]` | the same for the run log of an autoresearch skill (`pi-autoresearch`, `uditgoenka`, `codex-autoresearch`); `path` is the log or the directory the skill keeps it in. Importing the same log again adds nothing |
+| `benchbook ar gate on [--from <skill>] [--project ID]` | turns the reproduction gate on: creates the project if the checkout has none, puts the gate settings (`outcome_baseline`, `replicates`, `rerun_min_seeds`, `rerun_min_authors`, `partition_key`) back to their defaults where they are missing or weaker, and with `--from` writes `program.benchbook.<skill>.md`. Safe to repeat |
 | `benchbook ar status [--all]` | per partition: verified best, candidates, in flight, replication queue, verdicts, calibration, duplicates blocked (refused before running and not retried with `--retry-failed`), GPU minutes on replication |
 | `benchbook ar referee [--interval 30] [--once]` | applies the referee rules on a timer. Optional: every `ar run/replicate/sync` already does |
 
@@ -135,6 +138,84 @@ or human; each change is audited in `settings_events`):
 | `knob_ignore` | `["H100_BF16_PEAK_FLOPS"]` | constants left out of knob changes |
 | `outcome_baseline` | `verified` | `improved` means better than the verified best (the raw best before any verification); such a first run is a candidate for replication |
 | `time_budget_s` | `TIME_BUDGET` in `prepare.py`, else 300 | a run whose `training_seconds` exceeds it by more than `time_budget_slack_s` (30), or whose wall clock exceeds it by more than `time_budget_overhead_s` (240, startup and evaluation), is recorded `invalid`; 0 turns the check off |
+
+## Autoresearch skills
+
+Most autoresearch users now run the loop through a skill for their agent rather than through upstream's
+`program.md`. benchbook does not replace the skill's loop. It reads the log the skill already writes and records
+each run as an experiment, and the gate applies to those runs as to runs started with `benchbook ar run`:
+
+- **The gate is the one described above.** `benchbook ar gate on` does not add a mechanism: it makes sure the
+  project uses the verified best as the baseline (`outcome_baseline = verified`), that the referee schedules
+  `replicates` re-runs for each candidate, and that the ledger's rerun rule needs `rerun_min_seeds` runs from
+  `rerun_min_authors` authors. `benchbook ar init` already sets these; `gate on` restores them when they were
+  lowered and creates the project when a skill's checkout has none (without `program.benchbook.md`: the skill's
+  own loop stays).
+- **An imported run is a first run.** It is recorded with replication number 0, whoever imports it. A keep that
+  beats the verified best becomes a candidate, and other agents re-run its `train.py` with
+  `benchbook ar replicate --auto` before it can be verified. A skill that re-runs its own code does not add
+  replications: the ledger already holds a first run of that code, so the second record is a duplicate.
+- **Statuses map onto the existing ones.** A measured run is `ok`, a crash or an unparseable metric is
+  `error`, and a run that the skill measured but must not count (a failed guard or check) is `invalid`. The
+  ledger computes the outcome (`improved`, `no_change`, `worse`, `failed`) against the verified best, as for
+  any run; the skill's own word is kept in `trace_ref.status` and the notes.
+- **Code.** `train.py` comes from the commit the log names. pi-autoresearch and uditgoenka/autoresearch revert a
+  discarded change without committing it, so their discards and crashes have no code: they are recorded with
+  their value and description (others see the approach was tried) but as `invalid`, so a value nobody can re-run
+  never becomes a candidate or the best that later runs are compared with. codex-autoresearch commits every trial
+  before measuring it, so all its runs have code.
+- **Evaluator.** Each run's partition is read from `prepare.py` at its commit, so the evaluator version is part
+  of the run's identity (dedup key and comparison group) next to its `code_ref`, and is kept in
+  `trace_ref.evaluator`.
+- **Time budget.** `check_budget` runs on imported runs too: a run whose logged `training_seconds` exceeds the
+  budget by more than the slack is `invalid`. No skill logs the wall clock, so only reported training time is
+  checked; `gate on` prints whether the check is on (`time_budget_s` 0 turns it off).
+- **Idempotent.** Every record has a key from its own fields (pi: run number, timestamp, commit, metric, status;
+  uditgoenka: iteration, timestamp, commit, metric, status; codex: run id and sequence number). Importing the same
+  log again, or another agent importing it, adds nothing (for the same `--hw`). `--hw` is required, as for results.tsv.
+- Rows that measure another metric (a pi segment started for something else, a codex run with another metric
+  name or direction) are skipped and counted; `--metric NAME` names the project's metric when the log calls it
+  differently. An import is refused while the importing agent holds a replication task (the run would be
+  recorded as that task's result).
+
+The sample logs in `tests/fixtures/autoresearch/skills/` name the upstream commit each format was read from.
+
+### pi-autoresearch
+
+[davebcn87/pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) (an extension for the pi agent) appends
+every `log_experiment` to `.auto/log.jsonl` (older sessions: `autoresearch.jsonl`). Statuses: `keep` → ok,
+`discard` → invalid (reverted without a commit, so no code), `crash` → error, `checks_failed` → invalid.
+
+```bash
+benchbook ar gate on --from pi-autoresearch      # once; add program.benchbook.pi-autoresearch.md to .auto/prompt.md
+benchbook ar import --from pi-autoresearch .auto/log.jsonl --hw h100-80gb
+```
+
+### uditgoenka/autoresearch
+
+[uditgoenka/autoresearch](https://github.com/uditgoenka/autoresearch) (`/autoresearch` for Claude Code and other
+agents) appends one row per iteration to a results TSV in `autoresearch/loop-<YYMMDD>-<HHMM>/`. Statuses:
+`baseline`, `keep`, `keep (reworked)` → ok; `discard` → invalid (reverted, the row names no commit);
+`crash`, `metric-error` → error; `no-op`, `hook-blocked` and fork-and-flush summary
+rows (`fork-<k>`, `fork-select`) are not runs and are skipped. Only the loop's TSV is accepted (other
+subcommands write TSVs with other columns). The TSV records the metric's direction but not its name.
+
+```bash
+benchbook ar gate on --from uditgoenka           # once; add program.benchbook.uditgoenka.md to CLAUDE.md
+benchbook ar import --from uditgoenka autoresearch/loop-261121-0930/ --hw h100-80gb
+```
+
+### codex-autoresearch
+
+[leo-lilinxiao/codex-autoresearch](https://github.com/leo-lilinxiao/codex-autoresearch) (a Codex skill) keeps
+`autoresearch-results/run.json` (metric name and direction) and `autoresearch-results/events.jsonl` (schema 2:
+a baseline event, then one iteration event per trial). Outcomes: `keep` → ok, `discard` → ok (invalid when the
+guard failed), `crash` → error. Other events (stopped, resumed, blocked, complete, error) are not runs.
+
+```bash
+benchbook ar gate on --from codex-autoresearch   # once; add program.benchbook.codex-autoresearch.md to AGENTS.md
+benchbook ar import --from codex-autoresearch autoresearch-results --hw h100-80gb
+```
 
 ## Cost
 

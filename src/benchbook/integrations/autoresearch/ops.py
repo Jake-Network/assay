@@ -34,7 +34,7 @@ from ...ids import short
 from ...ledger import Ledger
 from ...models import RecordResult
 from . import hw as hwmod
-from . import referee
+from . import referee, skills
 from .checkout import Checkout, partition_keys
 from .code import DEFAULT_KNOB_IGNORE, changed_knobs, code_hash, code_hashes, extract_knobs, knob_text, short_hash
 from .runner import (
@@ -147,7 +147,8 @@ def better(lg: Ledger, a: float, b: float, eps: float = 0.0) -> bool:
 # ---------------------------------------------------------------------------------------------- init
 
 def init(project: str, hw: str | None = None, start: Path | None = None, force: bool = False,
-         database_url: str | None = None) -> dict[str, Any]:
+         database_url: str | None = None, program: bool = True) -> dict[str, Any]:
+    """`program` False leaves program.benchbook.md out: a checkout driven by a skill keeps the skill's own loop."""
     co = Checkout.find(start)
     p, created = Ledger.init_project(project, title=f"autoresearch {project}", goal=GOAL, metric=METRIC,
                                      direction="min", epsilon=PROJECT_SETTINGS["epsilon_floor"],
@@ -157,12 +158,12 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
     lg = Ledger.open(project=p.id, agent="human", database_url=database_url)
     referee.referee_ledger(lg)
     cfg = localcfg.write_config(co.root, p.id, budget=1500)
-    program = co.root / "program.benchbook.md"
+    program_path = co.root / "program.benchbook.md"
     template = resources.files("benchbook.integrations.autoresearch").joinpath("templates/program.benchbook.md")
     text = template.read_text(encoding="utf-8")
     wrote_program = False
-    if force or not program.exists():
-        program.write_text(text, encoding="utf-8")
+    if program and (force or not program_path.exists()):
+        program_path.write_text(text, encoding="utf-8")
         wrote_program = True
     gi = co.root / ".gitignore"
     lines = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
@@ -177,8 +178,9 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
     hw_class = hwmod.detect(hw)
     part = _existing_partition_first(lg, co.partition_keys(hw_class))[0]
     return {"project": p.id, "created": created, "partition": part, "hw": hw_class,
-            "config": str(cfg), "program": str(program), "wrote_program": wrote_program,
-            "program_differs": not wrote_program and program.read_text(encoding="utf-8") != text,
+            "config": str(cfg), "program": str(program_path), "wrote_program": wrote_program,
+            "program_differs": (not wrote_program and program_path.exists()
+                                and program_path.read_text(encoding="utf-8") != text),
             "agent_suggestion": localcfg.env("AGENT") or default_agent_name(),
             "prompt": "Read program.benchbook.md and start. Use the benchbook ar commands for every run."}
 
@@ -588,13 +590,18 @@ def _mean_value(rows: list[dict[str, Any]]) -> float | None:
     return statistics.fmean(vals) if vals else None
 
 
-def time_budget(ctx: Ctx) -> tuple[float | None, float, float | None]:
+def time_budget(ctx: Ctx, harness: bytes | None = None) -> tuple[float | None, float, float | None]:
     """(training budget s, slack s, wall-clock allowance s) for the validity check (A9). The budget is the
-    time_budget_s setting, else TIME_BUDGET in prepare.py, else 300; time_budget_s 0 turns the check off."""
-    s = ctx.lg.project.settings
+    time_budget_s setting, else TIME_BUDGET in prepare.py, else 300; time_budget_s 0 turns the check off.
+    `harness` is the prepare.py an imported run used, when it is not the one in the checkout."""
+    return budget_of(ctx.lg.project.settings,
+                     harness if harness is not None else (ctx.co.root / "prepare.py").read_bytes())
+
+
+def budget_of(s: dict[str, Any], harness: bytes) -> tuple[float | None, float, float | None]:
     budget = s.get("time_budget_s")
     if budget is None:
-        tb = extract_knobs((ctx.co.root / "prepare.py").read_bytes()).get("TIME_BUDGET")
+        tb = extract_knobs(harness).get("TIME_BUDGET")
         budget = tb if isinstance(tb, (int, float)) and not isinstance(tb, bool) else 300
     overhead = s.get("time_budget_overhead_s", 240)
     return (float(budget) or None, float(s.get("time_budget_slack_s", 30)),
@@ -815,68 +822,153 @@ def idea(ctx: Ctx, text: str, knobs: dict[str, Any]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------------------------- import (S3)
 
-def import_results(ctx: Ctx, path: Path, hw: str | None = None) -> dict[str, Any]:
-    """Record an existing results.tsv: each row's train.py comes from `git show <commit>:train.py`.
-    Imported runs are first runs (replication number 0); improvements become candidates and get replicated.
-    `hw` is the hardware class the old runs used and must be given (A9): nothing in results.tsv says which GPU
-    produced it. The partition's harness hash comes from prepare.py at each row's commit."""
+IMPORT_SOURCES = ("results.tsv", *skills.SKILLS)
+
+
+def _results_tsv_rows(path: Path) -> list[skills.Row]:
+    """Upstream results.tsv: commit, val_bpb, memory_gb, status, description. Every row names its commit."""
     import csv
 
+    with open(path, encoding="utf-8", newline="") as fh:
+        raw = list(csv.DictReader(fh, delimiter="\t"))
+    rows = []
+    for r in raw:
+        status = (r.get("status") or "").strip().lower()
+        try:
+            val = float(r.get("val_bpb") or 0)
+            mem = float(r.get("memory_gb") or 0)
+        except ValueError:
+            val, mem = 0.0, 0.0
+        ok = status != "crash" and val > 0
+        rows.append(skills.Row(key="", label="", status=status, run_status="ok" if ok else "error",
+                               kept=status == "keep", value=val if ok else None,
+                               description=(r.get("description") or "").strip(),
+                               commit=(r.get("commit") or "").strip() or None,
+                               metrics={"peak_vram_mb": mem * 1024} if ok else {}))
+    return rows
+
+
+def _imported_keys(lg: Ledger, keys: list[str], hw_class: str) -> set[str]:
+    """Skill records this hardware class already holds, invalidated ones included: importing is append-only."""
+    rows = lg.sql_internal(
+        "SELECT trace_ref->>'import_key' AS k FROM benchbook.experiments WHERE project_id=%s"
+        " AND trace_ref->>'hw'=%s AND trace_ref->>'import_key'=ANY(%s)", (lg.project_id, hw_class, keys))
+    return {r["k"] for r in rows}
+
+
+def import_results(ctx: Ctx, path: Path, hw: str | None = None, source: str = "results.tsv",
+                   metric: str | None = None) -> dict[str, Any]:
+    """Record runs that happened outside `benchbook ar run`: an upstream results.tsv, or the log of one of the
+    autoresearch skills (`source`, see skills.py). Each row's train.py comes from `git show <commit>:train.py`.
+
+    Imported runs are first runs, always replication number 0: an improvement becomes a candidate and other agents
+    re-run it before it counts, and nothing in a log can stand in for one of those re-runs (the ledger keeps one
+    ok run per code and replication number, and the rerun rule needs three numbers from two authors).
+    `hw` is the hardware class the old runs used and must be given (A9): no log says which GPU produced it.
+    The evaluator version is the hash of prepare.py at each row's commit: it names the partition, so it is part
+    of the row's identity next to code_ref. The time budget is checked as for a live run, on what the log holds.
+    `metric` is the name the log uses for the project's primary metric when it differs."""
     lg, co = ctx.lg, ctx.co
-    if not path.is_file():
+    if source not in IMPORT_SOURCES:
+        raise BenchbookError(f"--from must be one of: {', '.join(skills.SKILLS)} (leave it out for results.tsv)")
+    skill = source != "results.tsv"
+    if skill:
+        path = skills.locate(source, path)
+    elif not path.is_file():
         raise BenchbookError(f"no such file: {path}")
     if not hw:
         raise BenchbookError(f"pass --hw with the hardware class the imported runs used (this machine: {ctx.hw}); "
-                         "results from other GPUs must not enter this machine's partition")
+                             "results from other GPUs must not enter this machine's partition")
     hw_class = hwmod.slug(hw)
     if not co.is_git():
         raise BenchbookError("benchbook ar import needs the git history of this checkout")
+    if held := lg.live_leases():
+        # record_experiment attaches a run recorded without a task to the one task its author holds: an import
+        # made while this agent holds a replication task would be counted as that replication's result.
+        raise BenchbookError(f"{lg.agent} holds a live lease on {short('task', held[0].id)}; an imported run would be "
+                             "recorded as that task's result. Finish the task or wait for its lease to expire, "
+                             "or import with --agent <another name>.")
+    log = skills.read(source, path) if skill else skills.Log(_results_tsv_rows(path))
     counts = {"imported": 0, "duplicates": 0, "missing_commit": 0, "rows": 0}
-    with open(path, encoding="utf-8", newline="") as fh:
-        rows = list(csv.DictReader(fh, delimiter="\t"))
+    if skill:
+        counts.update(other_metric=0, skipped=log.skipped)
+    primary = lg.project.primary_metric or METRIC
+    wanted = (metric or primary).lower()
+    seen = _imported_keys(lg, [r.key for r in log.rows], hw_class) if skill else set()
+    others: set[str] = set()
     known_parts: dict[tuple[str, ...], str] = {}
-    for row in rows:
+    ignore = ctx.settings.get("knob_ignore", DEFAULT_KNOB_IGNORE)
+    for row in log.rows:
         counts["rows"] += 1
-        commit = (row.get("commit") or "").strip()
-        src = co.git_show(commit) if commit else None
-        if src is None:
+        if row.key in seen:
+            counts["duplicates"] += 1
+            continue
+        if ((row.metric is not None and row.metric.lower() != wanted)
+                or (row.direction is not None and row.direction != lg.project.metric_direction)):
+            counts["other_metric"] += 1  # a pi segment or a codex run that optimised something else
+            others.add(f"{row.metric or 'its metric'} ({row.direction or 'direction not stated'})")
+            continue
+        src = co.git_show(row.commit) if row.commit else None
+        if src is None and (row.commit or not skill):
             counts["missing_commit"] += 1
             continue
-        refs = code_hashes(src)
-        code_ref = refs[0]
-        knobs = extract_knobs(src)
-        harness = co.git_show(commit, "prepare.py")
+        at = row.commit or row.parent_commit  # where this row's prepare.py, its evaluator, is read
+        harness = co.git_show(at, "prepare.py") if at else None
         parts = partition_keys(hw_class, harness) if harness is not None else co.partition_keys(hw_class)
         if parts not in known_parts:
             known_parts[parts] = _existing_partition_first(lg, parts)[0]
         part = known_parts[parts]
-        prev = co.git_show(f"{commit}~1")
+        refs: tuple[str, ...] = ()
+        code_ref: str | None = None
+        knobs: dict[str, Any] = {}
+        if src is not None:
+            refs = code_hashes(src)
+            code_ref = refs[0]
+            knobs = extract_knobs(src)
+            prev = co.git_show(f"{row.commit}~1")
+        else:
+            prev = co.git_show(row.parent_commit) if row.parent_commit else None
         parent_hash = code_hash(prev) if prev is not None else None
         if parent_hash == code_ref:
             parent_hash, prev = None, None
-        ignore = ctx.settings.get("knob_ignore", DEFAULT_KNOB_IGNORE)
-        description = (row.get("description") or "").strip()[:500]
-        config = {"partition": part, "knobs": knobs,
-                  "changed": changed_knobs(extract_knobs(prev), knobs, ignore) if prev is not None else {},
-                  "parent": parent_hash, "description": description}
-        status = (row.get("status") or "").strip().lower()
-        try:
-            val = float(row.get("val_bpb") or 0)
-            mem = float(row.get("memory_gb") or 0)
-        except ValueError:
-            val, mem = 0.0, 0.0
-        ok = status != "crash" and val > 0
-        if any(f"commit {commit}," in (e["notes"] or "")
-               for p in dict.fromkeys((part, *parts)) for e in experiments_for_code(ctx, refs, p)):
+        description = row.description.strip()[:500]
+        changed = changed_knobs(extract_knobs(prev), knobs, ignore) if prev is not None and src is not None else {}
+        config: dict[str, Any] = {"partition": part, "knobs": knobs, "changed": changed, "parent": parent_hash,
+                                  "description": description}
+        if src is not None and any(f"commit {row.commit}," in (e["notes"] or "")
+                                   for p in dict.fromkeys((part, *parts)) for e in experiments_for_code(ctx, refs, p)):
             counts["duplicates"] += 1  # imported before (failed rows are not caught by the dedup index)
             continue
-        uri = lg.put_blob(src, "text/x-python")
-        rec = lg.record_experiment(
-            config, {METRIC: val, "peak_vram_mb": mem * 1024} if ok else {}, run_status="ok" if ok else "error",
-            seed=0, code_ref=code_ref, notes=f"{description} (imported from results.tsv, commit {commit}, {status})",
-            artifacts=[{"uri": uri, "kind": "train.py", "sha256": hashlib.sha256(src).hexdigest(),
-                        "bytes": len(src)}],
-            trace_ref={"imported_from": path.name, "commit": commit, "hw": hw_class})
+        ok = row.run_status == "ok" and row.value is not None
+        run_status = "ok" if ok else ("invalid" if row.run_status == "invalid" else "error")
+        metrics = {**row.metrics, primary: row.value} if row.value is not None and run_status != "error" else {}
+        why = ""
+        if ok and src is None:
+            # A measured change the skill reverted without committing it. Its value cannot be re-run or tied to
+            # code, so it must not become a candidate or the best that later runs are compared with; it stays on
+            # record (value, description) as an approach that was tried.
+            run_status, why = "invalid", " [no code: the skill reverted this change without committing it]"
+        elif ok:
+            # No log records the wall clock of a run, so only the training time it reports can be checked.
+            budget, slack, _ = time_budget(ctx, harness)
+            checked = check_budget(RunResult("ok", 0, dict(metrics)), budget, slack)
+            if checked.run_status != "ok":
+                run_status, why = checked.run_status, f" [{checked.reason}]"
+        evaluator = parts[0].rsplit("/", 1)[-1]
+        if skill:
+            where = ", ".join(x for x in (row.label, f"commit {row.commit}" if row.commit else "", row.status) if x)
+            notes = f"{description} (imported from {source}, {where}){why}"
+            trace = {"imported_from": source, "file": path.name, "import_key": row.key, "commit": row.commit,
+                     "hw": hw_class, "status": row.status, "kept": row.kept, "evaluator": evaluator, **row.detail}
+        else:
+            notes = f"{description} (imported from results.tsv, commit {row.commit}, {row.status}){why}"
+            trace = {"imported_from": path.name, "commit": row.commit, "hw": hw_class, "evaluator": evaluator}
+        artifacts = []
+        if src is not None:
+            artifacts = [{"uri": lg.put_blob(src, "text/x-python"), "kind": "train.py",
+                          "sha256": hashlib.sha256(src).hexdigest(), "bytes": len(src)}]
+        rec = lg.record_experiment(config, metrics, run_status=run_status, seed=0, code_ref=code_ref,
+                                   notes=notes[:2000], artifacts=artifacts, trace_ref=trace)
         if rec.duplicate_of is not None or rec.id is None:
             counts["duplicates"] += 1
             continue
@@ -885,6 +977,11 @@ def import_results(ctx: Ctx, path: Path, hw: str | None = None) -> dict[str, Any
             parents = experiments_for_code(ctx, code_hashes(prev), part) if prev is not None else []
             if parents:
                 lg.link(rec.id, "derived_from", parents[0]["id"])
+    if others and counts["other_metric"] == counts["rows"]:
+        raise BenchbookError(
+            f"{path} measures {', '.join(sorted(others))}; this project measures {primary} "
+            f"({lg.project.metric_direction}). Pass --metric <name> if the log's metric is {primary} under another "
+            "name. A log that optimises in the other direction cannot be imported.")
     counts["referee"] = len(safe_tick(lg))
     return counts
 

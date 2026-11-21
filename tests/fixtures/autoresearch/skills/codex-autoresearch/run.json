@@ -1,0 +1,23 @@
+{
+  "background": null,
+  "branch": "autoresearch/val-bpb",
+  "created_at": "2026-11-02T08:00:11Z",
+  "goal": "Lower val_bpb within the fixed 5-minute training budget",
+  "guard": "python3 -m pytest -q tests",
+  "max_iterations": 20,
+  "metric": {
+    "command": "uv run train.py | awk '/^val_bpb:/ {print $2}'",
+    "direction": "lower",
+    "json_key": null,
+    "name": "val_bpb"
+  },
+  "mode": "foreground",
+  "repo": "/home/user/autoresearch",
+  "run_id": "5f0c2d7e9a1b4c3d8e6f7a8b9c0d1e2f",
+  "schema_version": 2,
+  "scope": [
+    "train.py"
+  ],
+  "target": 0.95,
+  "timeout_seconds": 900
+}

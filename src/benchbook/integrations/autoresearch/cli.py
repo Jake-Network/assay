@@ -7,7 +7,10 @@ from typing import Annotated, Any
 
 import typer
 
+from .gate import gate_app
+
 ar_app = typer.Typer(no_args_is_help=True, help="autoresearch on many GPUs as one lab (run in the checkout root).")
+ar_app.add_typer(gate_app, name="gate")
 
 HwOpt = Annotated[str | None, typer.Option("--hw", help="hardware class override (else BENCHBOOK_AR_HW, nvidia-smi)")]
 CmdOpt = Annotated[str, typer.Option("--cmd", help="training command")]
@@ -237,16 +240,27 @@ def status(all_: Annotated[bool, typer.Option("--all", help="every partition")] 
 
 
 @ar_app.command("import")
-def import_cmd(path: Annotated[str, typer.Argument(help="results.tsv")] = "results.tsv", hw: HwOpt = None) -> None:
-    """Record an existing results.tsv (train.py of each row from git) as first runs. --hw (the GPU class the
-    runs used) is required. Use --agent to name who ran them."""
+def import_cmd(path: Annotated[str | None, typer.Argument(
+                   help="results.tsv, or the skill's log (file or the directory that holds it)")] = None,
+               source: Annotated[str, typer.Option(
+                   "--from", help="whose log: results.tsv, pi-autoresearch, uditgoenka, codex-autoresearch")]
+               = "results.tsv",
+               metric: Annotated[str | None, typer.Option(
+                   "--metric", help="the log's name for the project's metric, when it is not val_bpb")] = None,
+               hw: HwOpt = None) -> None:
+    """Record an existing results.tsv, or the run log of an autoresearch skill (--from), as first runs:
+    train.py of each row comes from git, keeps become candidates and get re-run. --hw (the GPU class the runs
+    used) is required. Use --agent to name who ran them. Importing the same log again adds nothing."""
     from pathlib import Path
 
     from .ops import import_results
 
-    r = import_results(_ctx(hw), Path(path), hw)
+    default = "results.tsv" if source == "results.tsv" else "."
+    r = import_results(_ctx(hw), Path(path or default), hw, source, metric)
+    extra = "".join(f", {r[k]} {label}" for k, label in (("other_metric", "measuring another metric"),
+                                                          ("skipped", "not runs")) if r.get(k))
     _emit({"ok": True, **r}, f"imported {r['imported']} of {r['rows']} rows ({r['duplicates']} already recorded, "
-                             f"{r['missing_commit']} commits not found)")
+                             f"{r['missing_commit']} commits not found{extra})")
 
 
 @ar_app.command("referee")
