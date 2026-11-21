@@ -23,7 +23,8 @@ from tests.conftest import make_project
 from tests.test_check_hooks import FX, GATE_CONFIG, ROOT, fixture, hook_log, observed
 from tests.test_check_run import PY, SCRIPT, attempts, cli_env, make_checkout, wait_attempts
 
-PASS_LINE, FAIL_LINE = "2 passed in 0.31s", "1 failed, 1 passed in 0.42s"
+# the last error line of the failing fixture: the result count after it ("1 failed, 1 passed in 0.42s") is not one
+PASS_LINE, FAIL_LINE = "2 passed in 0.31s", "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
 # harness: (passing run, failing run) of the same commands as the Claude Code fixtures
 RUNS = {"codex": ("codex/post_tool_use_bash.json", "codex/post_tool_use_bash_failure.json"),
         "cursor": ("cursor/post_tool_use_shell.json", "cursor/post_tool_use_shell_failure.json"),

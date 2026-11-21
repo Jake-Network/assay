@@ -52,6 +52,26 @@
   `docs/code.md`'s SQL (`report.py`). Not yet run.
 - `bench`: no arm loads the account's claude.ai connectors any more (`ENABLE_CLAUDEAI_MCP_SERVERS=false`);
   `command.json` records the MCP servers a session started with.
+- Codex CLI and Cursor hook manifests (`integrations/codex/hooks.json`, `integrations/cursor/hooks.json`) run
+  `benchbook hook bash-result` and `benchbook hook subagent-stop` with `--harness codex|cursor`. Declared check
+  runs are recorded when the harness's input gives the exit code (Cursor `tool_output.exitCode`; Codex only when
+  `tool_response` carries its `Process exited with code N` header) and observed as `unrecordable` otherwise.
+  Worker reports are captured as notes. See docs/harnesses.md.
+- `benchbook hook ... --harness gemini` reads Gemini CLI's `AfterTool` result for `run_shell_command` (the
+  `Exit Code: N` line). No manifest.
+- `observed.jsonl` lines carry `harness` (and `harness_version` from Cursor). `benchbook doctor` adds
+  `harness hook input`, which fails when a harness's hook input no longer has the documented shape.
+- Failure signatures come from one module (`signature.py`): the first failing JUnit test and its type (plus a
+  count and set hash when several fail), TypeScript error codes and files, or the exit code and a hash of the
+  normalised last error line. `check verify`, `check run` and the Bash hook use it. The output is never stored.
+- `check run` and `check verify` name an earlier attempt of the same piece that failed the same way, and the
+  approaches tried. It is a notice, not a refusal. `check run` asks only after a failure and waits at most 2 s.
+- A finished failed attempt leaves a discarded-approach claim (`observation`, tags `discarded`, `piece:<p>`,
+  `approach:<a>`, `mod:`), one per piece, signature and approach. `check run --approach NAME` /
+  `BENCHBOOK_APPROACH` sets `config.approach`.
+- Code projects get their own brief: `benchbook brief --tags mod:media` (MCP `benchbook_brief(tags=...)`) shows
+  discarded approaches, open out-of-scope findings, occupied paths and the last verified commit per piece within
+  the budget. Other packs refuse `--tags`. docs/code.md also has the "reads that changed a plan" count.
 
 ## Unreleased: core for the verification ledger
 

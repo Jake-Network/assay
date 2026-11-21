@@ -350,3 +350,43 @@ One line per decision the spec left open or that changed during implementation. 
 - **Benchmark arms exclude account connectors (0-4).** Configuration C needs the plugin's MCP server and so cannot
   use `--strict-mcp-config`; the connectors of the account running it were loaded with it (8 tools in the first
   batch, 90 in the rerun). `ENABLE_CLAUDEAI_MCP_SERVERS=false` is set for every arm.
+
+## Plan execution (2026-11-21)
+
+- **Phase 2 was built before the phase 1 verdict.** The plan gates the code pack's P0/P1 and the research adapters
+  on the two phase 1 numbers. On 2026-11-21 the owner asked for all of phases 0 to 2 to be built at once, so both
+  sides exist on the `benchbook` branch; the verdict (bench/results/2026-11-21-phase1/report.md) decides what is
+  kept in the release and published.
+- **Benchmark baseline.** The 2026-11-21 batch at commit `d65441a` is the baseline that later changes are compared
+  with, with C from the runs that had the account's connectors switched off. The first batch's C had 8 connector
+  tools in its lead and is kept as it was.
+- **Cost findings that change the plan's assumptions.** C is 4.2 times A in session tokens and 1.8 times in cost,
+  not about 5 times; hypothesis 2 (near configurations) is contradicted in both batches, so no near-config notice
+  is planned; the gap is made of model calls (111.7 against 36.0 per run) that each re-read their context.
+- **The harness is named in the hook command, not guessed (2-P1d).** `--harness` in each manifest; Codex and
+  Claude Code inputs look alike (`Bash`, `tool_input.command`).
+- **No exit code, no record (2-P1d).** A run whose outcome the input does not give (Codex `exec_command`, a Cursor
+  `postToolUseFailure` error, a wrapped Gemini `llmContent`) is observed as `unrecordable`, never recorded as a
+  pass. Most Codex runs are therefore observed only; the wrapper (`check run`) stays the canonical path. The
+  fixtures are built from the harness documentation, not captured from real runs.
+- **No completion gate outside Claude Code (2-P1d).** Neither Codex nor Cursor documents a task-completed event;
+  SubagentStop "block" and `followup_message` only continue the agent.
+- **Foreign transcripts are not read (2-P1d).** Codex and Cursor reports skip the citation check and are always
+  captured as notes.
+- **Doctor compares input shape, not version numbers (2-P1d).** Only Cursor's input has a version.
+- **One signature module (2-P0c).** JUnit, then tsc, then exit code plus normalised last error line, then timeout.
+  Several failing tests or errors add a count and a set hash, so different sets never merge. Numbers outside
+  words are blanked; the words stay. The fallback is heuristic: two failures whose last error line differs only
+  in numbers merge, so JUnit is recommended.
+- **Matching is per check element (2-P0c).** Signatures that share a `check:part` element on the same piece are
+  "seen before". It is a notice only.
+- **check run looks up only after a failure (2-P0c),** in a 2 s thread with one plain connection, before the run
+  is queued, and never starts the embedded server. The passing path is unchanged (about 65 ms added; a failing
+  run with the ledger up about 210 ms).
+- **Discarded approaches (2-P0c).** One per (piece, signature, approach) under the fixed domain
+  `benchbook:discarded\0`; later failures add evidence. Runs with uncommitted changes leave none. The claim
+  survives verification. Writing it never raises, so the spool never records an attempt twice.
+- **The code brief has no `--pack` (2-P0c);** the project's pack chooses the compiler. Tags are a union; `file:`
+  matches by prefix; pieces are found through their `piece start` task. Other packs refuse `--tags`.
+- **"Reads that changed a plan" is an upper bound (2-P0c).** `brief_log` does not record what a brief showed, so
+  the count is citations of claims that a brief could have shown.
