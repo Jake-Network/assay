@@ -236,6 +236,28 @@ def test_session_is_saved_under_an_id_chosen_in_advance(tmp_path: Path, monkeypa
     assert expected["subagents"].endswith(f"/{meta['session_id']}/subagents/agent-*.jsonl")
 
 
+@pytest.mark.parametrize("mode", ["A", "B", "C"])
+def test_no_arm_loads_the_accounts_connectors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """C keeps the plugin's MCP server, so it cannot use --strict-mcp-config; the connectors of the account that
+    runs the benchmark are switched off for every arm instead."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")  # whatever the shell says
+    prepared = real.prepare(mode, tmp_path / f"{mode}-1", args())
+    assert prepared.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    assert prepared.command_env()["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"  # shown in the preview and command.json
+    assert ("--strict-mcp-config" in prepared.cmd) == (mode != "C")
+
+
+def test_foreign_mcp_servers_of_a_session_are_named(tmp_path: Path) -> None:
+    init = {"type": "system", "subtype": "init", "tools": ["Agent", "mcp__claude_ai_Example__x"],
+            "mcp_servers": [{"name": "plugin:benchbook:benchbook", "status": "connected"},
+                            {"name": "claude.ai Example", "status": "connected"}]}
+    (tmp_path / "lead.stream.jsonl").write_text("not json\n" + json.dumps(init) + "\n")
+    assert real.session_mcp_servers(tmp_path) == {
+        "servers": ["plugin:benchbook:benchbook", "claude.ai Example"], "foreign": ["claude.ai Example"], "tools": 2}
+    assert real.session_mcp_servers(tmp_path / "missing") == {"servers": [], "foreign": [], "tools": 0}
+
+
 def place_transcripts(config_dir: Path, cwd: Path, session_id: str) -> Path:
     """Claude Code's layout: projects/<cwd with every other character as '-'>/<session>.jsonl, and the subagents in
     <session>/subagents/agent-<id>.jsonl with a .meta.json beside each."""

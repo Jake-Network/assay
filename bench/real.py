@@ -102,7 +102,8 @@ class PreparedRun:
     session_id: str
 
     def command_env(self) -> dict[str, str]:
-        names = ("BENCH_ROOT", "BENCH_EVALS", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
+        names = ("BENCH_ROOT", "BENCH_EVALS", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+                 "ENABLE_CLAUDEAI_MCP_SERVERS")
         overrides = {name: self.env[name] for name in names}
         if self.project_id:
             overrides["BENCHBOOK_PROJECT"] = self.project_id
@@ -122,6 +123,11 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
            # Newer Claude Code starts subagents in the background by default; the lead then ends its turn before the
            # workers report and the stream carries one result event per wake-up. Every arm waits for its workers.
            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+           # The account's claude.ai connectors are not part of any arm. A and B drop every MCP server with
+           # --strict-mcp-config, but C must keep the plugin's server, and without this it also loaded the connectors
+           # of whoever ran it: 8 tools in the 2026-11-20 batch, 90 in the 2026-11-21 rerun (+50k tokens in the
+           # lead's first prompt). --setting-sources '' does not cover them; this variable is the documented switch.
+           "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
            "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ.get("PATH", "")))}
     for inherited in ("BENCHBOOK_PROJECT", "ASSAY_PROJECT"):  # the pre-rename name is read as a fallback
         env.pop(inherited, None)
@@ -206,6 +212,34 @@ def _flush_hooks(prepared: PreparedRun) -> None:
                        check=True, timeout=130)
         if next(spool.glob("*.json"), None):
             raise BenchRunError("hook receipts are still queued after replay")
+
+
+PLUGIN_MCP_SERVER = "plugin:benchbook:benchbook"
+
+
+def session_mcp_servers(out: Path) -> dict[str, Any]:
+    """The MCP servers the lead's session started with, from the stream's init event, and those among them that
+    are not the arm's own (A and B: any; C: any but the plugin's). A foreign server's tool definitions sit in every
+    prompt of the lead, so a run that has one does not measure the arm alone."""
+    names: list[str] = []
+    tools = 0
+    try:
+        with (out / "lead.stream.jsonl").open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+                    servers = event.get("mcp_servers")
+                    names = [str(s.get("name")) for s in servers if isinstance(s, dict)] if isinstance(
+                        servers, list) else []
+                    listed = event.get("tools")
+                    tools = len(listed) if isinstance(listed, list) else 0
+                    break
+    except OSError:
+        pass
+    return {"servers": names, "foreign": [n for n in names if n != PLUGIN_MCP_SERVER], "tools": tools}
 
 
 def claude_config_dir(env: Mapping[str, str]) -> Path:
@@ -320,7 +354,11 @@ def run_real(mode: str, out: Path, run: int, args: Any) -> RunMetrics | None:
         finally:
             # A run that failed keeps its transcripts too: they show what the subagents were doing when it stopped.
             meta["transcripts"] = collect_transcripts(config_dir, prepared.session_id, out)
+            meta["mcp"] = session_mcp_servers(out)
             write_meta()
+            if meta["mcp"]["foreign"]:
+                print(f"[{mode} run {run}] MCP servers that are not part of the arm were loaded: "
+                      f"{', '.join(meta['mcp']['foreign'])}", file=sys.stderr)
             if error := meta["transcripts"].get("error"):
                 print(f"[{mode} run {run}] no session transcripts: {error}", file=sys.stderr)
         if prepared.project_id:
