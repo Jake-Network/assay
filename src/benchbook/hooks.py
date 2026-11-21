@@ -511,9 +511,10 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     if not project:
         log(f"{event}: not captured: no benchbook project for {data.get('cwd') or cwd or os.getcwd()}")
         return "skipped:no-project"
+    from .config import default_agent
     from .ledger import Ledger
 
-    lg = Ledger.open(project=project, agent="hook", role="harness")
+    lg = Ledger.open(project=project, agent=default_agent("hook"), role="harness")
     when = datetime.fromtimestamp(fired_at, UTC) if fired_at else datetime.now(UTC)
     if _cites_own_record(lg, text, data, when):
         return "cited"

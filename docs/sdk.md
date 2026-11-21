@@ -5,6 +5,7 @@ from benchbook import Ledger
 
 Ledger.init_project("lr-sweep", goal="Minimise val loss", metric="val_loss", direction="min")  # pack="core" by default
 lg = Ledger.open(project="lr-sweep", agent="worker-1")     # or BENCHBOOK_PROJECT / .benchbook/config.toml, BENCHBOOK_AGENT
+lg = Ledger.open(project="lr-sweep", token="bbt_...")      # or BENCHBOOK_TOKEN: the token names the agent (docs/multi-machine.md)
 ```
 
 Workers:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
+from .agent_cli import agent_app
 from .config import env
 from .errors import BenchbookError, Conflict, ValidationFailed
 from .ids import short
@@ -28,6 +29,7 @@ app.add_typer(task_app, name="task")
 app.add_typer(exp_app, name="exp")
 app.add_typer(claim_app, name="claim")
 app.add_typer(db_app, name="db")
+app.add_typer(agent_app, name="agent")
 
 STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 
@@ -68,10 +70,13 @@ def emit(data: Any, text: str | None = None) -> None:
 
 def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
     """Writes need a name: --agent, BENCHBOOK_AGENT or (for decide) --as. Reads that write nothing fall back to
-    'human' so a person can look around without naming themselves (I1)."""
+    'human' so a person can look around without naming themselves (I1). With BENCHBOOK_TOKEN the token names the
+    agent, so there is no fallback."""
+    from .config import default_agent
     from .ledger import Ledger
 
-    name = agent or STATE["agent"] or env("AGENT") or ("human" if read_only else None)
+    fallback = default_agent("human") if read_only else None
+    name = agent or STATE["agent"] or env("AGENT") or fallback
     return Ledger.open(project=STATE["project"], agent=name)
 
 

@@ -9,7 +9,7 @@ role, superusers included.
 | table | what | mutable |
 |---|---|---|
 | `projects` | goal, primary metric and direction, improve epsilon, pack, settings (`config_schema`, `rerun_min_seeds`, `rerun_min_authors`, `partition_key`, `worker_intents`, `partitions`, ...) | settings only, through `update_settings` |
-| `agents` | contributor identity per project, `role` in worker / orchestrator / human / harness | no |
+| `agents` | contributor identity per project, `role` in worker / orchestrator / human / harness; `token_hash`, the SHA-256 of the agent's token when one was issued (`benchbook agent add`), never readable by `benchbook_writer` | `token_hash` only, by the owner (`benchbook agent add --rotate`, `benchbook agent revoke`) |
 | `tasks` | unit of work with a lease (`lease_owner`, `lease_expires_at`, `attempts`) | lease fields, through SDK functions only |
 | `task_events` | audit log of task changes (created, claimed, heartbeat, expired, done, failed, cancelled) | no |
 | `experiments` | config, code_ref, dedup_key, seed, run_status, metrics, primary_value, server-computed outcome, notes, artifacts, trace_ref, duplicate_of (the first ok run with the same key and seed, when the pack records repeats: `dedup_mode = "notify"`) | no |
@@ -25,6 +25,25 @@ role, superusers included.
 Partitions (Step 3): when `settings.partition_key` is set, outcomes, `v_best`, `v_leaderboard`, `v_progress`
 and duplicate checks only compare experiments whose `config[partition_key]` is equal. Projects without it behave as
 before.
+
+## Roles and identity (migration 0008)
+
+| role | can | used by |
+|---|---|---|
+| owner (whoever ran the migrations) | everything; trusted: the identity triggers let its rows through unchanged | local mode, and the operator in team mode |
+| `benchbook_writer` (login, cluster-wide) | SELECT on every table and view (on `agents` every column but `token_hash`), INSERT on the record tables and `tasks`, UPDATE on `tasks` lease columns and `projects.settings`; nothing on `agents` rows, no UPDATE or DELETE on records | agents on a shared server, each with its token (docs/multi-machine.md) |
+| `benchbook_reader` | SELECT on the `benchbook_q` views only | `benchbook_sql` |
+
+A session is trusted when it may update `agents.token_hash` (the owner, a superuser). Every other session must bind
+an agent before it writes: `benchbook.authenticate(project, token)` (SECURITY DEFINER) checks the token against
+`agents.token_hash` and keeps it in the transaction-local setting `benchbook.token`;
+`benchbook.session_identity(project)` returns the agent and role that setting proves. The BEFORE triggers
+`*_identity` on `experiments`, `claims`, `sources`, `links`, `blobs`, `dedup_hits`, `brief_log`, `decisions`,
+`settings_events`, `tasks`, `task_events` and `projects` hash that setting again on every row, so a name or a hash
+set by hand proves nothing. The author column (`author`, `agent_id`, `decided_by`, `created_by`) must name the
+token's agent and is filled with it when left out; decisions, settings changes, open tasks and cancellations also
+need the agent's role to be orchestrator or human; task updates must be ones the SDK makes, by the lease holder
+(or, for an expired lease, by whoever takes it over). Refusals use SQLSTATE 42501 (`insufficient_privilege`).
 
 ## Views
 

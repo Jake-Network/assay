@@ -55,10 +55,90 @@ Use a separate password for `benchbook_reader`. If the reader login fails, `benc
 `BENCHBOOK_SQL_ALLOW_SET_ROLE=1` opts into the weaker fallback, which uses `SET ROLE benchbook_reader` from the owner
 login inside a read-only transaction with a statement filter.
 
+## Per-agent tokens
+
+In the setup above every machine holds the owner's URL and names itself with `BENCHBOOK_AGENT`: the name is
+self-declared, so an agent can write as the lead or as a second "independent" replicator. To have the database
+check names, give machines the `benchbook_writer` login and one token per agent. Nothing changes for a machine
+that keeps the owner's URL, so local mode and existing setups work as before; enforcement is on for exactly the
+connections made as the writer login.
+
+**1. The writer login (operator, once).** Migration 0008 creates the cluster-wide role `benchbook_writer` with
+LOGIN and no password, so under password authentication nobody can use it yet. Either give it a password:
+
+```sql
+ALTER ROLE benchbook_writer PASSWORD '...';
+```
+
+or, better, one login per machine that is a member of it (a login can change its own password, so a shared
+login lets one machine lock the others out):
+
+```sql
+CREATE ROLE gpu1 LOGIN PASSWORD '...' IN ROLE benchbook_writer;
+```
+
+**2. Tokens (operator, on the owner's URL).** One per agent and project:
+
+```bash
+benchbook --project nanogpt-speedrun agent add lead              # the lead keeps its orchestrator role
+benchbook --project nanogpt-speedrun agent add gpu-1 --role worker
+```
+
+The token (`bbt_...`) is printed once; benchbook stores only its SHA-256, so it cannot be shown again.
+`agent add NAME --rotate` replaces a token (the old one stops working at once), `agent revoke NAME` removes it,
+and `agent list` shows who has one. An agent that already wrote under a self-declared name gets its token on the
+same row and keeps its role. These commands, `benchbook init` and `benchbook migrate` need the owner's URL: the
+writer login can neither register agents nor migrate, so upgrade benchbook by migrating from the operator's
+machine first.
+
+**3. Each machine.**
+
+```bash
+export BENCHBOOK_DATABASE_URL=postgresql://gpu1:...@db-host:5432/benchbook   # the writer login, not the owner
+export BENCHBOOK_PROJECT=nanogpt-speedrun
+export BENCHBOOK_TOKEN=bbt_...                                                 # replaces BENCHBOOK_AGENT
+```
+
+The token names the agent: `BENCHBOOK_AGENT` and `--agent` may be left out and, when given, must be the token's
+agent. The CLI, the SDK (`Ledger.open(token=...)`), the hooks, the MCP server and the viewer all read
+`BENCHBOOK_TOKEN`, and each process is then that one agent: the MCP server refuses an `agent` argument naming
+anyone else, and the hook writes as the token's agent instead of `hook`. Inside one Claude Code session every
+subagent shares the session's environment, so they are one agent; give separate agents separate processes.
+
+### What it prevents, and what it does not
+
+On a connection made as `benchbook_writer` (or a member of it):
+
+- Without a valid token nothing is written. With one, every row must name the token's agent (author, agent_id,
+  decided_by, created_by; a row that leaves it out gets that agent), so an agent cannot record, claim, link, rerun or
+  decide in another agent's name, and a repeat recorded with `duplicate_of` is held to the same rule.
+- Lead-only actions are bound to the token's role: decisions, settings changes, creating open tasks and
+  cancelling need an orchestrator or human token. Roles cannot change (migration 0006).
+- Task leases: only the holder heartbeats or completes; a task is claimed only in the claimer's own name.
+- Setting `benchbook.token`, or any other setting, by hand proves nothing beyond a token the client already holds:
+  the triggers hash the value again and look it up. The token hashes are unreadable to the writer, a token is valid
+  only for its project, and the identity lasts one transaction, so a pooled connection carries none to its next user.
+- The writer cannot UPDATE, DELETE or TRUNCATE records, touch `agents`, create projects, alter or disable triggers,
+  or set `session_replication_role`. `tests/test_invariants.py` (I8) tries each of these.
+
+Not prevented:
+
+- **The owner and superusers are trusted.** They can disable triggers and write anything; keep the owner's URL on
+  the operator's machine. The guarantee is for clients that hold only the writer login and their own token.
+- **A token is the agent.** Whoever reads it (the process environment, a shell history, a log) acts as that agent
+  until it is rotated. A machine holding the lead's token can decide; keep it where the lead runs.
+- **Truthfulness.** An agent can still record made-up metrics under its own name. Independent reruns, CI and
+  human review address that; tokens only make "who" checkable.
+- **Reads and disruption.** A writer reads every project in the database (row-level security is planned), sees the
+  statement text of other sessions of the same login (tokens travel as bind parameters, never in statement text),
+  and can disrupt others: hold locks, fill tables, send spurious notifications, or change the shared login's
+  password or session defaults (per-machine logins limit the last).
+
 ## Security
 
-Every machine holds the owner credentials in `BENCHBOOK_DATABASE_URL`; the append-only triggers and role checks stop
-honest mistakes, not a hostile client. Keep the database on a private network and the password out of the repository.
+Without per-agent tokens every machine holds the owner credentials in `BENCHBOOK_DATABASE_URL`; the append-only
+triggers and role checks stop honest mistakes, not a hostile client. Keep the database on a private network and the
+passwords out of the repository.
 
 `benchbook serve` binds to 127.0.0.1 and answers only to the Host names `localhost`, `127.0.0.1` and `[::1]` (plus the
 bound address when you pass a specific one), which blocks DNS-rebinding pages. Any non-loopback bind requires

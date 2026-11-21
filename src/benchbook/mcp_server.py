@@ -15,6 +15,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import config as localcfg
+from .config import default_agent
 from .errors import BenchbookError, ValidationFailed
 from .ids import short
 from .ledger import Ledger, jsonable
@@ -70,8 +71,9 @@ class Server:
         with self._lock:
             if self._base is None:
                 # Claude Code discovers tools before the lead skill has a chance to run benchbook init.
-                self._base = Ledger.open(project=self._project, agent="lead")
-            if agent == "lead":
+                # With BENCHBOOK_TOKEN the server is one agent, the token's: as_agent refuses any other name.
+                self._base = Ledger.open(project=self._project, agent=default_agent("lead"))
+            if agent == self._base.agent:
                 return self._base
             if agent not in self._agents:
                 self._agents[agent] = self._base.as_agent(agent)

@@ -130,6 +130,12 @@ def local_dir(root: Path) -> Path:
 # ---------------------------------------------------------------------- config.toml
 
 
+def default_agent(name: str) -> str | None:
+    """The fixed name an adapter falls back to (the hook's 'hook', the viewer's 'human'), unless BENCHBOOK_TOKEN is
+    set: a token already says which agent this process is, and Ledger.open refuses any other name."""
+    return None if env("TOKEN") else name
+
+
 @dataclass
 class LocalConfig:
     project: str | None = None

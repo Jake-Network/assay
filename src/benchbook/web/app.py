@@ -30,7 +30,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ..blobs import is_blob_uri
-from ..config import env
+from ..config import default_agent, env
 from ..db.conn import notification_channel
 from ..errors import BenchbookError
 from ..ids import short
@@ -436,7 +436,7 @@ def create_app(project: str | None = None, toolset: str = "all", with_mcp: bool 
         raise BenchbookError(f"binding to {host or 'all interfaces'} requires a token; "
                          "set BENCHBOOK_SERVE_TOKEN (clients then send Authorization: Bearer <token>) "
                          "or bind to 127.0.0.1")
-    lg = Ledger.open(project=project, agent="human")
+    lg = Ledger.open(project=project, agent=default_agent("human"))
     viewer = Viewer(lg)
     if with_mcp:
         from ..mcp_server import build

@@ -21,6 +21,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from . import config as localcfg
+from . import identity
 from .blobs import BLOB_PREFIX, blob_digest
 from .db import conn as dbconn
 from .db.migrate import head as migrate_head
@@ -119,12 +120,13 @@ class Ledger:
     _pools_lock = threading.Lock()
     _migrated: set[str] = set()
 
-    def __init__(self, url: str, project: Project, agent: str, role: str):
+    def __init__(self, url: str, project: Project, agent: str, role: str, token: str | None = None):
         self.url = url
         self.project = project
         self.project_id = project.id
         self.agent = agent
         self.role = role
+        self.token = token  # set: every transaction of this handle is bound to `agent` by its token (identity.py)
         self.pack: Pack = load_pack(project.pack)
         cs = project.settings.get("config_schema")
         self._config_validator = Draft202012Validator(cs) if cs else None
@@ -160,16 +162,20 @@ class Ledger:
 
     @classmethod
     def open(cls, project: str | None = None, agent: str | None = None, role: str | None = None,
-             database_url: str | None = None) -> Ledger:
+             database_url: str | None = None, token: str | None = None) -> Ledger:
         """Open a project's ledger. Project comes from the argument, BENCHBOOK_PROJECT or .benchbook/config.toml.
         Agent comes from the argument or BENCHBOOK_AGENT; there is no default, so a process that forgot to name
         itself cannot act as 'human' by accident. An unknown agent is registered with `role`
-        (default worker; 'human' defaults to the human role)."""
+        (default worker; 'human' defaults to the human role).
+
+        With a token (the argument or BENCHBOOK_TOKEN, issued by `benchbook agent add`) the agent is the one the
+        token belongs to: no name is needed, a different name is refused, and nothing is registered."""
         project = project or localcfg.load().project
         if not project:
             raise BenchbookError("no project: pass project=, set BENCHBOOK_PROJECT, or run `benchbook init`")
         agent = agent or localcfg.env("AGENT")
-        if not agent:
+        token = token or localcfg.env("TOKEN")
+        if not agent and not token:
             raise BenchbookError("no agent name: set BENCHBOOK_AGENT=<name> or pass --agent <name> "
                              "(a person deciding by hand uses `benchbook decide ... --as human`)")
         url = cls.ensure_schema(database_url)
@@ -178,8 +184,21 @@ class Ledger:
             if row is None:
                 raise NotFound(f"project {project!r} does not exist; run `benchbook init --project {project}`")
             p = Project(**row)
-            actual = cls._ensure_agent(conn, p.id, agent, role)
-        return cls(url, p, agent, actual)
+            if token:
+                owner, actual = identity.authenticate(conn, p.id, token)
+                if agent and agent != owner:
+                    raise PermissionDenied(f"the token belongs to agent {owner}; it cannot act as {agent}. "
+                                           f"Use --agent {owner} (or drop the name), or that agent's own token.")
+                agent = owner
+            else:
+                assert agent is not None
+                try:
+                    actual = cls._ensure_agent(conn, p.id, agent, role)
+                except psycopg.errors.InsufficientPrivilege as e:
+                    raise PermissionDenied(
+                        "this database login cannot register agents (it is not the owner's): set BENCHBOOK_TOKEN "
+                        "to the token an operator issued for you with `benchbook agent add`") from e
+        return cls(url, p, agent, actual, token)
 
     @staticmethod
     def _ensure_agent(conn: psycopg.Connection[Any], project_id: str, agent: str, role: str | None,
@@ -295,12 +314,20 @@ class Ledger:
         return bytes(r["bytes"])
 
     def as_agent(self, agent: str, role: str | None = None) -> Ledger:
+        if self.token is not None:
+            # A token is one agent: a handle bound by it cannot hand out another identity.
+            if agent != self.agent:
+                raise PermissionDenied(f"this ledger is bound to agent {self.agent} by its token; it cannot act "
+                                       f"as {agent}")
+            return self
         with self._conn() as conn:
             actual = self._ensure_agent(conn, self.project_id, agent, role)
         return Ledger(self.url, self.project, agent, actual)
 
     def _conn(self) -> Any:
-        return self._pool(self.url).connection()
+        if self.token is None:
+            return self._pool(self.url).connection()
+        return identity.session(self._pool(self.url), self.project_id, self.token)
 
     def _require_decider(self) -> None:
         if self.role not in DECIDERS:
@@ -1328,8 +1355,10 @@ class Ledger:
             yield {"type": "project", "record": jsonable(proj)}
             events: list[tuple[Any, str, dict[str, Any]]] = []
             for t in tables:
-                for r in conn.execute(psql.SQL("SELECT * FROM benchbook.{} WHERE project_id=%s").format(
-                        psql.Identifier(t)), (self.project_id,)):
+                # agents by column: token_hash is a credential check value and stays out of exports
+                cols = psql.SQL("project_id, id, role, model, meta, created_at" if t == "agents" else "*")
+                for r in conn.execute(psql.SQL("SELECT {} FROM benchbook.{} WHERE project_id=%s").format(
+                        cols, psql.Identifier(t)), (self.project_id,)):
                     events.append((r["created_at"], t, r))
         events.sort(key=lambda e: (e[0], tables.index(e[1])))
         for _, t, r in events:

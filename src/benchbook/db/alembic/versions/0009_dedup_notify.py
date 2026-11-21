@@ -1,14 +1,12 @@
 """Let a notify-mode pack record a repeat of an ok run: experiments.duplicate_of and dedup_hits kind 'notified'.
 
 Revision ID: 0009
-Revises: 0007
+Revises: 0008
 """
 from benchbook.db.migrate import run_sql_file
 
 revision = "0009"
-# 0008 (agent tokens and the writer role) is written on another branch at the same time: when both are merged,
-# this becomes "0008" so the revisions stay one straight line.
-down_revision = "0007"
+down_revision = "0008"
 branch_labels = None
 depends_on = None
 

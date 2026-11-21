@@ -102,15 +102,23 @@ away. No LLM is involved.
 
 ## Honest limits
 
-Identity is self-declared. An MCP caller names itself with the `agent` argument and a CLI caller with
+By default identity is self-declared. An MCP caller names itself with the `agent` argument and a CLI caller with
 `BENCHBOOK_AGENT`/`--agent`, and an unknown name is registered with the role it asks for, so a malicious agent
 could claim to be the lead, or make up several names to look like independent replicators. The CLI no longer
 falls back to `human` when no name is given; a person deciding by hand passes `--as human`.
 
-What the database enforces for every connection that is not the owner's: append-only tables (UPDATE, DELETE and
-TRUNCATE are refused by triggers), fixed agent roles (an agent row cannot be re-roled or deleted), and the
-decision-role check. The owner can disable triggers (`ALTER TABLE ... DISABLE TRIGGER`), and today every agent
-connects as the owner, so these hold against mistakes, not against an agent that sets out to break them.
+What the database enforces for every connection: append-only tables (UPDATE, DELETE and TRUNCATE are refused by
+triggers), fixed agent roles (an agent row cannot be re-roled or deleted), and the decision-role check. The owner can
+disable triggers (`ALTER TABLE ... DISABLE TRIGGER`), so while agents connect as the owner these hold against
+mistakes, not against an agent that sets out to break them.
+
+A team can make names checked (migration 0008): the operator issues each agent a token (`benchbook agent add`, only
+its SHA-256 is stored) and gives machines the `benchbook_writer` login instead of the owner's. On that login a row is
+accepted only under the name of the agent whose token the transaction presented, and lead-only actions (decisions,
+settings, open tasks, cancellations) only from an orchestrator or human token, so an agent cannot record or decide
+as someone else, and "replicated by another author" means another token. It does not stop a token holder from
+recording false results under its own name, nor anyone holding the owner's URL. The threat model is in
+[multi-machine.md](multi-machine.md#per-agent-tokens).
 
 `benchbook_sql` runs as `benchbook_reader` in a read-only transaction over the per-project `benchbook_q` views. The reader
 cannot call `set_config` (revoked when the migration runs as a superuser), the query text may not use
@@ -118,5 +126,4 @@ cannot call `set_config` (revoked when the migration runs as a superuser), the q
 role is discarded. When `benchbook_reader` cannot log in, the weaker `SET ROLE` fallback needs
 `BENCHBOOK_SQL_ALLOW_SET_ROLE=1`.
 
-Planned for v0.2: per-agent tokens, a runtime writer role with INSERT and SELECT only (separate from the
-migration owner), and row-level security per project.
+Planned for v0.2: row-level security per project (today a writer reads every project of its database).
