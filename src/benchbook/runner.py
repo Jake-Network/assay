@@ -155,6 +155,7 @@ class _Tee:
         self._src = src
         self._log = log
         self._write_out = _stdout_writer()
+        self._idle_since: float | None = None  # when the copy began to wait for output; None while it writes
         self._stopped = threading.Event()
         self._thread = threading.Thread(target=self._copy, name="benchbook-tee", daemon=True)
         self._thread.start()
@@ -163,8 +164,11 @@ class _Tee:
         write_out = self._write_out
         try:
             # An unbuffered pipe: read() returns what is there, so a line shows up when the command prints it.
-            while chunk := self._src.read(_CHUNK):
-                if self._stopped.is_set():
+            while True:
+                self._idle_since = time.monotonic()
+                chunk = self._src.read(_CHUNK)
+                self._idle_since = None
+                if not chunk or self._stopped.is_set():
                     return
                 self._log.write(chunk)
                 self._log.flush()
@@ -179,9 +183,16 @@ class _Tee:
             self._src.close()
 
     def finish(self) -> None:
-        """Wait for the end of the output. Past the drain time the rest is dropped: whatever still holds the
-        pipe is a process the command left behind, and its next write fails once the copy has closed the pipe."""
-        self._thread.join(_TEE_DRAIN_S)
+        """Wait for the end of the output. A copy that is still writing gets all the time it needs (a slow reader
+        of stdout must not cost output). One that has waited the drain time for more is cut off: whatever still
+        holds the pipe is a process the command left behind, and its next write fails once the pipe is closed."""
+        start = time.monotonic()
+        while self._thread.is_alive():
+            idle = self._idle_since
+            # Counted from now at the earliest: the last chunk may be in the pipe with the copy not yet awake.
+            if idle is not None and time.monotonic() - max(idle, start) >= _TEE_DRAIN_S:
+                break
+            self._thread.join(0.02)
         self._stopped.set()
 
 
@@ -214,9 +225,11 @@ def run_command(cmd: str, cwd: Path, log_path: Path, timeout: float, metric: str
             proc = subprocess.Popen(cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE if tee else log,  # noqa: S602
                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
                                     **kw)  # type: ignore[call-overload]
-            copy = _Tee(proc.stdout, log) if tee else None
+            copy: _Tee | None = None
             try:
                 try:
+                    if tee:
+                        copy = _Tee(proc.stdout, log)
                     proc.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     timed_out = True

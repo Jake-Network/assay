@@ -79,14 +79,14 @@ def test_exit_code_alone_decides_without_a_metric(tmp_path: Path) -> None:
     log = tmp_path / "run.log"
     res = run_command(_py(tmp_path, "ok.py", "print('checked 3 files')\n"), tmp_path, log, 60)
     assert (res.run_status, res.exit_code, res.reason) == ("ok", 0, "")
-    assert res.log_tail == "checked 3 files" and res.metrics == {}
+    assert res.log_tail.strip() == "checked 3 files" and res.metrics == {}
     assert log.read_text().strip() == "checked 3 files"
 
     fail = _py(tmp_path, "fail.py", "import sys\nprint('2 passed, 1 failed', flush=True)\n"
                                     "print('boom', file=sys.stderr)\nsys.exit(3)\n")
     res = run_command(fail, tmp_path, log, 60, metric=None)
     assert (res.run_status, res.exit_code, res.reason) == ("error", 3, "exit 3")
-    assert res.log_tail.splitlines() == ["2 passed, 1 failed", "boom"]  # stderr is in the log, in order
+    assert res.log_tail.split() == ["2", "passed,", "1", "failed", "boom"]  # stderr is in the log, in order
 
 
 def test_a_named_metric_must_be_in_the_summary(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ def test_log_tail_keeps_the_end_of_long_output(tmp_path: Path) -> None:
     assert runner.tail("a\rb\nc", lines=2) == "b\nc" and runner.tail("short") == "short"
     kept = runner.tail(text)
     assert len(kept) == 1500 and kept.endswith("E   ValueError: the real reason\n=== 40 failed in 1.23s ===")
-    cmd = _py(tmp_path, "long.py", f"import sys\nprint({text!r})\nsys.exit(1)\n")
+    cmd = _py(tmp_path, "long.py", f"import sys\nsys.stdout.buffer.write({text.encode()!r})\nsys.exit(1)\n")
     res = run_command(cmd, tmp_path, tmp_path / "run.log", 60)
     assert res.exit_code == 1 and res.log_tail == kept
 
@@ -122,7 +122,7 @@ def test_timeout_is_reported_with_the_output_so_far(tmp_path: Path) -> None:
     res = run_command(cmd, tmp_path, tmp_path / "run.log", 2)
     assert time.monotonic() - t0 < 60
     assert (res.run_status, res.exit_code, res.reason) == ("timeout", None, "timeout after 2s")
-    assert res.log_tail == "collecting" and res.duration_ms >= 2000
+    assert res.log_tail.strip() == "collecting" and res.duration_ms >= 2000
 
 
 @posix_only
@@ -261,6 +261,60 @@ def test_tee_keeps_the_log_when_stdout_is_gone(tmp_path: Path, monkeypatch: pyte
     monkeypatch.undo()
     assert (res.run_status, res.exit_code) == ("error", 7)
     assert (tmp_path / "run.log").read_bytes().endswith(b"last line without a newline")
+
+
+def test_tee_waits_for_a_slow_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The command is gone while the copy is still writing its first line: the drain time is for a pipe that
+    stays silent, not for a reader that is slow, so the second line is not dropped."""
+    cmd = _py(tmp_path, "two.py", """import sys, time
+out = sys.stdout.buffer
+out.write(b"one\\n"); out.flush()
+time.sleep(0.5)
+out.write(b"two\\n"); out.flush()
+""")
+
+    class Slow(_Stdout):
+        def write(self, chunk: bytes) -> int:
+            time.sleep(1.5)
+            return super().write(chunk)
+
+    out = Slow()
+    monkeypatch.setattr(runner, "_TEE_DRAIN_S", 0.2)
+    monkeypatch.setattr(sys, "stdout", out)
+    res = run_command(cmd, tmp_path, tmp_path / "run.log", 60, tee=True)
+    monkeypatch.undo()
+    assert res.run_status == "ok"
+    assert out.data == (tmp_path / "run.log").read_bytes() == b"one\ntwo\n"
+
+
+def test_tee_copies_the_output_that_arrives_as_the_command_ends(tmp_path: Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """A command that was silent for longer than the drain time prints its last line and exits. The copy has not
+    read that line yet when the runner asks it to finish; the silence before must not count against it."""
+
+    class Pipe:
+        def __init__(self) -> None:
+            self.release = threading.Event()
+            self.chunks = [b"last words\n", b""]
+
+        def read(self, n: int) -> bytes:
+            if len(self.chunks) == 2:
+                self.release.wait(10)
+            return self.chunks.pop(0)
+
+        def close(self) -> None:
+            pass
+
+    pipe, out = Pipe(), _Stdout()
+    monkeypatch.setattr(runner, "_TEE_DRAIN_S", 0.5)
+    monkeypatch.setattr(sys, "stdout", out)
+    with open(tmp_path / "run.log", "wb") as log:
+        copy = runner._Tee(pipe, log)  # type: ignore[arg-type]
+        time.sleep(0.8)
+        threading.Timer(0.1, pipe.release.set).start()
+        copy.finish()
+    monkeypatch.undo()
+    assert out.data == (tmp_path / "run.log").read_bytes() == b"last words\n"
 
 
 @posix_only
