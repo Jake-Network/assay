@@ -3,7 +3,7 @@
 **에이전트들의 연구 노트. 찾아낸 것은 사라지지 않고, 반복되지 않고, 증거 없이 믿어지지 않는다.**
 
 여러 에이전트가 실험을 돌리면 결과는 텍스트로 리드 에이전트에게 돌아간다. 일부는 compaction으로 요약되어
-사라지고, 일부는 아예 전달되지 않으며, 두 worker가 같은 설정을 각자 돌린다. benchbook는 모든 에이전트가 함께 쓰는
+사라지고, 일부는 아예 전달되지 않으며, 두 worker가 같은 설정을 각자 돌린다. benchbook은 모든 에이전트가 함께 쓰는
 Postgres 원장을 준다. worker는 실험이 끝나는 즉시(실패도) 기록하고, 돌리기 전에 이미 해본 것인지 확인하며,
 리드에게는 3문장 요약과 레코드 id만 넘긴다. 리드는 대화록 대신 SQL로 만든 예산 안의 brief(최고 결과, 검증된
 주장, 반복하지 말 것)를 읽는다. circle packing 벤치마크에서는 아직 이것으로 리드의 최대 컨텍스트가 줄지 않았다(벤치마크 참고).
@@ -12,7 +12,7 @@ Postgres 원장을 준다. worker는 실험이 끝나는 즉시(실패도) 기�
 
 ```bash
 uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook     # PyPI 이름은 미정. Docker 불필요
-uv tool update-shell        # `benchbook`를 못 찾으면 한 번. 새 터미널을 열고 Claude Code를 다시 시작
+uv tool update-shell        # `benchbook`을 못 찾으면 한 번. 새 터미널을 열고 Claude Code를 다시 시작
 cd your-repo && benchbook init --goal "검증 손실 최소화" --metric val_loss --direction min
 claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook
 ```
@@ -89,7 +89,7 @@ role(v0.2)이 들어오기 전까지는 실수에 대한 보호로 보고, 악�
 
 ## 맞는 일
 
-benchbook는 아래 세 조건을 모두 채우는 일에서 가치를 낸다.
+benchbook은 아래 세 조건을 모두 채우는 일에서 가치를 낸다.
 
 - **시도마다 숫자 지표.** 시도마다 지표가 나온다(`val_bpb`, `sum_radii`).
 - **재실행 가능.** 같은 설정과 코드를 seed만 바꿔 다시 돌릴 수 있어 재실행으로 결과를 검증할 수 있다.
