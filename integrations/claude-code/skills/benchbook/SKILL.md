@@ -9,12 +9,15 @@ benchbook is this project's shared lab notebook. Results live in the ledger; mes
 summaries and record ids (`e:` experiment, `c:` claim, `t:` task, `s:` source, `d:` decision).
 
 - Every MCP call takes `agent`: your benchbook agent name (`lead` for the main session, `worker-<n>` for workers).
-- Before an evaluation: `benchbook_check_tried`. After it: `benchbook_record_experiment`, failures included.
+- Run each evaluation with one shell command, `benchbook --agent <name> exp run --config '<json>' --seed <n>
+  -- <command>`: it checks the ledger first (exit 2 and the earlier result when it already ran), runs the command
+  with its output shown and records the result, failures included. Without a shell: `benchbook_check_tried`
+  before an evaluation and `benchbook_record_experiment` after it, failures included.
 - Findings that generalise: `benchbook_propose_claim` with evidence ids. Identical statements are merged and the
   evidence is attached to the existing claim.
 - Read `benchbook_brief` instead of re-reading transcripts; use `benchbook_get(<id>)` only for details.
 - Only the orchestrator (`lead`) or a human writes decisions. `verified` needs a non-LLM oracle
   (metric, rerun, pytest, lean, human) and evidence; an LLM judgement can reach `supported` at most.
 - Without MCP, the same operations exist in the CLI (set `BENCHBOOK_AGENT=<your name>` first; writes without a name
-  are refused): `benchbook brief`, `benchbook exp tried --config ...`,
+  are refused): `benchbook brief`, `benchbook exp run --config ... -- <command>`, `benchbook exp tried --config ...`,
   `benchbook exp record ...`, `benchbook claim add ...` (all accept `--json`).

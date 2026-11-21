@@ -67,8 +67,12 @@ why the manual worker file is separate.
 1. `benchbook init` (or the lead does it): goal, metric, direction. `lead` is the orchestrator, `human` is you.
 2. The lead creates 4-8 tasks with `spec.config_space` and tags.
 3. It launches K `benchbook-worker` subagents with a two-sentence prompt: their agent name and "take a task".
-4. Workers: `benchbook_next_task` -> `benchbook_brief` -> for each evaluation `benchbook_check_tried` -> run ->
-   `benchbook_record_experiment` -> claims with evidence -> `benchbook_complete_task`; final message <= 3 sentences + ids.
+4. Workers: `benchbook_next_task` -> `benchbook_brief` -> for each evaluation one Bash command,
+   `benchbook --agent worker-<n> exp run --config '<json>' --seed <n> -- <command>`, which checks the ledger, runs
+   the command and records the result -> claims with evidence -> `benchbook_complete_task`; final message <= 3
+   sentences + ids. Without a shell they call `benchbook_check_tried` before and `benchbook_record_experiment`
+   after each evaluation instead (the MCP tools stay). One command instead of three tool calls saves a turn per
+   attempt; see [the SDK page](sdk.md#check-run-and-record-in-one-command) for its output and exit codes.
 5. The lead reads `benchbook_status` and `benchbook_brief` (and `benchbook_sql`), decides claims, plans the next round.
 
 You can decide as the human from a terminal: `benchbook decide c:1a2b3c4d verified --oracle human --rationale "..." --evidence e:...,e:... --as human`.
@@ -80,7 +84,8 @@ open session, its next ledger call opens the newly initialized project.
 
 When an `benchbook-worker` subagent stops, `benchbook hook subagent-stop` reads its final message. A report sent through
 `SubagentHandback` is captured from the handback. A cited experiment
-or claim ID counts when the subagent's transcript shows a successful write returning that ID and the ledger
+or claim ID counts when the subagent's transcript shows a successful write returning that ID (an MCP write, or
+the receipt line of `benchbook exp record`, `exp run` or `claim add`) and the ledger
 timestamps place the record within the run. The hook captures the report when the transcript is missing or
 the citation cannot establish that the run wrote the record. A `note` claim tagged `auto-captured` keeps the first
 300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge across

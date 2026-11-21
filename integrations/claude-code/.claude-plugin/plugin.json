@@ -1,6 +1,6 @@
 {
   "name": "benchbook",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Your agents' lab notebook: subagent results go to a Postgres ledger, so nothing is lost, repeated, or trusted without evidence.",
   "license": "Apache-2.0",
   "keywords": [

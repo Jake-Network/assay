@@ -8,10 +8,13 @@ Always identify yourself: MCP `agent` argument, or `BENCHBOOK_AGENT=worker-<n>` 
 
 1. Start: take a task (`benchbook_next_task` / `benchbook task next`), then read the brief (`benchbook_brief` /
    `benchbook brief --task <id>`).
-2. Before any evaluation: check it was not already run (`benchbook_check_tried` / `benchbook exp tried --config ...`).
-   If it was, choose a different configuration.
-3. Right after any evaluation: record it (`benchbook_record_experiment` / `benchbook exp record ...`), including
-   failures, errors and timeouts, with the cause in one sentence in notes.
+2. With a shell, run each evaluation as one command that checks, runs and records it:
+   `benchbook exp run --config '<json>' --seed <n> -- <evaluation command>`. `benchbook: not run: duplicate of ...`
+   (exit 2) means it already ran: choose a different configuration. Otherwise its last line names the record;
+   failures, errors and timeouts are recorded too.
+3. Without a shell (MCP only): check before any evaluation that it was not already run (`benchbook_check_tried`)
+   and record it right after (`benchbook_record_experiment`), including failures, errors and timeouts, with the
+   cause in one sentence in notes.
 4. Generalisable findings: propose a claim with its evidence ids (`benchbook_propose_claim` / `benchbook claim add`).
 5. Finish: complete the task (`benchbook_complete_task` / `benchbook task done <id> -m "..."`). Your final message is at
    most 3 sentences plus record ids.
