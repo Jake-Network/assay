@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -72,6 +73,22 @@ def db_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     subprocess.run([str(server.bin_path / "pg_ctl"), "-D", str(pgdata), "-m", "immediate", "stop"],
                    capture_output=True, check=False)
     shutil.rmtree(pgdata, ignore_errors=True)
+
+
+def sleep_past_lease(db_url: str, seconds: float = 1.2) -> None:
+    """Wait until the database's clock has moved `seconds` on. A lease expires by the database's clock, while
+    time.sleep counts monotonic time: on a machine whose wall clock gets stepped back (WSL does this) a plain sleep
+    can end before the lease has, and the test then fails for no reason of its own."""
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        def now() -> float:
+            row = conn.execute("SELECT extract(epoch FROM clock_timestamp())").fetchone()
+            assert row is not None
+            return float(row[0])
+
+        start, deadline = now(), time.monotonic() + seconds + 30
+        time.sleep(seconds)
+        while now() - start < seconds and time.monotonic() < deadline:
+            time.sleep(0.05)
 
 
 def make_project(db_url: str, metric: str | None = "score", direction: str | None = "max",

@@ -17,7 +17,7 @@ from benchbook import Ledger, identity
 from benchbook.db.conn import notification_channel
 from benchbook.errors import InvalidTransition, LeaseLost, PermissionDenied, ValidationFailed
 
-from .conftest import make_project
+from .conftest import make_project, sleep_past_lease
 from .writer import as_writer, issue, token_ledger, writer_conn
 
 KNOWLEDGE = ["experiments", "claims", "sources", "links", "decisions", "task_events", "dedup_hits", "brief_log"]
@@ -95,14 +95,14 @@ def test_i2_lease_expiry_and_exhaustion(db_url: str) -> None:
     lead.create_tasks([{"title": "x", "max_attempts": 2}])
     t1 = a.next_task(lease_seconds=1)
     assert t1 is not None and b.next_task() is None
-    time.sleep(1.2)
+    sleep_past_lease(db_url)
     t2 = b.next_task(lease_seconds=1)
     assert t2 is not None and t2.id == t1.id and t2.attempts == 2 and t2.lease_owner == "b"
     with pytest.raises(LeaseLost):
         a.heartbeat(t1.id)
     with pytest.raises(LeaseLost):
         a.complete_task(t1.id, "done", "")
-    time.sleep(1.2)
+    sleep_past_lease(db_url)
     assert a.next_task() is None  # exhausted: becomes failed
     assert lead.get_task(t1.id).status == "failed"
     events = [e["event"] for e in lead.get(t1.id)["events"]]

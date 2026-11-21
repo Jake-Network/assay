@@ -157,6 +157,9 @@ def test_summary_distinguishes_the_states(tmp_path: Path, db_url: str, code_proj
     assert states["delta"].state == pr.UNREPORTED and states["delta"].passed == 1
     assert pr._tests(states["alpha"]) == "no" and pr._tests(states["gamma"]).startswith("yes: 1 guarded file")
 
+    # the failed re-run of beta left one discarded approach by itself; alpha has none yet
+    assert (states["alpha"].discarded, states["beta"].discarded) == (0, 1)
+
     # discarded approaches and open out-of-scope findings of a piece
     impl.propose_claim("observation", "tried caching the upload; slower", tags=["discarded", "piece:alpha"])
     impl.propose_claim("observation", "tried a second queue; races", tags=["discarded", "piece:alpha"])
@@ -166,7 +169,7 @@ def test_summary_distinguishes_the_states(tmp_path: Path, db_url: str, code_proj
     lead = Ledger.open(project=code_project, agent="lead", role="orchestrator", database_url=db_url)
     lead.decide(shut.id, "refuted", "human", "by design")
     states = {s.piece: s for s in pr.describe(ci, found)}
-    assert states["alpha"].discarded == 2 and states["beta"].discarded == 1
+    assert states["alpha"].discarded == 2 and states["beta"].discarded == 2
     assert states["alpha"].open_findings == [open_f.id]
 
     text = pr.render(list(states.values()), project=code_project, agent="ci:41", token=False,

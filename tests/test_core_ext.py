@@ -1,7 +1,6 @@
 """Step 3 core extensions C1-C6 (§7, §16.1)."""
 from __future__ import annotations
 
-import time
 import uuid
 
 import psycopg
@@ -10,6 +9,8 @@ import pytest
 from benchbook import Ledger
 from benchbook.errors import BenchbookError, Conflict, NotFound, PermissionDenied, ValidationFailed
 from benchbook.integrations.autoresearch.ops import PROJECT_SETTINGS
+
+from .conftest import sleep_past_lease
 
 
 def ml_project(db_url: str, **settings: object) -> str:
@@ -120,7 +121,7 @@ def test_intents(db_url: str, ml: str) -> None:
     a.update_intent(t.id, {"code_key": "p|abc"}, lease_seconds=1, exclusive=["code_key"])
     with pytest.raises(Conflict):
         b.update_intent(b.my_intents()[0].id, {"code_key": "p|abc"}, exclusive=["code_key"])
-    time.sleep(1.2)
+    sleep_past_lease(db_url)
     b.create_intent("raise lr after the lease ran out", {"knob_key": "p|lr"}, exclusive=["knob_key"])
     inflight = a.sql_internal("SELECT agent FROM benchbook.v_inflight WHERE project_id=%s AND is_intent", (ml,))
     assert sorted(r["agent"] for r in inflight) == ["b", "b"]
