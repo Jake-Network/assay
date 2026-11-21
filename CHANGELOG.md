@@ -81,6 +81,19 @@
   `benchbook pr comment --repo O/N --pr N --body-file F [--author LOGIN] [--update-only]`.
 - `benchbook check verify` takes `--trace-ref JSON|@file` (stored on the attempt) and `--no-decide` (record only,
   even with lead authority). SDK: `checks.verify(..., trace_ref=, decide=)`.
+- check verify finds a completion claim by piece, commit and reporter, not by its statement: another agent's claim
+  with the same statement no longer takes the credit or blocks the piece; such a report gets a claim whose
+  statement names the reporter.
+- The implementers of a completion include the reporter of every completion claim of the same piece and commit;
+  `pr pieces --claims` and the PR summary take `payload.reported_by` only from claims a lead, a person or a
+  harness agent recorded.
+- A check with `junit = true` that exits 0 now fails unless its JUnit report shows at least one test ran and none
+  failed (`exit 0, no JUnit report`, `exit 0, no tests ran`), in check verify and check run.
+- check verify runs the checks without the ledger's credentials (`BENCHBOOK_TOKEN`, `BENCHBOOK_DATABASE_URL`,
+  `BENCHBOOK_READER_PASSWORD`, their `ASSAY_` forms, `PGPASSWORD`, `PGPASSFILE`).
+- Under tokens the database refuses a worker's intent without `settings.worker_intents`, a lease longer than
+  `settings.max_lease_seconds` (new, default 86400), and an `expired` task event that does not name the previous
+  holder.
 
 ## Unreleased: core for the verification ledger
 

@@ -408,3 +408,24 @@ One line per decision the spec left open or that changed during implementation. 
   secret on a same-repository pull request fails.
 - **The action installs benchbook from its own tree (2-P1a)**, built as `0.0.0+action`, so the commands match the
   action. It has not run on a real GitHub runner yet.
+## After the independent review (2026-11-21)
+
+A review of the merged token and verification code reproduced five holes; these are the decisions of the fixes.
+
+- **A claim's identity is (piece, commit, reporter).** `statement_hash` is client-supplied and unique per project
+  only, so it cannot carry identity. On a clash verify writes a statement that names the reporter, and as a last
+  resort a random hash. A server-side hash check would refuse the callers with their own hash and would not stop
+  pre-emption.
+- **Union of implementers by trusted reporter.** Every completion claim of a piece and commit adds its reporter to
+  the implementers; `payload.reported_by` is trusted only on claims a lead, a person or a harness agent recorded,
+  and a worker's `reported_by` stays on its own claim. Sets never shrink, and a worker cannot bar the lead or CI
+  from deciding by naming them.
+- **`junit = true` means "a test ran".** Exit 0 with no report, no testcase or only skipped ones is a failed
+  check. `check run` keeps the command's exit code and records the failure.
+- **Lease cap and `worker_intents` are enforced in `guard_task`; path overlap stays in the SDK.** Migration 0008
+  was edited in place because nothing with it has been released.
+- **The credential scrub is limited to `check verify`.** It removes the inherited copies; code under test runs as
+  the verifier's user and can still read what that user can, so it is hygiene, not isolation.
+- **Still not prevented.** A fake JUnit report written by the code under test; a hook-recorded run that exits 0
+  with nothing run counting for the completion gate (never as an independent re-run); a raw writer taking a piece
+  name or paths up to the lease cap; self-declared names in local mode.
