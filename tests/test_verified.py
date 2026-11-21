@@ -124,6 +124,37 @@ def test_a_self_recorded_pass_alone_cannot_verify(db_url: str, code_project: str
                      "authors": ["verifier"], "attempts": 2}
 
 
+def test_runs_from_the_implementers_checkout_are_not_independent(db_url: str, code_project: str) -> None:
+    """The Bash hook records an implementer's run as `hook`, and check run may run under any name: a different
+    author is not a different checkout. A run with uncommitted changes did not test the commit at all."""
+    impl = open_as(db_url, code_project, "impl")
+    lead = open_as(db_url, code_project, "lead")
+    hook = open_as(db_url, code_project, "hook", "harness")
+    claim = completion(impl)
+    hooked = attempt(hook, {**PASS, "via": "bash-hook", "worktree_dirty": False}, seed=1)
+    wrapped = attempt(open_as(db_url, code_project, "someone"), {**PASS, "via": "check-run"}, seed=2)
+    to_supported(lead, claim, [hooked])
+    with pytest.raises(InvalidTransition, match=r"recorded from its checkout.*oracle human"):
+        lead.decide(claim, "verified", "rerun", "the hook saw it pass", [hooked, wrapped])
+    # a dirty run is no attempt of the commit: it cannot be cited, and its failure does not block the commit
+    dirty = attempt(hook, {**PASS, "checks_passed": 0, "via": "bash-hook", "worktree_dirty": True}, seed=3)
+    with pytest.raises(InvalidTransition, match="must be valid finished attempts"):
+        lead.check_rerun(claim, [dirty])
+    attempts = lead.completion_attempts(claim)
+    assert attempts is not None and dirty not in [a["id"] for a in attempts["attempts"]]
+    rerun = attempt(open_as(db_url, code_project, "verifier", "harness"), PASS, seed=4)
+    lead.decide(claim, "verified", "rerun", "independent re-run passed", [rerun, hooked])
+    check = decisions(lead, claim)[-1]["oracle_detail"]["rerun_check"]
+    assert (check["runs"], check["authors"], check["attempts"]) == (1, ["verifier"], 3)
+    # a clean failing run from the implementer's checkout at the same commit still disagrees
+    other = completion(impl, sha="b" * 40)
+    attempt(hook, {**PASS, "checks_passed": 0, "via": "bash-hook"}, sha="b" * 40, seed=5)
+    passing = attempt(open_as(db_url, code_project, "verifier", "harness"), PASS, sha="b" * 40, seed=6)
+    to_supported(lead, other, [passing])
+    with pytest.raises(InvalidTransition, match="not every attempt"):
+        lead.decide(other, "verified", "rerun", "re-run passed", [passing])
+
+
 def test_the_implementer_cannot_verify_its_own_completion_by_any_route(db_url: str, code_project: str) -> None:
     lead = open_as(db_url, code_project, "lead")
     rerun = attempt(open_as(db_url, code_project, "verifier", "harness"), PASS)

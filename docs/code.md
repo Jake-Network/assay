@@ -231,6 +231,9 @@ and names a different `reported_by`, only that reporter is the implementer. That
 completion under a token (below). A worker that names someone else as the reporter stays an implementer: naming
 another reporter can only add to the set. Attempts by the implementer, the reporter's own passing runs included,
 never count as independent, and the implementer cannot decide its own completion.
+A run recorded from the implementer's checkout (`metrics.via` set by `check run` or the Bash hook) never counts
+as independent either, whoever its author is: the hook records it as `hook`. Its failure still blocks the commit.
+A run with `worktree_dirty` true did not test the commit it names and is no attempt of that commit at all.
 
 ### What `check verify` decides
 

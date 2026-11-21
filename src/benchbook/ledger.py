@@ -1073,8 +1073,10 @@ class Ledger:
 
     def _attempts(self, conn: psycopg.Connection[Any], piece: Any, commit: Any) -> list[dict[str, Any]]:
         rows = conn.execute(
+            # a run with uncommitted changes did not test the commit it names: it is no attempt of that commit
             "SELECT id, author, metrics FROM benchbook.experiments_valid WHERE project_id=%s AND run_status='ok'"
-            " AND config ->> 'piece' = %s AND code_ref = %s ORDER BY created_at, id",
+            " AND config ->> 'piece' = %s AND code_ref = %s"
+            " AND metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb ORDER BY created_at, id",
             (self.project_id, piece, commit)).fetchall()
         return [attempt_summary(r["id"], r["author"], r["metrics"]) for r in rows]
 
@@ -1126,16 +1128,19 @@ class Ledger:
                     f"{short('experiment', a['id'])} by {a['author']}" for a in failed)
                 + f" failed. Runs that disagree do not verify; decide inconclusive or refuted, or {human}")
         pol = self.pack.verify
+        # A run marked `via` happened in the implementer's checkout. The Bash hook records it as `hook`, so the
+        # author alone does not show whose run it was: it never counts as independent (its failure still blocks).
         independent = [by_id[e] for e in experiment_ids
-                       if by_id[e]["author"] not in impl and by_id[e]["guard_touched"] is False
-                       and by_id[e]["checks_changed"] is False]
+                       if by_id[e]["author"] not in impl and by_id[e]["via"] is None
+                       and by_id[e]["guard_touched"] is False and by_id[e]["checks_changed"] is False]
         authors = {a["author"] for a in independent}
         if len(independent) < pol.min_runs or len(authors) + 1 < pol.min_authors:
             raise InvalidTransition(
                 f"rule all_pass needs >= {pol.min_runs} passing re-run(s) of {at} by >= {pol.min_authors - 1} "
                 f"agent(s) other than the implementer ({', '.join(sorted(impl))}), with guard_touched and "
                 f"checks_changed false; the evidence has {len(independent)} by {len(authors)} "
-                f"({', '.join(sorted(authors)) or 'none'}). The implementer's own runs do not count; "
+                f"({', '.join(sorted(authors)) or 'none'}). The implementer's own runs do not count, nor do runs "
+                f"recorded from its checkout (check run, the Bash hook); "
                 f"run benchbook check verify as another agent, or {human}")
         return {"rule": "all_pass", "piece": piece, "commit": commit, "implementers": sorted(impl),
                 "runs": len(independent), "authors": sorted(authors), "attempts": len(attempts)}
@@ -1533,6 +1538,8 @@ def attempt_summary(id: UUID, author: str, metrics: dict[str, Any]) -> dict[str,
           and isinstance(passed, int) and not isinstance(passed, bool))
     files = metrics.get("guard_files")
     return {"id": id, "author": author, "passed": ok,
+            # set on a run in the implementer's own checkout (check run, the Bash hook), whoever recorded it
+            "via": metrics.get("via"),
             "guard_touched": metrics.get("guard_touched"), "checks_changed": metrics.get("checks_changed"),
             "guard_files": [f for f in files if isinstance(f, str)] if isinstance(files, list) else []}
 
