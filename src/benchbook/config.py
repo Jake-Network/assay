@@ -7,10 +7,12 @@ install from before the rename does not lose its project, its database target or
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 NAME = "benchbook"
 LEGACY_NAME = "assay"
@@ -136,12 +138,24 @@ def default_agent(name: str) -> str | None:
     return None if env("TOKEN") else name
 
 
+@dataclass(frozen=True)
+class CheckSpec:
+    """One [checks.<name>] table: a completion condition the lead can re-run (`benchbook check verify`)."""
+    name: str
+    cmd: str  # a shell command run from the repository root; {junit} becomes a temporary path for JUnit XML
+    junit: bool = False  # read failing test ids from the JUnit XML written to {junit}
+    timeout: float = 900.0  # seconds before the check's process group is killed
+
+
 @dataclass
 class LocalConfig:
     project: str | None = None
     default_budget_tokens: int = 2000
     path: Path | None = None
     legacy: bool = False  # read from .assay/config.toml (the folder's name before the rename)
+    checks: dict[str, CheckSpec] = field(default_factory=dict)  # [checks.<name>], in file order
+    guard_paths: list[str] = field(default_factory=list)  # [guard] paths: globs a completion should not touch
+    guard_base: str | None = None  # [guard] base: the ref a piece branched from (check verify --base)
 
 
 def _config_in(d: Path) -> Path | None:
@@ -194,6 +208,8 @@ def load(start: Path | None = None) -> LocalConfig:
         cfg.default_budget_tokens = int(data.get("default_budget_tokens", 2000))
         cfg.path = p
         cfg.legacy = p.parent.name == LEGACY_CONFIG_DIR.name
+        cfg.checks = parse_checks(data.get("checks"), str(p))
+        cfg.guard_paths, cfg.guard_base = parse_guard(data.get("guard"), str(p))
     if project := env("PROJECT"):
         cfg.project = project
     return cfg
@@ -212,3 +228,54 @@ def write_config(root: Path, project: str, budget: int = 2000) -> Path:
         encoding="utf-8",
     )
     return p
+
+
+# [checks] and [guard] are parsed here, with the standard library only: the command hooks that will match shell
+# commands against the declarations read config.toml and nothing else, so this must not import the database layer.
+CHECK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_CHECK_KEYS = {"cmd", "junit", "timeout"}
+
+
+def parse_checks(table: Any, where: str = "config.toml") -> dict[str, CheckSpec]:
+    """The [checks] table as CheckSpecs. Unknown keys are errors: a misspelt `timout` must not silently fall back to
+    the default in a check that decides whether work counts as done."""
+    from .errors import BenchbookError
+
+    if table is None:
+        return {}
+    if not isinstance(table, dict):
+        raise BenchbookError(f"{where}: [checks] must be a table of [checks.<name>] tables")
+    out: dict[str, CheckSpec] = {}
+    for name, spec in table.items():
+        label = f"{where}: [checks.{name}]"
+        if not CHECK_NAME.fullmatch(name):
+            raise BenchbookError(f"{label}: a check name is letters, digits, '_', '.' or '-' (at most 64)")
+        if not isinstance(spec, dict):
+            raise BenchbookError(f"{label} must be a table with cmd = \"...\"")
+        if unknown := sorted(set(spec) - _CHECK_KEYS):
+            raise BenchbookError(f"{label}: unknown key {', '.join(unknown)} (known: cmd, junit, timeout)")
+        cmd, junit, timeout = spec.get("cmd"), spec.get("junit", False), spec.get("timeout", CheckSpec.timeout)
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise BenchbookError(f"{label}: cmd must be a non-empty string")
+        if not isinstance(junit, bool):
+            raise BenchbookError(f"{label}: junit must be true or false")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 86400:
+            raise BenchbookError(f"{label}: timeout must be a number of seconds (0 < timeout <= 86400)")
+        out[name] = CheckSpec(name, cmd, junit, float(timeout))
+    return out
+
+
+def parse_guard(table: Any, where: str = "config.toml") -> tuple[list[str], str | None]:
+    """[guard] as (paths, base)."""
+    from .errors import BenchbookError
+
+    if table is None:
+        return [], None
+    if not isinstance(table, dict):
+        raise BenchbookError(f"{where}: [guard] must be a table")
+    paths, base = table.get("paths", []), table.get("base")
+    if not isinstance(paths, list) or not all(isinstance(x, str) and x.strip() for x in paths):
+        raise BenchbookError(f"{where}: [guard] paths must be a list of glob strings")
+    if base is not None and (not isinstance(base, str) or not base.strip()):
+        raise BenchbookError(f"{where}: [guard] base must be a git ref such as \"origin/main\"")
+    return list(paths), base
