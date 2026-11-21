@@ -1,7 +1,7 @@
 # Schema
 
-Postgres schema `assay` (migrations: Alembic revisions that run plain SQL files in
-`src/assay/db/alembic/sql/`). Knowledge tables are append-only; triggers reject UPDATE and DELETE for every
+Postgres schema `benchbook` (migrations: Alembic revisions that run plain SQL files in
+`src/benchbook/db/alembic/sql/`). Knowledge tables are append-only; triggers reject UPDATE and DELETE for every
 role, superusers included.
 
 ## Tables
@@ -20,7 +20,7 @@ role, superusers included.
 | `brief_log` | one row per brief (for "since your last brief") | no |
 | `dedup_hits` | `rejected` (a duplicate record was refused) and `avoided` (a repeat check matched) | no |
 | `settings_events` | every settings change: agent, JSON merge patch, resulting settings | no |
-| `blobs` | small files by content (`assay://blob/<sha256>`), per project; 1 MB default limit (`blob_max_bytes`) | no |
+| `blobs` | small files by content (`benchbook://blob/<sha256>`), per project; 1 MB default limit (`blob_max_bytes`) | no |
 
 Partitions (Step 3): when `settings.partition_key` is set, outcomes, `v_best`, `v_leaderboard`, `v_progress`
 and duplicate checks only compare experiments whose `config[partition_key]` is equal. Projects without it behave as
@@ -28,7 +28,7 @@ before.
 
 ## Views
 
-`assay_sql` (and `assay sql`) can read only these views, through the `assay_reader` role, already
+`benchbook_sql` (and `benchbook sql`) can read only these views, through the `benchbook_reader` role, already
 filtered to the current project, read-only, 2 s timeout, 200 rows / ~4,000 tokens.
 
 | view | columns (main) |

@@ -1,4 +1,4 @@
-# assay
+# benchbook
 
 **Your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence.**
 
@@ -6,7 +6,7 @@
      "duplicates blocked" counter going up). Record with: python examples/circle-packing/scripted_swarm.py -->
 
 When several agents run experiments for you, their results come back as text to one lead agent. Some reports
-get compacted away, some never arrive, and two workers happily run the same configuration. assay gives every
+get compacted away, some never arrive, and two workers happily run the same configuration. benchbook gives every
 agent a shared Postgres ledger instead: workers record each experiment the moment it finishes (failures too),
 check what was already tried before running anything, and hand the lead a 3-sentence summary with record ids.
 The lead reads a budgeted brief built by SQL (best result, verified claims, what not to repeat) instead of
@@ -15,27 +15,27 @@ transcripts. In the circle-packing benchmark this did not yet lower the lead's p
 ## 60-second start
 
 ```bash
-uv tool install --from git+https://github.com/Jake-Network/assay assay     # PyPI name to be decided; no Docker needed
-uv tool update-shell        # once, if `assay` is not found; then open a new terminal and restart Claude Code
-cd your-repo && assay init --goal "Minimise validation loss" --metric val_loss --direction min
-claude plugin marketplace add Jake-Network/assay && claude plugin install assay@assay
+uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook     # PyPI name to be decided; no Docker needed
+uv tool update-shell        # once, if `benchbook` is not found; then open a new terminal and restart Claude Code
+cd your-repo && benchbook init --goal "Minimise validation loss" --metric val_loss --direction min
+claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook
 ```
 
 Then in Claude Code:
 
 ```
-/assay:assay-lead Minimise val_loss of train.py; 3 rounds, 4 workers
+/benchbook:benchbook-lead Minimise val_loss of train.py; 3 rounds, 4 workers
 ```
 
-and `assay serve` to watch it at http://127.0.0.1:7466.
+and `benchbook serve` to watch it at http://127.0.0.1:7466.
 
 No Claude Code? Everything is in the CLI and the Python SDK:
 
 ```bash
-export ASSAY_AGENT=worker-1                                                     # who is writing
-assay exp tried  --config '{"lr": 3e-4, "warmup": 500}'                         # before running
-assay exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
-assay brief
+export BENCHBOOK_AGENT=worker-1                                                     # who is writing
+benchbook exp tried  --config '{"lr": 3e-4, "warmup": 500}'                         # before running
+benchbook exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
+benchbook brief
 ```
 
 ## autoresearch on many GPUs
@@ -44,20 +44,20 @@ assay brief
 results that replicated.**
 
 <!-- 30-second GIF: the viewer's verified-best staircase while candidates pass or fail replication.
-     Record with: python examples/autoresearch-sim/run_sim_swarm.py --agents 4 --minutes 5 --keep, then assay serve -->
+     Record with: python examples/autoresearch-sim/run_sim_swarm.py --agents 4 --minutes 5 --keep, then benchbook serve -->
 
 ```bash
 cd autoresearch && uv run prepare.py                         # karpathy/autoresearch or any fork
-bash /path/to/assay/integrations/autoresearch/launch_local.sh 4   # assay ar init + one worktree and agent per GPU
-assay serve                                                  # watch it at http://127.0.0.1:7466
+bash /path/to/benchbook/integrations/autoresearch/launch_local.sh 4   # benchbook ar init + one worktree and agent per GPU
+benchbook serve                                                  # watch it at http://127.0.0.1:7466
 ```
 
-Each agent follows `program.assay.md` (upstream `program.md` with a shared loop). The same code never runs
+Each agent follows `program.benchbook.md` (upstream `program.md` with a shared loop). The same code never runs
 twice on the same hardware; every run is recorded, crashes included; a result only becomes the shared
 baseline after two other agents re-run it and the mean still wins. Self-hosted, no API key: several machines
 need one Postgres URL. Details: [docs/autoresearch.md](docs/autoresearch.md).
 
-| launch experiment (same GPUs, time and agent) | A: independent | B: assay |
+| launch experiment (same GPUs, time and agent) | A: independent | B: benchbook |
 |---|---|---|
 | replicated best val_bpb | _tbd_ | _tbd_ |
 | duplicate runs | _tbd_ | _tbd_ |
@@ -77,7 +77,7 @@ Circle packing (n=26) with the same model, API budget, worker count, and wall-cl
 |---|---|---|---|---|
 | A: subagents report as text | 0 | 40.6% ± 12.8 | 29.4k ± 0.5k | 0.0287 ± 0.0003 |
 | B: subagents write JSON files | 0 | 14.4% ± 8.6 | 34.0k ± 1.5k | 0.0128 ± 0.0021 |
-| C: assay | 0 | 30.1% ± 3.7 | 39.9k ± 6.1k | 0.0057 ± 0.0009 |
+| C: benchbook | 0 | 30.1% ± 3.7 | 39.9k ± 6.1k | 0.0057 ± 0.0009 |
 
 Release gate (MANUAL_QA.md), C against A:
 
@@ -118,7 +118,7 @@ per-agent tokens and a separate writer role land (v0.2). See [Honest limits](doc
 
 ## What it fits
 
-assay pays off when a job meets all three conditions:
+benchbook pays off when a job meets all three conditions:
 
 - **A number per attempt.** Every attempt yields a metric (`val_bpb`, `sum_radii`).
 - **Re-runnable.** The same config and code can run again with only the seed changed, so a rerun can verify a result.

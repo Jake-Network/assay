@@ -1,8 +1,8 @@
 """A minimal autoresearch-style loop on the SDK: claim a task, avoid repeats, record everything.
 
-    assay init --project lr-sweep --goal "Minimise val loss" --metric val_loss --direction min
-    assay task add "Sweep learning rate" --tags lr --spec '{"config_space": {"lr": [1e-4, 3e-4, 1e-3, 3e-3]}}'
-    ASSAY_PROJECT=lr-sweep python examples/sdk-loop/loop.py
+    benchbook init --project lr-sweep --goal "Minimise val loss" --metric val_loss --direction min
+    benchbook task add "Sweep learning rate" --tags lr --spec '{"config_space": {"lr": [1e-4, 3e-4, 1e-3, 3e-3]}}'
+    BENCHBOOK_PROJECT=lr-sweep python examples/sdk-loop/loop.py
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import itertools
 import math
 import random
 
-from assay import Ledger
+from benchbook import Ledger
 
 
 def train(cfg: dict[str, float], seed: int) -> float:

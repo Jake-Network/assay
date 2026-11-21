@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "assay hook subagent-stop",
+            "command": "benchbook hook subagent-stop",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "assay hook subagent-handback",
+            "command": "benchbook hook subagent-handback",
             "timeout": 5
           }
         ]

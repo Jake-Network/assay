@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from assay.integrations.autoresearch.code import (
+from benchbook.integrations.autoresearch.code import (
     changed_knobs,
     code_hash,
     extract_knobs,
@@ -13,8 +13,8 @@ from assay.integrations.autoresearch.code import (
     normalize,
     parse_knob_value,
 )
-from assay.integrations.autoresearch.hw import detect, gpu_class
-from assay.integrations.autoresearch.runner import parse_summary, results_tsv_line
+from benchbook.integrations.autoresearch.hw import detect, gpu_class
+from benchbook.integrations.autoresearch.runner import parse_summary, results_tsv_line
 
 FIXTURE = Path(__file__).parent / "fixtures" / "autoresearch" / "upstream_train_constants.py"
 GOLDEN_FSTRING = "56e5ad786e5caee23ae497b9515d53cca958efd6f7aa7a25d345e59b3c7e0b9b"
@@ -104,10 +104,10 @@ def test_gpu_class(name: str, mib: float, expected: str) -> None:
 
 
 def test_hw_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    from assay.integrations.autoresearch import hw
+    from benchbook.integrations.autoresearch import hw
 
     assert detect("My Box 1") == "my-box-1"
-    assert detect(env={"ASSAY_AR_HW": "H100 80GB"}) == "h100-80gb"
+    assert detect(env={"BENCHBOOK_AR_HW": "H100 80GB"}) == "h100-80gb"
     monkeypatch.setattr(hw, "detect_nvidia", lambda env=None: None)
     monkeypatch.setattr(hw, "detect_macos", lambda: None)
     assert detect(env={}).startswith("unknown-")
@@ -141,7 +141,7 @@ def test_hash_is_the_same_on_every_python_version() -> None:
 
 
 def test_agent_name_keeps_the_whole_host() -> None:
-    from assay.integrations.autoresearch.ops import default_agent_name
+    from benchbook.integrations.autoresearch.ops import default_agent_name
 
     env = {"CUDA_VISIBLE_DEVICES": "1,2"}
     assert default_agent_name(env, "gpu-node-12") == "gpu1-gpu-node-12"
@@ -155,8 +155,8 @@ def test_failing_nvidia_smi_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None
     """A9: a transient nvidia-smi failure must not become an unknown-<host> partition."""
     import subprocess
 
-    from assay.errors import AssayError
-    from assay.integrations.autoresearch import hw
+    from benchbook.errors import BenchbookError
+    from benchbook.integrations.autoresearch import hw
 
     calls: list[object] = []
 
@@ -166,7 +166,7 @@ def test_failing_nvidia_smi_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(hw.subprocess, "run", failing)
     monkeypatch.setattr(hw.time, "sleep", lambda s: None)
-    with pytest.raises(AssayError, match="nvidia-smi failed"):
+    with pytest.raises(BenchbookError, match="nvidia-smi failed"):
         hw.detect(env={})
     assert len(calls) == 3
 
@@ -178,7 +178,7 @@ def test_failing_nvidia_smi_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_budget_check() -> None:
-    from assay.integrations.autoresearch.runner import RunResult, check_budget
+    from benchbook.integrations.autoresearch.runner import RunResult, check_budget
 
     ok = RunResult("ok", 0, {"val_bpb": 1.0, "training_seconds": 300.4}, 330_000)
     assert check_budget(ok, 300, 30, 240) is ok
@@ -198,7 +198,7 @@ def test_sigterm_kills_the_training_and_raises(tmp_path: Path) -> None:
     import threading
     import time
 
-    from assay.integrations.autoresearch.runner import Interrupted, run_command
+    from benchbook.integrations.autoresearch.runner import Interrupted, run_command
 
     if sys.platform == "win32":
         pytest.skip("POSIX signals")

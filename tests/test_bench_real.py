@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from assay import Ledger
-from assay.hooks import process
 from bench import real
 from bench.common import CODE_REF, load_evals
+from benchbook import Ledger
+from benchbook.hooks import process
 from tests.conftest import make_project
 
 
@@ -27,7 +27,7 @@ CFG = {"init": "hex", "optimizer": "slsqp", "iters": 10, "perturb": 0.0}
 
 def test_real_preview_isolated_and_budgeted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("ASSAY_PROJECT", "inherited-project")
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "inherited-project")
 
     def no_subprocess(*_a: object, **_kw: object) -> None:
         pytest.fail("preview must neither initialize a project nor launch Claude")
@@ -44,11 +44,11 @@ def test_real_preview_isolated_and_budgeted(tmp_path: Path, monkeypatch: pytest.
         assert meta["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
         if mode == "C":
             ids.add(meta["project_id"])
-            assert meta["env"]["ASSAY_PROJECT"] == meta["project_id"]
+            assert meta["env"]["BENCHBOOK_PROJECT"] == meta["project_id"]
             assert meta["init"][3] == meta["project_id"]
             assert "--plugin-dir" in meta["cmd"]
         else:
-            assert meta["init"] is None and "ASSAY_PROJECT" not in meta["env"]
+            assert meta["init"] is None and "BENCHBOOK_PROJECT" not in meta["env"]
             assert "--strict-mcp-config" in meta["cmd"] and "--plugin-dir" not in meta["cmd"]
     assert len(ids) == 2
 
@@ -154,7 +154,7 @@ def test_real_parser_rejects_missing_evaluations(tmp_path: Path) -> None:
 
 def test_real_parser_checks_ledger_hook_and_final_report(tmp_path: Path, db_url: str,
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
     pid = make_project(db_url, metric="sum_radii")
     worker = Ledger.open(project=pid, agent="worker")
     first = receipt(1, 0, 2.6000)
@@ -167,7 +167,7 @@ def test_real_parser_checks_ledger_hook_and_final_report(tmp_path: Path, db_url:
         recorded = worker.record_experiment(
             row["config"], {"sum_radii": row["value"]} if row["value"] is not None else {},
             seed=row["seed"], code_ref=row["code_ref"], run_status=row["run_status"],
-            trace_ref={"system": "assay-bench", "trace_id": row["eval_id"]},
+            trace_ref={"system": "benchbook-bench", "trace_id": row["eval_id"]},
         )
         assert recorded.id is not None
     body = json.dumps({"evaluations": [captured, dict(missing, run_status="timeout")]})

@@ -1,4 +1,4 @@
-"""Benchmark harness (spec §15): A baseline vs B files vs C assay at the same budget.
+"""Benchmark harness (spec §15): A baseline vs B files vs C benchbook at the same budget.
 
     python -m bench.run --dry                      # scripted agents, validates the whole pipeline
     python -m bench.run --model sonnet             # prints the real `claude -p` commands

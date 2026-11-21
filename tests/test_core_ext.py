@@ -7,9 +7,9 @@ import uuid
 import psycopg
 import pytest
 
-from assay import Ledger
-from assay.errors import AssayError, Conflict, NotFound, PermissionDenied, ValidationFailed
-from assay.integrations.autoresearch.ops import PROJECT_SETTINGS
+from benchbook import Ledger
+from benchbook.errors import BenchbookError, Conflict, NotFound, PermissionDenied, ValidationFailed
+from benchbook.integrations.autoresearch.ops import PROJECT_SETTINGS
 
 
 def ml_project(db_url: str, **settings: object) -> str:
@@ -44,7 +44,7 @@ def test_partitions_are_separate(db_url: str, ml: str) -> None:
     r = w.record_experiment(cfg("a100/aaaa"), {"val_bpb": 0.6}, code_ref="c1")
     assert r.duplicate_of is None and r.outcome == "worse"
     best = {r["partition"]: r["primary_value"] for r in w.sql_internal(
-        "SELECT partition, primary_value FROM assay.v_best WHERE project_id=%s", (ml,))}
+        "SELECT partition, primary_value FROM benchbook.v_best WHERE project_id=%s", (ml,))}
     assert best == {"h100/aaaa": 0.9, "a100/aaaa": 0.5}
     assert w.record_experiment(cfg("h100/aaaa"), {"val_bpb": 0.1}, code_ref="c1").duplicate_of is not None
 
@@ -64,10 +64,10 @@ def test_partition_epsilon_and_settings_audit(db_url: str, ml: str) -> None:
     assert w.record_experiment(cfg("p/2", "c"), {"val_bpb": 0.85}, code_ref="c").outcome == "improved"
     assert w.record_experiment(cfg("p/2", "d"), {"val_bpb": 0.849}, code_ref="d").outcome == "improved"
     assert w.record_experiment(cfg("p/2", "e"), {"val_bpb": 0.8488}, code_ref="e").outcome == "no_change"
-    events = lead.sql_internal("SELECT patch FROM assay.settings_events WHERE project_id=%s ORDER BY id", (ml,))
+    events = lead.sql_internal("SELECT patch FROM benchbook.settings_events WHERE project_id=%s ORDER BY id", (ml,))
     assert len(events) == 2
     with psycopg.connect(db_url) as c, pytest.raises(psycopg.errors.RestrictViolation):
-        c.execute("DELETE FROM assay.settings_events WHERE project_id=%s", (ml,))
+        c.execute("DELETE FROM benchbook.settings_events WHERE project_id=%s", (ml,))
 
 
 def test_outcome_against_verified_best(db_url: str, ml: str) -> None:
@@ -90,19 +90,19 @@ def test_outcome_against_verified_best(db_url: str, ml: str) -> None:
 def test_blobs(db_url: str, ml: str) -> None:
     w = op(db_url, ml, "w1")
     uri = w.put_blob(b"print(1)\n", "text/x-python")
-    assert uri.startswith("assay://blob/") and w.put_blob(b"print(1)\n") == uri
+    assert uri.startswith("benchbook://blob/") and w.put_blob(b"print(1)\n") == uri
     assert w.get_blob(uri) == b"print(1)\n" and w.get_blob(uri.rsplit("/", 1)[1]) == b"print(1)\n"
     with pytest.raises(NotFound):
-        w.get_blob("assay://blob/" + "0" * 64)
+        w.get_blob("benchbook://blob/" + "0" * 64)
     with pytest.raises(ValidationFailed):
         w.put_blob(b"x" * 1_000_001)
     other = op(db_url, ml_project(db_url), "w1")
     with pytest.raises(NotFound):
         other.get_blob(uri)
     with psycopg.connect(db_url) as c, pytest.raises(psycopg.errors.RestrictViolation):
-        c.execute("UPDATE assay.blobs SET media_type='x' WHERE project_id=%s", (ml,))
+        c.execute("UPDATE benchbook.blobs SET media_type='x' WHERE project_id=%s", (ml,))
     with psycopg.connect(db_url) as c, pytest.raises(psycopg.errors.CheckViolation):
-        c.execute("INSERT INTO assay.blobs(project_id, sha256, bytes, size, author) VALUES (%s,%s,%s,1,'w')",
+        c.execute("INSERT INTO benchbook.blobs(project_id, sha256, bytes, size, author) VALUES (%s,%s,%s,1,'w')",
                   (ml, "1" * 64, b"x"))
 
 
@@ -122,7 +122,7 @@ def test_intents(db_url: str, ml: str) -> None:
         b.update_intent(b.my_intents()[0].id, {"code_key": "p|abc"}, exclusive=["code_key"])
     time.sleep(1.2)
     b.create_intent("raise lr after the lease ran out", {"knob_key": "p|lr"}, exclusive=["knob_key"])
-    inflight = a.sql_internal("SELECT agent FROM assay.v_inflight WHERE project_id=%s AND is_intent", (ml,))
+    inflight = a.sql_internal("SELECT agent FROM benchbook.v_inflight WHERE project_id=%s AND is_intent", (ml,))
     assert sorted(r["agent"] for r in inflight) == ["b", "b"]
 
 
@@ -187,5 +187,5 @@ def test_ml_research_pack_validation(db_url: str, ml: str) -> None:
     assert again.duplicate_of == first.id  # dedup ignores lineage and wording
     with pytest.raises(ValidationFailed):
         w.propose_claim("result", "missing payload fields", payload={"partition": "p"})
-    with pytest.raises(AssayError, match="unknown pack"):
+    with pytest.raises(BenchbookError, match="unknown pack"):
         Ledger.init_project("bad-pack", pack="nope", database_url=db_url)

@@ -11,9 +11,9 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from assay import Ledger
-from assay.db.conn import notification_channel
-from assay.errors import InvalidTransition, LeaseLost, PermissionDenied, ValidationFailed
+from benchbook import Ledger
+from benchbook.db.conn import notification_channel
+from benchbook.errors import InvalidTransition, LeaseLost, PermissionDenied, ValidationFailed
 
 from .conftest import make_project
 
@@ -37,8 +37,8 @@ def _seed_rows(lead: Ledger, worker: Ledger) -> None:
 def test_i1_append_only(db_url: str, lead: Ledger, worker: Ledger, table: str) -> None:
     _seed_rows(lead, worker)
     with psycopg.connect(db_url) as conn:  # superuser/owner role
-        for stmt in (f"UPDATE assay.{table} SET project_id = project_id WHERE project_id = %s",
-                     f"DELETE FROM assay.{table} WHERE project_id = %s"):
+        for stmt in (f"UPDATE benchbook.{table} SET project_id = project_id WHERE project_id = %s",
+                     f"DELETE FROM benchbook.{table} WHERE project_id = %s"):
             with pytest.raises(psycopg.errors.RestrictViolation):
                 with conn.transaction():
                     conn.execute(stmt, (lead.project_id,))
@@ -46,9 +46,9 @@ def test_i1_append_only(db_url: str, lead: Ledger, worker: Ledger, table: str) -
 
 def test_i1_reader_role_cannot_write(db_url: str, lead: Ledger, worker: Ledger) -> None:
     _seed_rows(lead, worker)
-    with psycopg.connect(db_url, user="assay_reader") as conn:
+    with psycopg.connect(db_url, user="benchbook_reader") as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute("UPDATE assay.experiments SET notes = 'x'")
+            conn.execute("UPDATE benchbook.experiments SET notes = 'x'")
 
 
 # I2 ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ def test_i2_concurrent_claims(db_url: str) -> None:
     assert not errors
     assert len(done) == n_tasks and len(set(done)) == n_tasks
     rows = lead.sql_internal(
-        "SELECT task_id, count(*) AS n FROM assay.task_events WHERE project_id=%s AND event='claimed'"
+        "SELECT task_id, count(*) AS n FROM benchbook.task_events WHERE project_id=%s AND event='claimed'"
         " GROUP BY task_id", (pid,))
     assert all(r["n"] == 1 for r in rows) and len(rows) == n_tasks
 
@@ -132,7 +132,7 @@ def test_i3_verified_needs_oracle_and_evidence(db_url: str, lead: Ledger, worker
             with pytest.raises(psycopg.errors.CheckViolation):
                 with conn.transaction():
                     conn.execute(
-                        "INSERT INTO assay.decisions(project_id,target_type,target_id,new_status,oracle,rationale,"
+                        "INSERT INTO benchbook.decisions(project_id,target_type,target_id,new_status,oracle,rationale,"
                         "evidence_ids,decided_by) VALUES (%s,'claim',%s,'verified',%s,'x',%s,'lead')",
                         (lead.project_id, c.id, oracle, ev))
     d = lead.decide(c.id, "verified", "metric", "measured", [e.id])  # type: ignore[list-item]
@@ -242,9 +242,9 @@ def test_i4_exact_duplicate_rejected(lead: Ledger, worker: Ledger) -> None:
     assert r1.id and r2.id is None and r2.duplicate_of == r1.id
     r3 = worker.record_experiment({"init": "hex", "lr": 0.1}, {"score": 1.2}, seed=1, code_ref="abc")
     assert r3.id is not None
-    hits = lead.sql_internal("SELECT kind FROM assay.dedup_hits WHERE project_id=%s", (lead.project_id,))
+    hits = lead.sql_internal("SELECT kind FROM benchbook.dedup_hits WHERE project_id=%s", (lead.project_id,))
     assert [h["kind"] for h in hits] == ["rejected"]
-    tried = lead.sql_internal("SELECT seeds, attempts FROM assay.v_tried WHERE project_id=%s", (lead.project_id,))
+    tried = lead.sql_internal("SELECT seeds, attempts FROM benchbook.v_tried WHERE project_id=%s", (lead.project_id,))
     assert tried == [{"seeds": 2, "attempts": 2}]
     # failed runs may be retried with the same seed
     f1 = worker.record_experiment({"x": 1}, {}, run_status="error", seed=0, notes="boom")
@@ -286,7 +286,8 @@ def test_i6_worker_cannot_decide(db_url: str, worker: Ledger) -> None:
     with psycopg.connect(db_url) as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute(
-                "INSERT INTO assay.decisions(project_id,target_type,target_id,new_status,oracle,rationale,decided_by)"
+                "INSERT INTO benchbook.decisions(project_id,target_type,target_id,new_status,oracle,rationale,"
+                "decided_by)"
                 " VALUES (%s,'claim',%s,'supported','metric','x','worker-1')", (worker.project_id, c.id))
 
 
@@ -303,7 +304,7 @@ def test_i7_invalidated_excluded(lead: Ledger, worker: Ledger) -> None:
     assert st["best"]["id"] == f"e:{str(a.id)[:8]}"
     r = worker.record_experiment({"v": 3}, {"score": 2.0})
     assert r.outcome == "improved"  # judged against 1.0, not the invalidated 5.0
-    keys = lead.sql_internal("SELECT dedup_key FROM assay.v_tried WHERE project_id=%s", (lead.project_id,))
+    keys = lead.sql_internal("SELECT dedup_key FROM benchbook.v_tried WHERE project_id=%s", (lead.project_id,))
     assert b.dedup_key not in {k["dedup_key"] for k in keys}
     brief = worker.brief()
     assert str(b.id)[:8] not in brief
@@ -329,7 +330,7 @@ def test_invalidating_decision_evidence_flags_verified_claim(lead: Ledger, worke
     assert visible == [{"id": str(extra)}]
 
 
-@pytest.mark.parametrize("length", [57, 58, 63])
+@pytest.mark.parametrize("length", [53, 54, 63])
 def test_valid_project_slugs_keep_writes_and_notifications(db_url: str, length: int) -> None:
     pid = (uuid.uuid4().hex * 2)[:length]
     Ledger.init_project(pid, database_url=db_url)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from assay import Ledger
+from benchbook import Ledger
 
 ROOT = Path(__file__).resolve().parent.parent
 pytest.importorskip("scipy")
@@ -86,7 +86,8 @@ def test_scripted_verification_is_limited_to_the_recorded_seeds(lead: Ledger, wo
     replica.record_experiment(config, {metric: 2.60}, seed=4, code_ref=CODE_REF)
     verify_best(lead)
     decisions = lead.sql_internal(
-        "SELECT oracle_detail FROM assay.decisions WHERE project_id=%s AND new_status='verified' ORDER BY created_at",
+        "SELECT oracle_detail FROM benchbook.decisions WHERE project_id=%s AND new_status='verified'"
+        " ORDER BY created_at",
         (lead.project_id,),
     )
     assert [d["oracle_detail"]["seeds"] for d in decisions] == [[0, 1, 2], [0, 1, 2, 4]]
@@ -98,7 +99,7 @@ def test_bench_dry(tmp_path: Path) -> None:
                        timeout=240)
     assert p.returncode == 0, p.stderr[-2000:]
     report = (tmp_path / "b" / "report.md").read_text()
-    assert "DRY RUN" in report and "C assay" in report and "A baseline" in report
+    assert "DRY RUN" in report and "C benchbook" in report and "A baseline" in report
     m = json.loads((tmp_path / "b" / "metrics.json").read_text())
     c = [r for r in m["runs"] if r["config"] == "C"][0]
     assert c["lost_results"] == 0 and c["duplicate_ratio"] == 0

@@ -1,13 +1,13 @@
 # Concepts
 
-assay is the record of a research community made of agents: workers are contributors, the lead is the editor,
+benchbook is the record of a research community made of agents: workers are contributors, the lead is the editor,
 the database is the journal. It does not pass messages between agents and it does not run them.
 
 ## Records
 
 | record | meaning | written by |
 |---|---|---|
-| project | one research goal: goal sentence, primary metric and direction, pack | a human or the lead (`assay init`) |
+| project | one research goal: goal sentence, primary metric and direction, pack | a human or the lead (`benchbook init`) |
 | agent | a contributor: worker, orchestrator, human or harness | registered on first use |
 | task | a unit of work, held by one agent at a time through a lease | lead creates, worker claims |
 | experiment | what was tried (config, code_ref, seed) and what happened (metrics, outcome, notes), failures included | workers, scripts |
@@ -68,7 +68,7 @@ so independent agents reaching the same conclusion add up.
 A brief is a deterministic markdown digest within a token budget (default 2,000): goal and best, your task,
 verified claims, supported-but-unverified claims, what was already tried near your task (with failures first),
 findings other agents proposed under your task's tags that nobody has judged yet (observations, notes),
-open questions, and what changed since your last brief. Every item carries an id; details are one `assay_get`
+open questions, and what changed since your last brief. Every item carries an id; details are one `benchbook_get`
 away. No LLM is involved.
 
 ## Principles
@@ -82,14 +82,14 @@ away. No LLM is involved.
 5. **Failures are records, not context.** Negative results are always stored but shown only where relevant.
 6. **Conclusions and ids in context.** Every read is budgeted; details on request.
 7. **Zero setup.** Embedded Postgres locally; a URL for teams.
-8. **Not an orchestrator.** assay records; your runtime runs agents.
+8. **Not an orchestrator.** benchbook records; your runtime runs agents.
 9. **Not an observability tool.** Traces stay where they are; experiments keep a `trace_ref`.
 10. **One place for logic.** CLI, MCP server, viewer and hooks are thin layers over the Python SDK.
 
 ## Honest limits
 
 Identity is self-declared. An MCP caller names itself with the `agent` argument and a CLI caller with
-`ASSAY_AGENT`/`--agent`, and an unknown name is registered with the role it asks for, so a malicious agent
+`BENCHBOOK_AGENT`/`--agent`, and an unknown name is registered with the role it asks for, so a malicious agent
 could claim to be the lead, or make up several names to look like independent replicators. The CLI no longer
 falls back to `human` when no name is given; a person deciding by hand passes `--as human`.
 
@@ -98,11 +98,11 @@ TRUNCATE are refused by triggers), fixed agent roles (an agent row cannot be re-
 decision-role check. The owner can disable triggers (`ALTER TABLE ... DISABLE TRIGGER`), and today every agent
 connects as the owner, so these hold against mistakes, not against an agent that sets out to break them.
 
-`assay_sql` runs as `assay_reader` in a read-only transaction over the per-project `assay_q` views. The reader
+`benchbook_sql` runs as `benchbook_reader` in a read-only transaction over the per-project `benchbook_q` views. The reader
 cannot call `set_config` (revoked when the migration runs as a superuser), the query text may not use
 `set_config`, `U&` escapes, the `*_to_xml` functions or `pg_settings`, and a query that changes the project or
-role is discarded. When `assay_reader` cannot log in, the weaker `SET ROLE` fallback needs
-`ASSAY_SQL_ALLOW_SET_ROLE=1`.
+role is discarded. When `benchbook_reader` cannot log in, the weaker `SET ROLE` fallback needs
+`BENCHBOOK_SQL_ALLOW_SET_ROLE=1`.
 
 Planned for v0.2: per-agent tokens, a runtime writer role with INSERT and SELECT only (separate from the
 migration owner), and row-level security per project.

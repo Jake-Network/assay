@@ -22,21 +22,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from assay.integrations.autoresearch.checkout import Checkout
-from assay.integrations.autoresearch.code import code_hash
-from assay.integrations.autoresearch.ops import _isolated_dir
-from assay.integrations.autoresearch.runner import run_command
+from benchbook.integrations.autoresearch.checkout import Checkout
+from benchbook.integrations.autoresearch.code import code_hash
+from benchbook.integrations.autoresearch.ops import _isolated_dir
+from benchbook.integrations.autoresearch.runner import run_command
 
 from . import arms
 
 
 def b_best(lg: Any) -> tuple[bytes | None, dict[str, Any]]:
-    rows = lg.sql_internal("SELECT * FROM assay.v_partition_best WHERE project_id=%s AND rank=1"
+    rows = lg.sql_internal("SELECT * FROM benchbook.v_partition_best WHERE project_id=%s AND rank=1"
                            " ORDER BY (status='verified') DESC, mean LIMIT 1", (lg.project_id,))
     if not rows:
         return None, {}
     origin = lg.get(str(rows[0]["origin_id"]))["record"]
-    uri = next((a["uri"] for a in origin["artifacts"] if str(a.get("uri", "")).startswith("assay://blob/")), None)
+    uri = next((a["uri"] for a in origin["artifacts"] if str(a.get("uri", "")).startswith("benchbook://blob/")), None)
     eps = (lg.project.settings.get("partitions") or {}).get(rows[0]["partition"], {}).get("epsilon")
     return (lg.get_blob(uri) if uri else None), {"status": rows[0]["status"], "mean": rows[0]["mean"],
                                                  "n": rows[0]["n"], "epsilon": eps}
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--execute", action="store_true")
     args = ap.parse_args(argv)
-    from assay import Ledger
+    from benchbook import Ledger
 
     out = args.out.resolve()
     cond = json.loads((out / "conditions.json").read_text())

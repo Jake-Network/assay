@@ -1,4 +1,4 @@
-# Pre-registration: assay swarm vs independent autoresearch
+# Pre-registration: benchbook swarm vs independent autoresearch
 
 > Template (§13.1). Fill in every [bracket], commit this file, and only then run
 > `python -m bench.autoresearch.launch ... --execute`. Do not edit it after the first repetition starts; add an
@@ -6,14 +6,14 @@
 
 ## Question
 
-With the same GPUs, the same wall-clock time and the same agent, does an assay swarm (arm B) do better
+With the same GPUs, the same wall-clock time and the same agent, does an benchbook swarm (arm B) do better
 than independent autoresearch agents (arm A)?
 
 ## Hypotheses
 
 - **H1**: in every repetition, arm B has zero duplicate runs (metric 3) and zero unrecorded training attempts
   within the collector's scope. The collector and ledger match receipts by attempt ID, worker, code and seed.
-  A collected run started outside `assay ar` also counts against H1. Ledger rows without collector receipts
+  A collected run started outside `benchbook ar` also counts against H1. Ledger rows without collector receipts
   indicate incomplete observation and prevent an H1 pass.
 - **H2**: arm B's replicated best val_bpb (metric 1) is lower than or equal to arm A's plus epsilon (B's
   calibrated epsilon, else 0.0005), averaged over the repetitions.
@@ -22,7 +22,7 @@ than independent autoresearch agents (arm A)?
 ## Design
 
 - **Repetitions**: at least 3 per condition, each a separate `launch.py --repetition k` with its own output
-  directory and a fresh assay project; the same upstream commit, model and settings. Report every repetition and
+  directory and a fresh benchbook project; the same upstream commit, model and settings. Report every repetition and
   the mean (`python -m bench.autoresearch.report out1 out2 out3` writes summary.md). [N repetitions]
 - **GPU groups**: the two GPU groups ([0-3] and [4-7]) may differ in NUMA node and PCIe switch. Each repetition
   assigns the groups to the arms by a coin flip, `--assign-seed k` (seeds [1, 2, 3]); the draw is recorded in
@@ -40,15 +40,15 @@ than independent autoresearch agents (arm A)?
 - Agent: Claude Code [version], model [dated identifier], same permissions
   (`--allowedTools Bash,Read,Edit,Write,Glob,Grep`).
 - Upstream: karpathy/autoresearch at commit [sha] (or fork [url] at [sha]); data prepared once with `uv run prepare.py`.
-- assay: commit [sha]. Database: [embedded on one machine | Postgres URL, host only].
+- benchbook: commit [sha]. Database: [embedded on one machine | Postgres URL, host only].
 - **Both arms** use the same collector on PATH (wrap_train.sh + shim_log.py) and receive the same instruction to
   launch training with `uv run train.py`. The collector logs starts and ends for training script invocations
-  via instrumented `uv run` and PATH `python`/`python3`, including relative and absolute script paths. `assay ar`
+  via instrumented `uv run` and PATH `python`/`python3`, including relative and absolute script paths. `benchbook ar`
   tags each run with its attempt ID and replication number. A start without an end is retained. An absolute
   interpreter outside the supplied PATH or module-based invocation can bypass the collector, so report H1 within
   these observed paths and check adherence to the prescribed command separately.
 - Arm A: upstream `program.md` unchanged; one branch per GPU.
-- Arm B: `program.assay.md` from `assay ar init`; referee settings at their defaults
+- Arm B: `program.benchbook.md` from `benchbook ar init`; referee settings at their defaults
   (replicates 2, replicate_max_queue 4, epsilon_floor 0.0005, sanity_min 0.5, sanity_max_gain 0.1).
 - Optional arm C, autoresearch-at-home: [included / not included, and why].
 
@@ -65,7 +65,7 @@ arms; its runs are reported on their own line.
 2. Best over time: A as printed by kept runs, B as verified (candidates shown separately).
 3. Duplicate runs and their GPU minutes: successful runs whose (normalised code, replication number) already
    ran successfully in the same arm. For A the replication number is always 0. B also reports how many runs
-   assay refused before they started (refusals the agent overrode with `--retry-failed` do not count).
+   benchbook refused before they started (refusals the agent overrode with `--retry-failed` do not count).
 4. GPU minutes on crashes, timeouts and killed runs (shim).
 5. False best ratio, one procedure for both arms: of up to 10 random non-baseline keeps per arm (sampling seed
    [0]; A: "keep" rows of results.tsv, valued by what the shim saw that code print; B: first runs that printed

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-NAMES = {"A": "A baseline (text to lead)", "B": "B files", "C": "C assay"}
+NAMES = {"A": "A baseline (text to lead)", "B": "B files", "C": "C benchbook"}
 
 
 def _ms(xs: list[float]) -> str:
@@ -24,11 +24,12 @@ def write_report(out: Path) -> Path:
     runs: list[dict[str, Any]] = data["runs"]
     cond = data["conditions"]
     modes = sorted({r["config"] for r in runs})
-    lines = [f"# assay benchmark report{' (DRY RUN)' if cond.get('dry') else ''}", ""]
+    lines = [f"# benchbook benchmark report{' (DRY RUN)' if cond.get('dry') else ''}", ""]
     if cond.get("dry"):
         lines += ["> **Dry run.** Agents are scripted and token costs are simulated with the assumptions in",
                   "> `bench/dry.py` (message drop rate, compaction threshold, fixed cost per step). These numbers",
-                  "> validate the harness pipeline; they are not evidence about assay. Real runs: `MANUAL_QA.md`.", ""]
+                  "> validate the harness pipeline; they are not evidence about benchbook."
+                  " Real runs: `MANUAL_QA.md`.", ""]
     lines += ["| configuration | runs | evaluations | duplicate ratio | lost results | lead context max (tokens) |"
               " tokens total | API cost (USD) | final best | best per 1k tokens |",
               "|---|---|---|---|---|---|---|---|---|---|"]

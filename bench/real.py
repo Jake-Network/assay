@@ -47,10 +47,11 @@ LEAD = {
         "receipt to results/<eval_id>.json right after the evaluation. Read results/ to plan the next round."
     ),
     "C": (
-        "/assay:assay-lead {task} Run {rounds} rounds with {workers} workers per round and about {evals} "
+        "/benchbook:benchbook-lead {task} Run {rounds} rounds with {workers} workers per round and about {evals} "
         "evaluations per task. Include the wrapper command and these recording instructions in the task specs. "
         'Workers must pass code_ref both when checking and recording. Copy each receipt ID into trace_ref as '
-        '{{"system":"assay-bench","trace_id":"<eval_id>"}}. Copy config, seed and run_status verbatim and, when value '
+        '{{"system":"benchbook-bench","trace_id":"<eval_id>"}}. Copy config, seed and run_status verbatim and,'
+        ' when value '
         'is present, set metrics.sum_radii to that value. Use the ledger and brief to plan rounds. '
         'If a worker cannot record any result, its fallback handback should be a compact JSON object '
         '{{"evaluations":[<exact receipts>]}} so the hook can preserve those receipts.'
@@ -99,7 +100,7 @@ class PreparedRun:
         names = ("BENCH_ROOT", "BENCH_EVALS", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
         overrides = {name: self.env[name] for name in names}
         if self.project_id:
-            overrides["ASSAY_PROJECT"] = self.project_id
+            overrides["BENCHBOOK_PROJECT"] = self.project_id
             overrides["XDG_STATE_HOME"] = self.env["XDG_STATE_HOME"]
         return overrides
 
@@ -117,7 +118,7 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
            # workers report and the stream carries one result event per wake-up. Every arm waits for its workers.
            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
            "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ.get("PATH", "")))}
-    env.pop("ASSAY_PROJECT", None)
+    env.pop("BENCHBOOK_PROJECT", None)
     prompt = LEAD[mode].format(task=TASK, rounds=args.rounds, workers=args.workers, evals=args.evals) + REPORT
     tools = "Agent,Bash(python tools/evaluate.py:*),Read,Write,Glob"
     cmd = [
@@ -130,11 +131,12 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
     init = None
     if mode == "C":
         project_id = f"bench-{uuid4().hex}"
-        env["ASSAY_PROJECT"] = project_id
+        env["BENCHBOOK_PROJECT"] = project_id
         env["XDG_STATE_HOME"] = str(out / "state")
-        init = ["assay", "init", "--project", project_id, "--goal", GOAL, "--metric", "sum_radii", "--direction", "max"]
+        init = ["benchbook", "init", "--project", project_id, "--goal", GOAL, "--metric", "sum_radii",
+                "--direction", "max"]
         cmd.extend(["--plugin-dir", str(ROOT / "integrations" / "claude-code")])
-        tools += ",mcp__plugin_assay_assay__*"
+        tools += ",mcp__plugin_benchbook_benchbook__*"
     else:
         cmd.append("--strict-mcp-config")
     if mode == "B":
@@ -185,11 +187,11 @@ def _capture(prepared: PreparedRun, out: Path, wall_clock_minutes: int) -> None:
 
 
 def _flush_hooks(prepared: PreparedRun) -> None:
-    root = Path(prepared.env["XDG_STATE_HOME"]) / "assay" / "spool"
+    root = Path(prepared.env["XDG_STATE_HOME"]) / "benchbook" / "spool"
     for spool in root.iterdir() if root.is_dir() else ():
         if not spool.is_dir():
             continue
-        subprocess.run([sys.executable, "-m", "assay.hooks", str(spool)], cwd=prepared.work, env=prepared.env,
+        subprocess.run([sys.executable, "-m", "benchbook.hooks", str(spool)], cwd=prepared.work, env=prepared.env,
                        check=True, timeout=130)
         if next(spool.glob("*.json"), None):
             raise BenchRunError("hook receipts are still queued after replay")
@@ -278,18 +280,18 @@ def _file_receipts(out: Path) -> list[Any]:
 def _ledger_receipts(project_id: str) -> list[Any]:
     import psycopg
 
-    from assay import Ledger
-    from assay.errors import AssayError
+    from benchbook import Ledger
+    from benchbook.errors import BenchbookError
 
     try:
         lg = Ledger.open(project=project_id, agent="human")
         receipts = lg.sql_internal(
             "SELECT trace_ref->>'trace_id' AS eval_id, config, code_ref, seed, run_status, primary_value AS value"
-            " FROM assay.experiments WHERE project_id=%s AND trace_ref->>'system'='assay-bench'", (project_id,))
+            " FROM benchbook.experiments WHERE project_id=%s AND trace_ref->>'system'='benchbook-bench'", (project_id,))
         notes = lg.sql_internal(
-            "SELECT payload->>'text' AS body FROM assay.claims WHERE project_id=%s AND kind='note'"
+            "SELECT payload->>'text' AS body FROM benchbook.claims WHERE project_id=%s AND kind='note'"
             " AND author='hook' AND 'auto-captured'=ANY(tags)", (project_id,))
-    except (AssayError, psycopg.Error) as exc:
+    except (BenchbookError, psycopg.Error) as exc:
         raise BenchRunError(f"could not read benchmark project {project_id}") from exc
     captures: list[Any] = []
     for note in notes:

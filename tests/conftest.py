@@ -10,15 +10,15 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from assay import Ledger
-from assay.db import conn as dbconn
+from benchbook import Ledger
+from benchbook.db import conn as dbconn
 
 
 @pytest.fixture(scope="session")
 def db_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """A throwaway database: ASSAY_TEST_DATABASE_URL (CI service) or a fresh embedded Postgres."""
-    if base := os.environ.get("ASSAY_TEST_DATABASE_URL"):
-        name = f"assay_test_{uuid.uuid4().hex[:8]}"
+    """A throwaway database: BENCHBOOK_TEST_DATABASE_URL (CI service) or a fresh embedded Postgres."""
+    if base := os.environ.get("BENCHBOOK_TEST_DATABASE_URL"):
+        name = f"benchbook_test_{uuid.uuid4().hex[:8]}"
         url = dbconn.ensure_database(base, name)
         yield url
         with psycopg.connect(base, autocommit=True) as c:
@@ -28,8 +28,8 @@ def db_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
     pgdata = Path(tmp_path_factory.mktemp("pg")) / "data"
     server = get_server(pgdata, cleanup_mode=None, postgres_version=dbconn.EMBEDDED_PG_VERSION)
-    url = dbconn.ensure_database(server.get_uri(), "assay_test")
-    os.environ["ASSAY_DATABASE_URL"] = url
+    url = dbconn.ensure_database(server.get_uri(), "benchbook_test")
+    os.environ["BENCHBOOK_DATABASE_URL"] = url
     yield url
     for pool in Ledger._pools.values():
         pool.close()

@@ -1,10 +1,10 @@
-"""Every SQL example in docs/schema.md runs through assay_sql."""
+"""Every SQL example in docs/schema.md runs through benchbook_sql."""
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from assay import Ledger
+from benchbook import Ledger
 
 DOC = Path(__file__).resolve().parent.parent / "docs" / "schema.md"
 
@@ -28,14 +28,14 @@ def test_schema_examples(lead: Ledger, worker: Ledger) -> None:
 
 def test_autoresearch_template_matches_package() -> None:
     root = Path(__file__).resolve().parent.parent
-    packaged = root / "src" / "assay" / "integrations" / "autoresearch" / "templates" / "program.assay.md"
-    copy = root / "integrations" / "autoresearch" / "template" / "program.assay.md"
+    packaged = root / "src" / "benchbook" / "integrations" / "autoresearch" / "templates" / "program.benchbook.md"
+    copy = root / "integrations" / "autoresearch" / "template" / "program.benchbook.md"
     assert packaged.read_text() == copy.read_text()
     text = packaged.read_text()
-    assert "MIT" in text and "0. assay ar replicate --auto" in text and "NEVER STOP" in text
+    assert "MIT" in text and "0. benchbook ar replicate --auto" in text and "NEVER STOP" in text
 
 
-def test_readmes_say_what_assay_fits() -> None:
+def test_readmes_say_what_benchbook_fits() -> None:
     root = Path(__file__).resolve().parent.parent
     en = (root / "README.md").read_text()
     ko = (root / "README.ko.md").read_text()

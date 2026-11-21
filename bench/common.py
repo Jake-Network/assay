@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "examples" / "circle-packing"))
 
-from assay.dedup import canonical_json  # noqa: E402
+from benchbook.dedup import canonical_json  # noqa: E402
 
 SPACE = {"init": ["grid", "hex", "random", "lattice_perturb"], "optimizer": ["slsqp", "penalty"],
          "iters": [10, 30, 100, 300, 1000], "perturb": [0.0, 0.01, 0.02, 0.05]}

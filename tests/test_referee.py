@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
-from assay import Ledger
-from assay.integrations.autoresearch.code import code_hash
-from assay.integrations.autoresearch.ops import PROJECT_SETTINGS
-from assay.integrations.autoresearch.referee import tick
+from benchbook import Ledger
+from benchbook.integrations.autoresearch.code import code_hash
+from benchbook.integrations.autoresearch.ops import PROJECT_SETTINGS
+from benchbook.integrations.autoresearch.referee import tick
 
 PART = "sim-cpu/abcd1234"
 
@@ -55,13 +55,13 @@ def replicate(lg: Ledger, value: float | None, part: str = PART, origin: Any = N
 
 
 def result_status(lg: Ledger, origin: Any) -> str | None:
-    rows = lg.sql_internal("SELECT s.status FROM assay.links l JOIN assay.v_claim_status s ON s.id=l.dst_id"
+    rows = lg.sql_internal("SELECT s.status FROM benchbook.links l JOIN benchbook.v_claim_status s ON s.id=l.dst_id"
                            " WHERE l.src_id=%s AND l.relation='supports' AND s.kind='result'", (origin,))
     return rows[0]["status"] if rows else None
 
 
 def tasks(lg: Ledger, tag: str, status: str | None = None) -> list[dict[str, Any]]:
-    return lg.sql_internal("SELECT * FROM assay.tasks WHERE project_id=%s AND %s = ANY(tags)"
+    return lg.sql_internal("SELECT * FROM benchbook.tasks WHERE project_id=%s AND %s = ANY(tags)"
                            " AND (%s::text IS NULL OR status=%s)", (lg.project_id, tag, status, status))
 
 
@@ -94,7 +94,7 @@ def test_t1_t2_calibration_and_baseline(db_url: str, pid: str) -> None:
     assert entry["n"] == 3 and entry["status"] == "ok"
     assert len(c.search(kind="calibration")) == 1
     assert result_status(a, e0.id) == "verified"
-    best = a.sql_internal("SELECT * FROM assay.v_partition_best WHERE project_id=%s AND partition=%s"
+    best = a.sql_internal("SELECT * FROM benchbook.v_partition_best WHERE project_id=%s AND partition=%s"
                           " AND status='verified'", (pid, PART))
     assert len(best) == 1 and best[0]["mean"] == pytest.approx(1.0) and best[0]["n"] == 3
 
@@ -111,7 +111,7 @@ def test_t3_t5_candidate_verified(db_url: str, pid: str) -> None:
     replicate(c, 0.989)
     tick(c)
     assert result_status(a, e1.id) == "verified"
-    best = a.sql_internal("SELECT * FROM assay.v_partition_best WHERE project_id=%s AND partition=%s"
+    best = a.sql_internal("SELECT * FROM benchbook.v_partition_best WHERE project_id=%s AND partition=%s"
                           " AND status='verified' AND rank=1", (pid, PART))[0]
     assert best["mean"] == pytest.approx(0.990) and best["author"] == "b"
     decisions = a.get(best["ref_id"])["decisions"]
@@ -129,7 +129,7 @@ def test_lucky_run_is_refuted(db_url: str, pid: str) -> None:
     replicate(c, 0.998)
     tick(c)
     assert result_status(a, lucky.id) == "refuted"
-    assert a.sql_internal("SELECT mean FROM assay.v_partition_best WHERE project_id=%s AND partition=%s"
+    assert a.sql_internal("SELECT mean FROM benchbook.v_partition_best WHERE project_id=%s AND partition=%s"
                           " AND status='verified' AND rank=1", (pid, PART))[0]["mean"] == pytest.approx(1.0)
 
 
@@ -201,10 +201,10 @@ def test_idempotent_and_concurrent(db_url: str, pid: str) -> None:
     for th in threads:
         th.join()
     assert not errors
-    before = (len(tasks(a, "replicate")), a.sql_internal("SELECT count(*) AS n FROM assay.decisions")[0]["n"])
+    before = (len(tasks(a, "replicate")), a.sql_internal("SELECT count(*) AS n FROM benchbook.decisions")[0]["n"])
     for _ in range(10):
         tick(a)
-    after = (len(tasks(a, "replicate")), a.sql_internal("SELECT count(*) AS n FROM assay.decisions")[0]["n"])
+    after = (len(tasks(a, "replicate")), a.sql_internal("SELECT count(*) AS n FROM benchbook.decisions")[0]["n"])
     assert before == after
     origins = [t["spec"]["origin"] for t in tasks(a, "replicate")]
     assert len(origins) == len(set(origins)) * 2
@@ -238,10 +238,10 @@ def test_a2_failed_calibration_never_verifies_by_default(db_url: str, pid: str) 
     assert replicate(c, 1.0, origin=e0.id) is not None
     assert replicate(d, 0.999, origin=e0.id) is not None
     tick(d)
-    best = a.sql_internal("SELECT mean FROM assay.v_partition_best WHERE project_id=%s AND partition=%s"
+    best = a.sql_internal("SELECT mean FROM benchbook.v_partition_best WHERE project_id=%s AND partition=%s"
                           " AND status='verified' AND rank=1", (pid, PART))
     assert best and best[0]["mean"] == pytest.approx(1.0, abs=0.002)
-    statuses = a.sql_internal("SELECT s.status FROM assay.links l JOIN assay.v_claim_status s ON s.id=l.dst_id"
+    statuses = a.sql_internal("SELECT s.status FROM benchbook.links l JOIN benchbook.v_claim_status s ON s.id=l.dst_id"
                               " WHERE l.src_id=%s AND l.relation='supports' AND s.kind='result'", (worse.id,))
     assert [r["status"] for r in statuses] == ["refuted"]
 
@@ -260,7 +260,7 @@ def test_a3_replications_by_distinct_agents(db_url: str, pid: str) -> None:
 def test_recalibrates_after_baseline_evidence_is_invalidated(db_url: str, pid: str) -> None:
     a, b, c, baseline = calibrated_lab(db_url, pid)
     lead = agent(db_url, pid, "lead")
-    previous = a.sql_internal("SELECT id FROM assay.experiments WHERE project_id=%s", (pid,))
+    previous = a.sql_internal("SELECT id FROM benchbook.experiments WHERE project_id=%s", (pid,))
     for run in previous:
         lead.decide(run["id"], "invalidated", "human", "invalid evaluator")
     assert result_status(a, baseline.id) == "verified"  # invalidation filters the claim without rewriting it
@@ -271,6 +271,6 @@ def test_recalibrates_after_baseline_evidence_is_invalidated(db_url: str, pid: s
     assert replicate(b, 0.991, origin=replacement.id) is not None
     assert replicate(c, 0.989, origin=replacement.id) is not None
     tick(c)
-    best = a.sql_internal("SELECT origin_id FROM assay.v_partition_best WHERE project_id=%s"
+    best = a.sql_internal("SELECT origin_id FROM benchbook.v_partition_best WHERE project_id=%s"
                           " AND status='verified' AND rank=1", (pid,))
     assert best == [{"origin_id": replacement.id}]

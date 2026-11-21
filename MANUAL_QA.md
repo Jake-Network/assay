@@ -7,31 +7,31 @@ tested with stored inputs (`tests/fixtures/hooks/`).
 Setup for all scenarios:
 
 ```bash
-uv tool install --from . assay        # or: pipx install .   (puts `assay` on PATH for the MCP server and hook)
+uv tool install --from . benchbook        # or: pipx install .   (puts `benchbook` on PATH for the MCP server and hook)
 cd /path/to/a/scratch/repo && git init
-claude plugin marketplace add /path/to/assay
-claude plugin install assay@assay
+claude plugin marketplace add /path/to/benchbook
+claude plugin install benchbook@benchbook
 ```
 
-## Scenario 2: `/assay-lead` runs circle packing for two rounds
+## Scenario 2: `/benchbook-lead` runs circle packing for two rounds
 
 1. Copy `examples/circle-packing/{evaluator.py,packing.py,seed_program.py}` into the scratch repo.
-2. `assay init --goal "Maximize the sum of radii of 26 non-overlapping circles in the unit square." --metric sum_radii --direction max`
-3. In another terminal: `assay serve`, open http://127.0.0.1:7466.
-4. In Claude Code: `/assay:assay-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
+2. `benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles in the unit square." --metric sum_radii --direction max`
+3. In another terminal: `benchbook serve`, open http://127.0.0.1:7466.
+4. In Claude Code: `/benchbook:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
 
 Expected: tasks appear on the Tasks page and get claimed by `worker-1..4`; experiments and the best-so-far curve
 update live; each worker's final message is <= 3 sentences plus ids; after round 1 the lead reads
-`assay_status`/`assay_brief` rather than quoting worker messages; the final report lists best, verified claims,
+`benchbook_status`/`benchbook_brief` rather than quoting worker messages; the final report lists best, verified claims,
 experiment count, duplicates blocked and the viewer URL.
 
 ## Scenario 4: a subagent that does not write to the ledger is still captured
 
-1. In the same repo, in Claude Code: "Use an assay-worker subagent to compute the sum of radii of the seed
-   program (python evaluator.py seed_program.py) and report the number. Tell it not to use any assay tools."
-2. Expected: `assay claim list --kind note` shows a claim starting with `[auto-captured]`, tag `auto-captured`,
-   author `hook`; `assay get c:...` shows the full text in `payload.text` and the session id in `payload.source`.
-3. `~/.local/state/assay/hook.log` has a `captured:c:...` line. A worker who cites an ID from a successful write
+1. In the same repo, in Claude Code: "Use an benchbook-worker subagent to compute the sum of radii of the seed
+   program (python evaluator.py seed_program.py) and report the number. Tell it not to use any benchbook tools."
+2. Expected: `benchbook claim list --kind note` shows a claim starting with `[auto-captured]`, tag `auto-captured`,
+   author `hook`; `benchbook get c:...` shows the full text in `payload.text` and the session id in `payload.source`.
+3. `~/.local/state/benchbook/hook.log` has a `captured:c:...` line. A worker who cites an ID from a successful write
    in its own transcript produces `cited`.
 
 ## Benchmark (real)
@@ -45,7 +45,7 @@ The first command creates local command previews and does not start Claude or in
 uses the same Claude dollar cap, worker count, model, turn limit and wall-clock limit for each run. With the
 shown settings, the nine requested runs have a nominal API budget of USD 45. Use a Claude Code version that
 supports `--max-budget-usd`, `--forward-subagent-text` and `--json-schema`. Prefer a fixed model identifier
-when comparing runs across dates. Each C run gets a separate assay project.
+when comparing runs across dates. Each C run gets a separate benchbook project.
 
 Look for `report.md` in the new output directory. It includes the conditions, measured API usage, and mean and
 sample standard deviation across runs. The plot includes intermediate usage checkpoints when the streamed
@@ -71,22 +71,22 @@ a lower duplicate ratio and a lower peak lead context than A. Report whether C m
 
 ```bash
 git clone https://github.com/karpathy/autoresearch && cd autoresearch && uv run prepare.py
-uv tool install --from /path/to/assay assay
-assay ar init --project smoke
-export ASSAY_AGENT=gpu0-smoke CUDA_VISIBLE_DEVICES=0
-assay ar claim "baseline" && assay ar run -m "baseline"
+uv tool install --from /path/to/benchbook benchbook
+benchbook ar init --project smoke
+export BENCHBOOK_AGENT=gpu0-smoke CUDA_VISIBLE_DEVICES=0
+benchbook ar claim "baseline" && benchbook ar run -m "baseline"
 ```
 
-Expected: `assay ar init` prints a partition like `h100-80gb/xxxxxxxx` (your GPU model); `run` takes about
+Expected: `benchbook ar init` prints a partition like `h100-80gb/xxxxxxxx` (your GPU model); `run` takes about
 5.5 minutes and prints `KEEP (baseline, calibration pending)  val_bpb=0.99…`; `results.tsv` has the header
-and one `keep` row; `run.log` holds the full output; `assay ar status` shows 1 run and 2 open calibration tasks
+and one `keep` row; `run.log` holds the full output; `benchbook ar status` shows 1 run and 2 open calibration tasks
 (they need a second agent); the upstream `analysis.ipynb` reads `results.tsv`.
 
-Then a second agent on the same machine (`ASSAY_AGENT=gpu0-b`, a second worktree): `assay ar replicate --auto`
+Then a second agent on the same machine (`BENCHBOOK_AGENT=gpu0-b`, a second worktree): `benchbook ar replicate --auto`
 runs a calibration run in a temp directory without touching that worktree's `train.py` or `git status`. After
-both calibration runs: `assay ar status` shows `calibration sigma=… epsilon=… (ok)` and a verified best.
+both calibration runs: `benchbook ar status` shows `calibration sigma=… epsilon=… (ok)` and a verified best.
 
-Also check with an agent: `claude "Read program.assay.md and start."` in the worktree; it should loop through
+Also check with an agent: `claude "Read program.benchbook.md and start."` in the worktree; it should loop through
 replicate, sync, brief, claim, commit, run, keep/reset without asking questions.
 
 ### Launch experiment (§13)

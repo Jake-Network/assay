@@ -13,11 +13,11 @@ import pytest
 
 @pytest.fixture
 def cli(tmp_path: Path, db_url: str):  # type: ignore[no-untyped-def]
-    env = {**os.environ, "ASSAY_DATABASE_URL": db_url}
-    env.pop("ASSAY_PROJECT", None)
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url}
+    env.pop("BENCHBOOK_PROJECT", None)
 
     def run(*args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, "-m", "assay.cli", *args], capture_output=True, text=True,
+        return subprocess.run([sys.executable, "-m", "benchbook.cli", *args], capture_output=True, text=True,
                               cwd=tmp_path, env=env, input=input, timeout=60)
     return run
 
@@ -28,10 +28,10 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
             "--json")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["project"] == pid
-    assert (tmp_path / ".assay" / "config.toml").read_text().startswith(f'project = "{pid}"')
+    assert (tmp_path / ".benchbook" / "config.toml").read_text().startswith(f'project = "{pid}"')
     (tmp_path / "cfg.json").write_text('{"init": "hex"}')
     r = cli("exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0")
-    assert r.returncode == 1 and "ASSAY_AGENT" in r.stderr  # writes need a name; no silent 'human' (I1)
+    assert r.returncode == 1 and "BENCHBOOK_AGENT" in r.stderr  # writes need a name; no silent 'human' (I1)
     r = cli("--agent", "w0", "exp", "record", "--config", "@cfg.json", "--metrics", '{"sum_radii": 2.5}', "--seed", "0",
             "--json")
     assert r.returncode == 0, r.stderr
@@ -60,7 +60,7 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     r = cli("--agent", "w0", "exp", "record", "--config", '{"a":1}', "--metrics", '{"sum_radii":[1]}', "--json")
     assert r.returncode == 1 and "metrics.sum_radii" in json.loads(r.stdout)["problems"][0]
     r = cli("--agent", "human", "brief")
-    assert r.returncode == 0 and r.stdout.startswith(f"# assay brief · {pid}")
+    assert r.returncode == 0 and r.stdout.startswith(f"# benchbook brief · {pid}")
     r = cli("--agent", "human", "brief", "--budget", "0", "--json")
     assert r.returncode == 1 and "budget" in json.loads(r.stdout)["problems"][0]
     lines = cli("export").stdout.strip().splitlines()
@@ -75,8 +75,8 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_module_entry_shares_global_options(tmp_path: Path) -> None:
-    """`python -m assay.cli --json ar ...` must see --json/--project (one STATE, not two)."""
-    for mod in ("assay", "assay.cli"):
+    """`python -m benchbook.cli --json ar ...` must see --json/--project (one STATE, not two)."""
+    for mod in ("benchbook", "benchbook.cli"):
         r = subprocess.run([sys.executable, "-m", mod, "--json", "ar", "status"], cwd=tmp_path,
                            capture_output=True, text=True)
         assert r.stdout.startswith("{"), (mod, r.stdout, r.stderr)

@@ -9,15 +9,15 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from assay.db import conn as dbconn
-from assay.db import migrate as dbmigrate
-from assay.errors import AssayError
+from benchbook.db import conn as dbconn
+from benchbook.db import migrate as dbmigrate
+from benchbook.errors import BenchbookError
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="unix sockets")
 def test_embedded_server_in_a_data_dir_with_a_space(tmp_path: Path) -> None:
-    # macOS default: ~/Library/Application Support/assay/pg
-    pgdata = tmp_path / "Application Support" / "assay" / "pg"
+    # macOS default: ~/Library/Application Support/benchbook/pg
+    pgdata = tmp_path / "Application Support" / "benchbook" / "pg"
     uri = dbconn._embedded_server_uri(pgdata)
     try:
         with psycopg.connect(uri) as c:
@@ -38,27 +38,28 @@ def test_start_failure_is_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     pgdata = tmp_path / "pg"
     pgdata.mkdir()
-    (pgdata / "log").write_text("LOG:  starting\nFATAL:  invalid argument: \"Support/assay/pg\"\n")
+    (pgdata / "log").write_text("LOG:  starting\nFATAL:  invalid argument: \"Support/benchbook/pg\"\n")
 
     def broken(*a: object, **k: object) -> None:
         raise subprocess.CalledProcessError(1, ["pg_ctl", "start"])
 
     monkeypatch.setattr(postgres_server, "get_server", broken)
-    with pytest.raises(AssayError) as ei:
+    with pytest.raises(BenchbookError) as ei:
         dbconn._embedded_server_uri(pgdata)
     msg = str(ei.value)
-    assert "invalid argument" in msg and "ASSAY_DATA_DIR" in msg and str(pgdata) in msg
+    assert "invalid argument" in msg and "BENCHBOOK_DATA_DIR" in msg and str(pgdata) in msg
 
 
 def test_newer_schema_fails_with_upgrade_hint(db_url: str) -> None:
-    name = f"assay_newer_{uuid.uuid4().hex[:8]}"
+    name = f"benchbook_newer_{uuid.uuid4().hex[:8]}"
     url = dbconn.ensure_database(db_url, name)
     try:
         with psycopg.connect(url, autocommit=True) as c:
-            c.execute("CREATE SCHEMA assay")
-            c.execute("CREATE TABLE assay.alembic_version (version_num varchar(32) PRIMARY KEY)")
-            c.execute("INSERT INTO assay.alembic_version VALUES ('9999')")
-        with pytest.raises(AssayError, match=r"revision 9999 is newer than this assay \(head \d{4}\); upgrade assay"):
+            c.execute("CREATE SCHEMA benchbook")
+            c.execute("CREATE TABLE benchbook.alembic_version (version_num varchar(32) PRIMARY KEY)")
+            c.execute("INSERT INTO benchbook.alembic_version VALUES ('9999')")
+        with pytest.raises(BenchbookError, match=r"revision 9999 is newer than this benchbook "
+                                                 r"\(head \d{4}\); upgrade benchbook"):
             dbmigrate.migrate(url)
     finally:
         with psycopg.connect(db_url, autocommit=True) as c:

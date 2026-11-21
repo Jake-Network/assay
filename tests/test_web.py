@@ -6,10 +6,10 @@ import asyncio
 import pytest
 from starlette.testclient import TestClient
 
-from assay import Ledger
-from assay.db.conn import notification_channel
-from assay.errors import AssayError
-from assay.web.app import NotifyHub, allowed_hosts, create_app
+from benchbook import Ledger
+from benchbook.db.conn import notification_channel
+from benchbook.errors import BenchbookError
+from benchbook.web.app import NotifyHub, allowed_hosts, create_app
 
 MCP_INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
     "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
@@ -41,7 +41,7 @@ def test_pages(lead: Ledger, worker: Ledger) -> None:
         assert "<html" not in part.text and 'id="content"' in part.text
         assert client.get("/static/htmx.min.js").status_code == 200
         init = client.post("/mcp", json=MCP_INIT, headers=MCP_HEADERS)
-        assert init.status_code == 200 and "assay" in init.text
+        assert init.status_code == 200 and "benchbook" in init.text
 
 
 def test_host_header_is_checked(lead: Ledger) -> None:
@@ -61,8 +61,8 @@ def test_host_header_is_checked(lead: Ledger) -> None:
 ])
 def test_non_loopback_bind_needs_a_token(lead: Ledger, monkeypatch: pytest.MonkeyPatch,
                                         host: str, authority: str) -> None:
-    monkeypatch.delenv("ASSAY_SERVE_TOKEN", raising=False)
-    with pytest.raises(AssayError, match="ASSAY_SERVE_TOKEN"):
+    monkeypatch.delenv("BENCHBOOK_SERVE_TOKEN", raising=False)
+    with pytest.raises(BenchbookError, match="BENCHBOOK_SERVE_TOKEN"):
         create_app(lead.project_id, host=host)
     app = create_app(lead.project_id, host=host, token="s3cret")
     with TestClient(app, base_url=f"http://{authority}:7466") as client:
@@ -73,7 +73,7 @@ def test_non_loopback_bind_needs_a_token(lead: Ledger, monkeypatch: pytest.Monke
         init = client.post("/mcp", json=MCP_INIT, headers={**MCP_HEADERS, "Authorization": "Bearer s3cret"})
         assert init.status_code == 200
         first = client.get("/?token=s3cret", follow_redirects=False)
-        assert first.status_code == 303 and "assay_token" in first.headers["set-cookie"]
+        assert first.status_code == 303 and "benchbook_token" in first.headers["set-cookie"]
         assert first.headers["location"] == "/"
         assert "s3cret" not in client.get(first.headers["location"]).text
         assert client.get("/tasks").status_code == 200  # the cookie now carries it

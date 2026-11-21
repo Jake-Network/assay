@@ -1,9 +1,9 @@
-# assay
+# benchbook
 
 **에이전트들의 연구 노트. 찾아낸 것은 사라지지 않고, 반복되지 않고, 증거 없이 믿어지지 않는다.**
 
 여러 에이전트가 실험을 돌리면 결과는 텍스트로 리드 에이전트에게 돌아간다. 일부는 compaction으로 요약되어
-사라지고, 일부는 아예 전달되지 않으며, 두 worker가 같은 설정을 각자 돌린다. assay는 모든 에이전트가 함께 쓰는
+사라지고, 일부는 아예 전달되지 않으며, 두 worker가 같은 설정을 각자 돌린다. benchbook는 모든 에이전트가 함께 쓰는
 Postgres 원장을 준다. worker는 실험이 끝나는 즉시(실패도) 기록하고, 돌리기 전에 이미 해본 것인지 확인하며,
 리드에게는 3문장 요약과 레코드 id만 넘긴다. 리드는 대화록 대신 SQL로 만든 예산 안의 brief(최고 결과, 검증된
 주장, 반복하지 말 것)를 읽는다. circle packing 벤치마크에서는 아직 이것으로 리드의 최대 컨텍스트가 줄지 않았다(벤치마크 참고).
@@ -11,27 +11,27 @@ Postgres 원장을 준다. worker는 실험이 끝나는 즉시(실패도) 기�
 ## 60초 시작
 
 ```bash
-uv tool install --from git+https://github.com/Jake-Network/assay assay     # PyPI 이름은 미정. Docker 불필요
-uv tool update-shell        # `assay`를 못 찾으면 한 번. 새 터미널을 열고 Claude Code를 다시 시작
-cd your-repo && assay init --goal "검증 손실 최소화" --metric val_loss --direction min
-claude plugin marketplace add Jake-Network/assay && claude plugin install assay@assay
+uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook     # PyPI 이름은 미정. Docker 불필요
+uv tool update-shell        # `benchbook`를 못 찾으면 한 번. 새 터미널을 열고 Claude Code를 다시 시작
+cd your-repo && benchbook init --goal "검증 손실 최소화" --metric val_loss --direction min
+claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook
 ```
 
 Claude Code에서:
 
 ```
-/assay:assay-lead train.py의 val_loss 최소화, 3라운드, worker 4개
+/benchbook:benchbook-lead train.py의 val_loss 최소화, 3라운드, worker 4개
 ```
 
-`assay serve` 후 http://127.0.0.1:7466 에서 진행을 본다.
+`benchbook serve` 후 http://127.0.0.1:7466 에서 진행을 본다.
 
 Claude Code 없이도 CLI와 Python SDK로 같은 일을 한다.
 
 ```bash
-export ASSAY_AGENT=worker-1   # 누가 기록하는지
-assay exp tried  --config '{"lr": 3e-4, "warmup": 500}'
-assay exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
-assay brief
+export BENCHBOOK_AGENT=worker-1   # 누가 기록하는지
+benchbook exp tried  --config '{"lr": 3e-4, "warmup": 500}'
+benchbook exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
+benchbook brief
 ```
 
 ## autoresearch를 GPU 여러 대에서
@@ -40,11 +40,11 @@ assay brief
 
 ```bash
 cd autoresearch && uv run prepare.py                         # karpathy/autoresearch 또는 포크
-bash /path/to/assay/integrations/autoresearch/launch_local.sh 4   # assay ar init + GPU마다 worktree와 에이전트
-assay serve                                                  # http://127.0.0.1:7466
+bash /path/to/benchbook/integrations/autoresearch/launch_local.sh 4   # benchbook ar init + GPU마다 worktree와 에이전트
+benchbook serve                                                  # http://127.0.0.1:7466
 ```
 
-각 에이전트는 `program.assay.md`(업스트림 `program.md`에 공유 루프를 더한 문서)를 따른다. 같은 코드는 같은
+각 에이전트는 `program.benchbook.md`(업스트림 `program.md`에 공유 루프를 더한 문서)를 따른다. 같은 코드는 같은
 하드웨어에서 두 번 돌지 않고, 모든 실행은 크래시까지 기록되며, 다른 에이전트 두 명이 다시 돌려 평균이 여전히
 이길 때만 공유 기준선이 된다. 셀프호스팅이고 API 키가 없다. 여러 머신이면 Postgres URL 하나만 있으면 된다.
 자세한 내용: [docs/autoresearch.md](docs/autoresearch.md) (영어).
@@ -60,7 +60,7 @@ circle packing(n=26), 모델, API 예산, worker 수, 실행 시간 상한을 �
 |---|---|---|---|---|
 | A: subagent가 텍스트로 보고 | 0 | 40.6% ± 12.8 | 29.4k ± 0.5k | 0.0287 ± 0.0003 |
 | B: subagent가 JSON 파일 기록 | 0 | 14.4% ± 8.6 | 34.0k ± 1.5k | 0.0128 ± 0.0021 |
-| C: assay | 0 | 30.1% ± 3.7 | 39.9k ± 6.1k | 0.0057 ± 0.0009 |
+| C: benchbook | 0 | 30.1% ± 3.7 | 39.9k ± 6.1k | 0.0057 ± 0.0009 |
 
 출시 게이트(MANUAL_QA.md), C 대 A:
 
@@ -89,7 +89,7 @@ role(v0.2)이 들어오기 전까지는 실수에 대한 보호로 보고, 악�
 
 ## 맞는 일
 
-assay는 아래 세 조건을 모두 채우는 일에서 가치를 낸다.
+benchbook는 아래 세 조건을 모두 채우는 일에서 가치를 낸다.
 
 - **시도마다 숫자 지표.** 시도마다 지표가 나온다(`val_bpb`, `sum_radii`).
 - **재실행 가능.** 같은 설정과 코드를 seed만 바꿔 다시 돌릴 수 있어 재실행으로 결과를 검증할 수 있다.

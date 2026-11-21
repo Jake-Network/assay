@@ -8,10 +8,10 @@ One line per decision the spec left open or that changed during implementation. 
   Verified on Linux x86_64 / WSL2 with Python 3.13; macOS and Python 3.11/3.12 are covered by the CI matrix,
   not verified by hand. pgvector is included, pgcrypto is not (not needed: `gen_random_uuid()` is core). (P7)
 - **Server lifetime:** `cleanup_mode=None`: the first process starts the server and nobody stops it on exit,
-  so one Claude Code session ending never cuts off another (`cleanup_mode='stop'` would). `assay db stop`
+  so one Claude Code session ending never cuts off another (`cleanup_mode='stop'` would). `benchbook db stop`
   stops it explicitly. Verified: two processes connected at once, the second keeps working after the first exits.
 - **Start-up race:** the package already serialises start-up with an inter-process file lock (`fasteners`),
-  so assay does not add its own `fcntl.flock`. All embedded-server code stays in `db/conn.py`.
+  so benchbook does not add its own `fcntl.flock`. All embedded-server code stays in `db/conn.py`.
 - **MCP SDK:** `mcp` 2.x is current; `FastMCP` is now `mcp.server.mcpserver.MCPServer`. Pinned `mcp>=2.3,<3`.
   Expected failures are raised as `ToolError` so the model sees the message (any other exception is masked).
 - **Hook input (code.claude.com/docs, 2026-11-19):** `SubagentStop` carries `last_assistant_message` (the
@@ -19,7 +19,7 @@ One line per decision the spec left open or that changed during implementation. 
   `tool_input.message` of a `PostToolUse` event for that tool. The plugin hooks both; the handler also reads
   `PostToolUse` on `Agent` (`tool_response` text blocks) if wired manually.
 - **Plugin format:** `.claude-plugin/plugin.json`, `.mcp.json`, `agents/`, `skills/<name>/SKILL.md`,
-  `hooks/hooks.json` at the plugin root; plugin MCP tools are named `mcp__plugin_assay_assay__<tool>`.
+  `hooks/hooks.json` at the plugin root; plugin MCP tools are named `mcp__plugin_benchbook_benchbook__<tool>`.
   `claude plugin validate` passes (warnings: no icon, no author).
 
 ## Schema and SDK
@@ -30,10 +30,10 @@ One line per decision the spec left open or that changed during implementation. 
 - `task_events` has a `project_id` column (not in the spec DDL) so per-project views and export need no join.
 - Project ids are slugs (`[a-z0-9][a-z0-9_-]*`, CHECK constraint). NOTIFY keeps the original channel for
   ids up to 57 bytes and uses a hashed channel for longer ids.
-- **`assay_sql` isolation:** per-project copies of every `v_*` view live in schema `assay_q`, filtered by
-  `current_setting('assay.project')`. `assay_reader` is a LOGIN role and `sql()` connects *as* it, so the session
+- **`benchbook_sql` isolation:** per-project copies of every `v_*` view live in schema `benchbook_q`, filtered by
+  `current_setting('benchbook.project')`. `benchbook_reader` is a LOGIN role and `sql()` connects *as* it, so the session
   user is the reader and `set_config('role', ...)` cannot escalate. Fallback when a managed Postgres refuses that login
-  (set `ASSAY_READER_PASSWORD`): `SET LOCAL ROLE` plus a keyword block list. Only SELECT/WITH/TABLE/VALUES are accepted.
+  (set `BENCHBOOK_READER_PASSWORD`): `SET LOCAL ROLE` plus a keyword block list. Only SELECT/WITH/TABLE/VALUES are accepted.
   A server cursor bounds the rows sent to the SDK. The 4,000-token cap includes response metadata.
 - **Canonical JSON:** integral floats become ints when hashing (`1.0` and `1` match in dedup). Experiments
   retain the original values that passed the project schema.
@@ -50,7 +50,7 @@ One line per decision the spec left open or that changed during implementation. 
 - Claim transitions, experiment appends and invalidations share the project transaction lock. The latest
   decision's evidence controls `evidence_invalidated`, with support links used when the decision has no evidence.
   Support counts and research activity views exclude invalidated experiments.
-- Default identity is `ASSAY_AGENT`, else `human`. Unknown agent names are registered as workers on first use. (§7.4)
+- Default identity is `BENCHBOOK_AGENT`, else `human`. Unknown agent names are registered as workers on first use. (§7.4)
 - `heartbeat` succeeds while the caller is still `lease_owner` even if the lease has run out but nobody re-claimed
   the task. `complete_task` summary is capped at 1,000 characters.
 - Connection pool per database URL, closed at exit (otherwise every CLI call waited 5 s for pool threads).
@@ -68,16 +68,16 @@ One line per decision the spec left open or that changed during implementation. 
 
 - CLI: `--json`, `--project`, `--agent` are accepted anywhere on the command line. Usage errors exit 1 (2 is reserved
   for duplicates). Extra commands: `get`, `search`, `task heartbeat|cancel|show`, `db stop|url`.
-- `assay serve` mounts the streamable HTTP MCP at `/mcp` on the viewer's port; the MCP SDK's Host-header check
+- `benchbook serve` mounts the streamable HTTP MCP at `/mcp` on the viewer's port; the MCP SDK's Host-header check
   (DNS-rebinding protection) stays on.
-- Plugin skills are namespaced: `/assay:assay-lead` when installed as a plugin, `/assay-lead` when copied by hand.
+- Plugin skills are namespaced: `/benchbook:benchbook-lead` when installed as a plugin, `/benchbook-lead` when copied by hand.
 - Worker subagent rules (§12.2) are written in English, as a faithful rendering of the spec's six rules.
-- **Hook:** Queue entries are written atomically under `~/.local/state/assay/spool/` by database target. A detached
-  processor retries pending writes. Later hooks or `assay hook replay` resume processing after a longer outage.
+- **Hook:** Queue entries are written atomically under `~/.local/state/benchbook/spool/` by database target. A detached
+  processor retries pending writes. Later hooks or `benchbook hook replay` resume processing after a longer outage.
 - The hook captures subagent output that cites no existing `e:/c:/t:` id. A hash of the full report provides
   idempotence while preserving distinct reports with the same opening text.
 - stdio MCP advertises its tools before opening the project. The first ledger call opens the project, allowing
-  `assay init` in the same Claude Code session.
+  `benchbook init` in the same Claude Code session.
 
 ## Demo and bench
 
@@ -98,7 +98,7 @@ One line per decision the spec left open or that changed during implementation. 
   commands and the `v0.1.0` tag wait for a human decision (MANUAL_QA.md); A1-A9 went ahead as §15 allows.
 - **Migration 0005** adds `settings_events` and `blobs` (append-only, notify on settings changes), appends a
   `partition` column to `v_leaderboard`, `v_best`, `v_tried`, `v_progress` (`seed` too), and adds
-  `v_partition_best`, `v_lineage`, `v_inflight`, `v_knob_history`. All `assay_q` reader copies are dropped and
+  `v_partition_best`, `v_lineage`, `v_inflight`, `v_knob_history`. All `benchbook_q` reader copies are dropped and
   rebuilt (they are `SELECT *` snapshots). Without `settings.partition_key` the partition expression is NULL and
   every view behaves as before.
 - **Partition-aware outcome (C1):** the epsilon is `settings.partitions[p].epsilon`, else `improve_epsilon`; both
@@ -131,30 +131,30 @@ One line per decision the spec left open or that changed during implementation. 
   `supported` (oracle metric, evidence: first run) and `verified` (oracle rerun, evidence: all runs). Statements
   include the experiment's short id, so they never collide. A rerun-rule rejection becomes `inconclusive`.
 - **ar run refuses failed code too** (a crash usually repeats); `--retry-failed` re-runs code that has only
-  failed runs. A run whose record cannot be written is queued in `.assay/ar_pending.jsonl` and written by the
+  failed runs. A run whose record cannot be written is queued in `.benchbook/ar_pending.jsonl` and written by the
   next `ar` command, which is how "every started run is recorded" holds when the database blips.
 - **Parent code:** compared by normalised hash, so a comment-only commit after a run still counts as "committed".
   A run whose parent hash equals its own code (a re-run of the parent) records no parent.
 - **Hardware class:** vendor words, memory types and the word "gpu" are dropped; form factors (pcie, sxm4, laptop)
   are kept because they change speed. Memory comes from the name, else memory.total rounded to GB.
-- **program.assay.md:** the §9 loop block is kept verbatim (Korean comments, as the spec requires) and followed by
+- **program.benchbook.md:** the §9 loop block is kept verbatim (Korean comments, as the spec requires) and followed by
   an English rendering; the rest is upstream `program.md` text adapted to the shared loop. MIT attribution in
   an HTML comment at the top (upstream has no LICENSE file; its README states MIT).
 - **ar import (Should, S3)** is implemented: rows are first runs whose code comes from `git show <commit>:train.py`;
   improvements become candidates and get replicated. Re-importing is a no-op.
 - **Not done (Should):** the LLM research-director mode, the `--trust candidate` ablation, `ar init --shim`, and
   hands-on MLX/macOS fork checks. `sync --trust candidate` itself exists.
-- **`python -m assay`** was added, and `python -m assay.cli` now dispatches through the canonical module: as
-  `__main__` it used to hold a second global STATE, so `--json`/`--project` were ignored by `assay ar`.
+- **`python -m benchbook`** was added, and `python -m benchbook.cli` now dispatches through the canonical module: as
+  `__main__` it used to hold a second global STATE, so `--json`/`--project` were ignored by `benchbook ar`.
 - **Simulator:** noise is drawn fresh per run (the real `train.py` fixes seed 42), runs sleep instead of training,
   and they print `sim_run_id`, `true_bpb` and `lucky` so the e2e can check that nothing started went unrecorded.
   The e2e uses a higher lucky rate (0.15) than the default (0.02) so a 1-minute run exercises refutation.
 - **Bench:** arm A runs are collected by a `uv` shim on PATH (wrap_train.sh); arm A's "false best" is a keep
   whose 3-run re-run mean is worse than its reported value by more than B's calibrated epsilon. `--sim` numbers
-  are dominated by CLI start-up (~1-2 s per `assay` call against 0.2 s simulated runs) and say nothing about
+  are dominated by CLI start-up (~1-2 s per `benchbook` call against 0.2 s simulated runs) and say nothing about
   real 5-minute runs; the report labels them as a pipeline check.
 
-## Review fixes (2026-11, assay-review.md)
+## Review fixes (2026-11, benchbook-review.md)
 
 - **Rerun compares values (C1).** `verified` by `rerun` now also needs the mean of all evidence runs and the mean
   of independent reruns (runs by agents other than the originating author) to beat a baseline by epsilon, the same test the
@@ -175,18 +175,18 @@ One line per decision the spec left open or that changed during implementation. 
 - **TRUNCATE and agent roles (C2).** Statement-level TRUNCATE triggers on every ledger table; agents rows cannot
   change role, id or project, nor be deleted. Owner privileges (DISABLE TRIGGER) remain open until v0.2 splits the
   writer role.
-- **assay_sql (C4).** Migration 0006 revokes EXECUTE on `set_config` from PUBLIC and grants it to the migrating
+- **benchbook_sql (C4).** Migration 0006 revokes EXECUTE on `set_config` from PUBLIC and grants it to the migrating
   role. This is database-wide: other non-superuser roles in the same database lose `set_config` too (use `SET`),
-  which is acceptable for a database dedicated to assay; on a managed database where the migration cannot do it, a
+  which is acceptable for a database dedicated to benchbook; on a managed database where the migration cannot do it, a
   NOTICE is raised and the regex plus the post-query check remain. The SET ROLE fallback is opt-in
-  (`ASSAY_SQL_ALLOW_SET_ROLE=1`).
+  (`BENCHBOOK_SQL_ALLOW_SET_ROLE=1`).
 - **Unique index (C7).** Two partial indexes replace `coalesce(seed, -1)`: one over non-NULL seeds, one for NULL.
 - **Candidates (C7).** `v_partition_best` candidates are the first ok run of their config, whatever the seed.
-  The autoresearch referee still only replicates seed-0 runs, which is what `assay ar run` records.
+  The autoresearch referee still only replicates seed-0 runs, which is what `benchbook ar run` records.
 - **CLI identity (I1).** `Ledger.open` has no default agent. CLI commands that only read fall back to `human`
-  (nothing is written in its name); commands that write need `--agent`, `ASSAY_AGENT` or, for `decide`, `--as`.
+  (nothing is written in its name); commands that write need `--agent`, `BENCHBOOK_AGENT` or, for `decide`, `--as`.
 - **Task linkage and leases (U3, U4).** `record_experiment` without `task_id` links the one non-intent task the
   agent holds a live lease on; with several, the CLI warns. `task claim <id>` claims a specific task.
   `settings.lease_seconds` sets the live default for claims and heartbeats (900).
-- **Worktrees (U6).** When no `.assay/config.toml` is found upward, the main worktree's copy is used
+- **Worktrees (U6).** When no `.benchbook/config.toml` is found upward, the main worktree's copy is used
   (`git rev-parse --git-common-dir`).

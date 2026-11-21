@@ -1,29 +1,29 @@
-"""assay_sql safety (§7.3, §18.1)."""
+"""benchbook_sql safety (§7.3, §18.1)."""
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from assay import Ledger
-from assay.errors import AssayError
-from assay.tokens import estimate_tokens
+from benchbook import Ledger
+from benchbook.errors import BenchbookError
+from benchbook.tokens import estimate_tokens
 
 
 @pytest.mark.parametrize("q", [
     "INSERT INTO v_best VALUES (1)",
-    "UPDATE assay.experiments SET notes='x'",
+    "UPDATE benchbook.experiments SET notes='x'",
     "CREATE TABLE x (a int)",
     "DROP VIEW v_best",
-    "SELECT * FROM assay.experiments",
-    "SELECT * FROM assay.projects",
+    "SELECT * FROM benchbook.experiments",
+    "SELECT * FROM benchbook.projects",
     "SELECT 1; SELECT 2",
     "SELECT pg_sleep(5)",
     "SELECT set_config('role', 'postgres', true)",
-    "WITH x AS (DELETE FROM assay.claims RETURNING *) SELECT * FROM x",
+    "WITH x AS (DELETE FROM benchbook.claims RETURNING *) SELECT * FROM x",
 ])
 def test_rejected(lead: Ledger, q: str) -> None:
-    with pytest.raises(AssayError):
+    with pytest.raises(BenchbookError):
         lead.sql(q)
 
 

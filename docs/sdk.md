@@ -1,10 +1,10 @@
 # Python SDK
 
 ```python
-from assay import Ledger
+from benchbook import Ledger
 
 Ledger.init_project("lr-sweep", goal="Minimise val loss", metric="val_loss", direction="min")  # pack="core" by default
-lg = Ledger.open(project="lr-sweep", agent="worker-1")     # or ASSAY_PROJECT / .assay/config.toml, ASSAY_AGENT
+lg = Ledger.open(project="lr-sweep", agent="worker-1")     # or BENCHBOOK_PROJECT / .benchbook/config.toml, BENCHBOOK_AGENT
 ```
 
 Workers:
@@ -22,7 +22,7 @@ Workers:
 | `complete_task(task_id, status="done", summary="")` | `Task`; raises `LeaseLost` |
 | `create_intent(title, spec=None, tags=None, lease_seconds=900, exclusive=())` | a task already claimed by you, tagged `intent` (needs `settings.worker_intents` for workers); `Conflict` when a live intent has the same value for an `exclusive` spec field |
 | `update_intent(task_id, spec_patch, lease_seconds=None, exclusive=())`, `my_intents()` | your live intents |
-| `put_blob(data, media_type)`, `get_blob(uri)` | `assay://blob/<sha256>`; bytes |
+| `put_blob(data, media_type)`, `get_blob(uri)` | `benchbook://blob/<sha256>`; bytes |
 | `baseline(partition=None)` | `(value, epsilon)` that the next outcome is compared with |
 | `get(id)`, `search(text, kind, status, tags, limit, all_tags)` (`tags`: any of them, `all_tags`: every one), `status()`, `export()` | reads |
 
@@ -38,6 +38,6 @@ for the required brief structure raises `ValidationFailed`.
 
 Ids: every call accepts a short id (`e:91c0a2f1`) or a full UUID. Errors: `ValidationFailed` (with `.problems`, one
 line per bad field), `NotFound`, `Ambiguous`, `PermissionDenied`, `LeaseLost`, `InvalidTransition`, `Conflict`, all subclasses of
-`AssayError`.
+`BenchbookError`.
 
 A full loop is in `examples/sdk-loop/loop.py`.

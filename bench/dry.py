@@ -2,7 +2,7 @@
 
 This validates the harness pipeline (evaluation log, ledger, metrics, report). Its numbers come from a
 simulation with stated assumptions (token costs per action, message drop rate, compaction threshold); they are
-NOT evidence for or against assay. The real comparison runs Claude Code headless (bench/real.py).
+NOT evidence for or against benchbook. The real comparison runs Claude Code headless (bench/real.py).
 
 Shared by all three configurations: same workers, rounds, evaluations per task, token budget, evaluator,
 seeded RNG for config choices, and a fixed token cost per evaluation step.
@@ -12,7 +12,7 @@ A baseline  workers return results as text; the lead's context accumulates them;
             compacts and keeps only the best result. The lead passes the last 10 tried configs to new workers.
 B files     workers append each result to a JSON file; the lead reads the whole directory every round
             (nothing is lost, the lead context grows). Same 10-config hint as A.
-C assay     workers use the real assay SDK: brief, check_tried before every evaluation, record after it;
+C benchbook     workers use the real benchbook SDK: brief, check_tried before every evaluation, record after it;
             the lead reads status + brief. Results that are never reported are still in the ledger.
 """
 from __future__ import annotations
@@ -23,8 +23,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from assay.dedup import canonical_json
-from assay.tokens import estimate_tokens
+from benchbook.dedup import canonical_json
+from benchbook.tokens import estimate_tokens
 
 from .common import CODE_REF, SPACE, EvalLog, RunMetrics, best_curve, duplicate_ratio, load_evals
 
@@ -58,7 +58,7 @@ class Sim:
         self.worker_n = 0
         self.lg = None
         if mode == "C":
-            from assay import Ledger
+            from benchbook import Ledger
 
             pid = f"bench-{uuid.uuid4().hex[:8]}"
             Ledger.init_project(pid, goal="Maximize the sum of radii of 26 circles in the unit square.",
@@ -97,7 +97,7 @@ class Sim:
     def worker(self, name: str, focus: str) -> None:
         mine: list[dict[str, Any]] = []
         if self.mode == "C":
-            from assay import Ledger
+            from benchbook import Ledger
 
             w = Ledger.open(project=self.pid, agent=name)
             task = w.next_task()
@@ -170,7 +170,7 @@ class Sim:
         evals = load_evals(self.out / "evals.jsonl")
         if self.mode == "C":
             assert self.lg is not None
-            n = self.lg.sql_internal("SELECT count(*) AS n FROM assay.experiments WHERE project_id=%s",
+            n = self.lg.sql_internal("SELECT count(*) AS n FROM benchbook.experiments WHERE project_id=%s",
                                      (self.pid,))[0]["n"]
             lost = len(evals) - n
         else:
