@@ -17,6 +17,7 @@ from .errors import BenchbookError, Conflict, ValidationFailed
 from .finding_cli import finding_app
 from .ids import short
 from .piece_cli import piece_app
+from .pr_cli import pr_app
 
 if TYPE_CHECKING:
     from .ledger import Ledger
@@ -36,6 +37,7 @@ app.add_typer(agent_app, name="agent")
 app.add_typer(check_app, name="check")
 app.add_typer(piece_app, name="piece")
 app.add_typer(finding_app, name="finding")
+app.add_typer(pr_app, name="pr")
 
 STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 

@@ -373,9 +373,11 @@ def read_report(path: Path, declared: Sequence[str]) -> Report:
 
 def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None = None,
            only: Sequence[str] | None = None, reported_by: str | None = None,
-           report_file: Path | None = None) -> tuple[Verification, Recorded]:
+           report_file: Path | None = None, trace_ref: dict[str, Any] | None = None,
+           decide: bool = True) -> tuple[Verification, Recorded]:
     """Steps 1 to 4 (the CLI prints step 5). `lg` acts as the verifier. Raises the interruption, after cleaning up
-    and recording, when the run was interrupted."""
+    and recording, when the run was interrupted. trace_ref is stored on the attempt as given (a CI run's URL, say);
+    decide=False records without deciding, even with lead authority."""
     if not PIECE.fullmatch(piece):
         raise BenchbookError("piece: 1-100 characters without spaces")
     if "completion" not in lg.pack.claim_kinds:
@@ -404,13 +406,13 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
     if interrupted is not None:
         try:
-            _record(lg, v, reported_by, report)
+            _record(lg, v, reported_by, report, trace_ref)
         except Exception as e:  # noqa: BLE001 - the interruption is what the caller must see
             interrupted.add_note(f"the interrupted attempt was not recorded: {e}")
         raise interrupted
-    rec = _record(lg, v, reported_by, report)
+    rec = _record(lg, v, reported_by, report, trace_ref)
     rec.seen_before = seen
-    rec.outcome = _decide(lg, v, rec)
+    rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
     return v, rec
 
 
@@ -420,7 +422,8 @@ def _signal_name(e: BaseException | None) -> str | None:
     return signal.Signals(e.signum).name if isinstance(e, Interrupted) else "SIGINT"
 
 
-def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report | None) -> Recorded:
+def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report | None,
+            trace_ref: dict[str, Any] | None = None) -> Recorded:
     """Step 4. The claim is the implementer's (proposed, never decided here); the attempt and the link are the
     verifier's, so the ledger shows two different agents."""
     claim = None
@@ -438,7 +441,7 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
             "completion", f"{v.piece} is complete at {v.commit[:12]}", payload=payload,
             tags=[f"piece:{v.piece}", f"commit:{v.commit}"])
     r = lg.record_experiment(v.config(), v.metrics(), run_status=v.run_status, code_ref=v.commit, notes=v.notes(),
-                             duration_ms=v.duration_ms)
+                             duration_ms=v.duration_ms, trace_ref=trace_ref)
     if r.id is None:  # only a pack with dedup_mode "refuse" can get here
         raise BenchbookError(f"the verification was refused as a duplicate of {r.duplicate_of}")
     rec = Recorded(r.id, lg.agent, duplicate_of=r.duplicate_of, notice=r.notice, reported_by=reported_by)

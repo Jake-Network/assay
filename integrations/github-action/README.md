@@ -1,0 +1,119 @@
+# benchbook evidence for pull requests (GitHub Action)
+
+A composite action that re-runs, on every pull request, the declared checks of each piece of coding work the pull
+request's commits complete, records the re-runs in the shared benchbook ledger, and keeps **one** comment on the
+pull request saying, per piece, whether an independent re-run confirmed the completion. A reviewer sees which
+completions are verified without opening the ledger. What is recorded, and what *verified* means, is in
+[docs/code.md](../../docs/code.md#ci-evidence-and-the-pr-summary).
+
+## What it does
+
+1. Finds the pieces: every commit of the pull request (base..head) whose message ends with the trailer
+   `Benchbook-Piece: <piece>`. The last commit carrying a piece's trailer is that piece's commit. Ask implementers
+   to end their commit message with it, or add it with `git commit --trailer "Benchbook-Piece: media-upload"`.
+2. For each piece, runs `benchbook check verify <piece> <commit> --base <the pull request's base>` with the
+   workflow run's URL in the attempt's `trace_ref`. When the ledger already has a completion claim for that piece
+   and commit, the re-run is linked to it (`--reported-by` its reporter); otherwise only the attempt is recorded.
+3. Writes the summary (`benchbook pr summary`) to the job summary and creates or updates the comment that starts
+   with `<!-- benchbook-summary -->` (`benchbook pr comment`). Running again on the same pull request updates that
+   comment; extra copies left by two runs racing each other are deleted.
+4. Exits 1 when a re-run failed a check (or a step could not run), 0 otherwise.
+
+Per piece the comment shows its state (**verified**, **claimed only**, **re-run disagrees**, or **not reported**
+when nobody reported the completion), the runs of its commit, the number of discarded approaches, open
+out-of-scope findings, and whether the commit changed tests (guarded paths or `[checks]`).
+
+## Sample workflow
+
+```yaml
+# .github/workflows/benchbook.yml
+name: benchbook
+on:
+  pull_request:          # never pull_request_target: the checks run the pull request's code
+permissions:
+  contents: read
+  pull-requests: write   # the summary comment
+concurrency:             # one run per pull request at a time, so two runs do not both create the comment
+  group: benchbook-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          fetch-depth: 0               # the base, the merge-base and every commit of the pull request
+          persist-credentials: false   # the checks run the pull request's code; leave no token in .git/config
+      # Pin to a full commit sha of the benchbook repository, not a branch or tag.
+      - uses: Jake-Network/benchbook/integrations/github-action@<full commit sha>
+        with:
+          database-url: ${{ secrets.BENCHBOOK_DATABASE_URL }}
+          token: ${{ secrets.BENCHBOOK_TOKEN }}       # optional; see "Who the re-runs are by"
+```
+
+The checks run as `.benchbook/config.toml` declares them at the merge-base (docs/code.md), from the repository
+root, so the job needs whatever they need (a language runtime, `uv`, services). Add those steps before this one.
+benchbook needs Python 3.11 or later; `ubuntu-latest` has it, elsewhere add `actions/setup-python` first.
+
+**Pinning.** GitHub recommends pinning every action to a full-length commit sha, which a later push cannot move. The
+sha above is actions/checkout's v7.0.1 as of 2026-11-21; check it against that repository before use. By default
+this action installs benchbook from its own tree (the commit you pinned), so the commands always match the action;
+`benchbook: benchbook==X.Y.Z` installs a release from PyPI instead.
+
+**Branch protection.** To keep a pull request whose re-run failed from merging, make this job a required status
+check (Settings, Branches, branch protection rule or ruleset, "Require status checks to pass", job `evidence`).
+That is the CI row of spec §7: the completion is blocked by the branch rule, not by the agent. A *claimed only*
+piece (no independent re-run yet, or tests changed) does not fail the job; the comment says why, and a person
+decides. A pull request from a fork passes without a re-run (below), so a required check alone does not verify a
+fork's pieces.
+
+## Inputs
+
+| input | default | what |
+| --- | --- | --- |
+| `database-url` | | The ledger's Postgres URL, from a secret. Never written to the log or given to `gh`. |
+| `token` | | A per-agent token (`bbt_...`) for a `benchbook_writer` login. |
+| `project` | config.toml | The ledger project. |
+| `decide` | `false` | `true` lets check verify decide when the token is a lead's (below). |
+| `comment` | `true` | `false` writes only the job summary. |
+| `comment-author` | `github-actions[bot]` | Only a marked comment by this login is taken for the summary; set it to your bot's login with another `github-token`. |
+| `github-token` | `github.token` | For the comment; given to `gh` only, never to the checks. |
+| `benchbook` | (this tree) | A pip requirement, or `skip` when benchbook is already on PATH. |
+| `python` | `python3` | The interpreter benchbook is installed with. |
+| `working-directory` | `.` | The checkout with `.benchbook/config.toml`. |
+
+## Pull requests from forks, and Dependabot
+
+GitHub gives a workflow run for a fork's pull request no secrets and a read-only `GITHUB_TOKEN`, and treats
+Dependabot's pull requests the same way. The action then prints a notice saying so and exits 0: nothing is re-run,
+recorded or commented, and the pull request is not failed for it. A same-repository pull request without
+`database-url` is a configuration error and fails.
+
+## Who the re-runs are by
+
+CI is useful as a verifier because an implementer cannot run it under its own name. How far that holds depends on
+the credential in the secret:
+
+| secret | author of the records | what the ledger guarantees |
+| --- | --- | --- |
+| the owner's URL (local style) | `ci:<run_id>`, a new worker agent per workflow run | nothing about names: the name is self-declared, and any process with the same URL can write as `ci:...` too. The owner URL also lets its holder migrate and register agents. |
+| a `benchbook_writer` login and a token | the token's agent, for every run (a token is one fixed agent); the run id and URL are in each attempt's `trace_ref` | no other token can write as that agent, and it can do only what its role allows. |
+
+For the token, register one agent for CI with the harness role and store its token as `BENCHBOOK_TOKEN`:
+
+```bash
+benchbook agent add ci --role harness        # on the operator's (owner) connection; prints the token once
+```
+
+**Deciding.** By default the action passes `--no-decide`: CI records its re-runs and links them to the
+completion claims, and a lead decides (the comment already says *verified* when the code pack's rule would accept
+the recorded runs). With `decide: true` and a lead's token (orchestrator or human role), check verify decides as it
+does for a lead (verified, or inconclusive when runs disagree). With an owner URL, `decide: true` is ignored with a
+warning: a self-declared name is no authority. A harness or worker token never decides.
+
+**What no setting covers.** The job runs the pull request's code (the checks) in the same job as the credential:
+code in the pull request can read `BENCHBOOK_DATABASE_URL` and `BENCHBOOK_TOKEN` from its environment and write
+as the CI agent. The GitHub token is kept out of the checks' environment, but a process of the same user can still
+read its parent's environment. So the guarantee is against agents that misreport their work, not against a pull
+request written to steal the CI credential. That is one more reason to keep the default `decide: false` and to give
+CI a harness token rather than a lead's: a stolen harness token can add attempts, not decide.

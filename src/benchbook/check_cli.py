@@ -32,6 +32,11 @@ def verify(
                        "origin/main)")] = None,
     checks: Annotated[str | None, typer.Option(
         "--checks", help="Run only these declared checks (comma separated)")] = None,
+    trace_ref: Annotated[str | None, typer.Option(
+        "--trace-ref", help="JSON object (or @file) stored as the attempt's trace_ref, e.g. the CI run's URL")] = None,
+    no_decide: Annotated[bool, typer.Option(
+        "--no-decide", help="Record only: decide nothing, even with lead authority (what CI does by default)")]
+    = False,
 ) -> None:
     """Re-run the declared checks on COMMIT in a clean worktree and record them against PIECE's completion.
 
@@ -42,11 +47,14 @@ def verify(
     or nothing when a guarded path or [checks] changed (docs/code.md)."""
     from .checks import default_verifier
     from .checks import verify as run_verify
-    from .cli import STATE, csv, emit
+    from .cli import STATE, csv, die, emit, load_json
     from .config import env
     from .ledger import Ledger
     from .runner import Interrupted
 
+    trace = load_json(trace_ref, "--trace-ref")
+    if trace is not None and not isinstance(trace, dict):
+        die("--trace-ref: must be a JSON object")
     name = STATE["agent"] or env("AGENT")
     token = env("TOKEN")  # the token names the verifier; a default name would contradict it
     lg = Ledger.open(project=STATE["project"], agent=name or (None if token else default_verifier()),
@@ -59,7 +67,8 @@ def verify(
               file=sys.stderr)
     try:
         v, rec = run_verify(lg, piece, commit, repo=Path.cwd(), base=base, only=csv(checks) or None,
-                            reported_by=reported_by, report_file=report_file)
+                            reported_by=reported_by, report_file=report_file, trace_ref=trace,
+                            decide=not no_decide)
     except (Interrupted, KeyboardInterrupt) as e:
         signum = e.signum if isinstance(e, Interrupted) else int(signal.SIGINT)
         print(f"interrupted ({signal.Signals(signum).name}): the worktree was removed and the attempt recorded "

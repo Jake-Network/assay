@@ -51,8 +51,10 @@ benchbook check verify <piece> <commit> --reported-by <implementer>
 ```
 
 Options: `--base REF` (default `[guard] base`, else `origin/main`), `--checks a,b` (a subset of the declared
-checks), `--report-file F` (the implementer's report). It prints one row per check and exits 0 only when every
-check passed, 1 otherwise; `--json` gives the same as one JSON object.
+checks), `--report-file F` (the implementer's report), `--trace-ref JSON` (a JSON object, or `@file`, stored as the
+attempt's `trace_ref`: the CI action puts its run's URL there), `--no-decide` (record only, even with lead
+authority). It prints one row per check and exits 0 only when every check passed, 1 otherwise; `--json` gives the
+same as one JSON object.
 
 What it does:
 
@@ -508,6 +510,62 @@ the claim was in the ledger before the plan was written. What it cannot: that th
 `benchbook sql` cannot read it: `Ledger.sql_internal` can); that the citation changed the plan rather than confirmed
 it; a read that changed a plan without its id being written down; a plan kept outside files. It counts an upper
 bound on citations that came from the brief, and a lower bound on reads that mattered.
+## CI evidence and the PR summary
+
+A re-run by CI is a re-run on a machine the implementer does not control. The GitHub Action in
+[integrations/github-action](../integrations/github-action/README.md) runs `check verify` for each piece a pull
+request completes and keeps one comment on the pull request that says which completions an independent re-run
+confirmed. The logic is in three commands, which run anywhere:
+
+```bash
+benchbook pr pieces --base BASE [--head HEAD] [--claims]   # piece<TAB>commit[<TAB>reporter], one line per piece
+benchbook pr summary --base BASE [--head HEAD] [--run-url URL]   # the markdown, starting with the marker
+benchbook pr comment --repo OWNER/NAME --pr N --body-file F [--author LOGIN] [--update-only]
+```
+
+**Pieces.** A commit names the piece it completes with the trailer `Benchbook-Piece: <piece>` (the trailer block at
+the end of the message; the key is case-insensitive, and one commit may carry several). For each piece named in
+`BASE..HEAD` the piece's commit is the last commit carrying its trailer. A value that is not a piece name (1-100
+characters, no spaces) is skipped with a warning. `--claims` adds the reporter of the completion claim for that
+piece at that commit (`payload.reported_by`, else the claim's author; `-` for none): passing it to
+`check verify --reported-by` links the re-run to that claim, because the same statement finds the same claim.
+
+**The action's run**, per piece: `check verify <piece> <commit> --base <base sha> --trace-ref '{"ci":
+"github-actions", "repository", "run_id", "run_attempt", "run_url", "pull_request"}' --no-decide`, with
+`--reported-by` when a claim exists. Without a claim it records only the attempt, and the piece shows as *not
+reported*: CI never reports a completion on someone's behalf. Then `pr summary` and `pr comment`. The job fails when
+a re-run failed a check. A pull request rebased after the lead's `check verify` has new commit ids, so its pieces
+have no claim at the new commits until someone reports them there.
+
+**The summary**, per piece: the state, the runs of its commit (passed, failed, and the independent authors), the
+number of discarded approaches (`observation` claims tagged `discarded` and `piece:<piece>`, any status), the open
+out-of-scope findings (tagged `out-of-scope` and `piece:<piece>`, status `proposed` or `inconclusive`; a finding
+recorded without a piece tag is not counted), and whether tests changed (any attempt of the commit with
+`guard_touched` or `checks_changed` true; *unknown* when no attempt says). The states, checked in this order:
+
+| state | when |
+| --- | --- |
+| **verified** | the claim is `verified`; or no run of the commit failed, none touched a guarded path or changed `[checks]`, and at least one passing run by an agent other than the implementer (not `via` check run or the hook) satisfies the pack's rule (`Ledger._check_rerun`, the same check `decide ... verified --oracle rerun` makes). The second case is shown with the claim's status: CI records, a lead decides. |
+| **re-run disagrees** | the claim is `refuted` or `inconclusive`, or a valid finished run of the commit failed a check (anyone's: the implementer's own failing run counts too). |
+| **claimed only** | a claim exists and none of the above: no independent re-run yet, or the commit changed tests, which a person decides. |
+| **not reported** | the ledger has no completion claim for the piece at that commit. |
+
+Piece names, agent names and paths go into the comment as inline code with backticks and `|` neutralised, and the
+reasons are escaped so nothing in them renders as HTML, a link or a mention.
+
+**The comment.** `pr comment` lists the pull request's comments with `gh api --paginate` (GH_TOKEN), takes the
+first one whose body starts with `<!-- benchbook-summary -->` and, with `--author`, whose author is that login,
+updates it, and deletes further marked comments by the same author. With none it creates one, unless
+`--update-only` (the action passes it when the pull request names no piece, so pull requests without pieces get
+no comment). A marked comment by someone else is never taken for the summary.
+
+**Identity.** With the owner's URL the action writes as `ci:<run_id>`: a self-declared worker name, one per workflow
+run, which any holder of the URL could also use. With a `benchbook_writer` login and a token every record is the
+token's agent's (a token is one agent, so all runs share it; the run is in `trace_ref`). The action passes
+`--no-decide` unless its `decide` input is `true` and it holds a token; check verify then decides only if the
+token's role is orchestrator or human. In both modes the checks run the pull request's code in the job that holds
+the credential, so the guarantee is against misreporting, not against a pull request written to take the
+credential; the action's README says what follows from that.
 
 ## Out-of-scope findings
 
