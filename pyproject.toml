@@ -46,6 +46,13 @@ version-file = "src/assay/_version.py"
 # rebuild a local install when the commit or tags change, not only when pyproject.toml does
 cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
+[tool.hatch.build.targets.sdist]
+# Only what the repository tracks: hatch reads .gitignore but not .git/info/exclude or the global excludes, so local
+# files (.claude/, working notes) would otherwise ship. tests/test_packaging.py keeps this list in step with git.
+only-include = [".claude-plugin", ".github", ".gitignore", "CHANGELOG.md", "DECISIONS.md", "LICENSE", "MANUAL_QA.md",
+                "README.ko.md", "README.md", "bench", "docker-compose.yml", "docs", "examples", "integrations",
+                "pyproject.toml", "scripts", "src", "tests", "uv.lock"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/assay"]
 

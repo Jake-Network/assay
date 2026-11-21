@@ -11,7 +11,14 @@
   keeps records that have every listed tag (`--tags` keeps those with any).
 - Hook: the plugin's `SubagentStop` hook fires for every subagent and `ASSAY_HOOK_AGENTS` (default
   `assay-worker`) picks the captured types; other types exit before reading config or spooling (about 150 ms
-  through the console script, which now skips the CLI framework for `assay hook`).
+  through the console script, which now skips the CLI framework for `assay hook`). Plugin version 0.1.1, so
+  existing installs pick up the new hook with `claude plugin update assay@assay`; `assay doctor` flags an
+  install that still has the old matcher.
+- `assay doctor` also compares `ASSAY_DATABASE_URL` between the shell and Claude Code (by server and database, never
+  printed), reads hook failures per database spool (a replay of another database's spool no longer hides them,
+  and reports queued for over 5 minutes count), and keeps going when one check raises (a bad `~user` path).
+- Hook replay: a malformed entry from an earlier build (`tool_input` not an object) no longer stops the
+  entries after it.
 - README: what assay fits (a number per attempt, re-runnable, one space explored together) and why delegating
   code implementation is not one of them.
 - Benchmark: subagents run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`); newer Claude Code started

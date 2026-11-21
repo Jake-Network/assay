@@ -210,8 +210,8 @@ def extract_text(data: dict[str, Any]) -> str:
         return str(data["last_assistant_message"])
     tool = data.get("tool_name")
     if tool == "SubagentHandback":
-        ti = data.get("tool_input") or {}
-        return str(ti.get("message") or "")
+        ti = data.get("tool_input")
+        return str(ti.get("message") or "") if isinstance(ti, dict) else ""
     if tool in ("Agent", "Task"):
         return _flatten(data.get("tool_response"))
     return ""
@@ -242,7 +242,8 @@ def _worker_types() -> set[str]:
 
 def _agent_type(data: dict[str, Any]) -> str | None:
     if data.get("tool_name") in ("Agent", "Task"):
-        t = (data.get("tool_input") or {}).get("subagent_type")
+        ti = data.get("tool_input")
+        t = ti.get("subagent_type") if isinstance(ti, dict) else None
     else:
         t = data.get("agent_type")
     return str(t) if t else None
@@ -534,21 +535,22 @@ def process_file(path: Path) -> str:
         event = spooled["event"]
         if not isinstance(data, dict) or not isinstance(event, str):
             raise ValueError("invalid hook spool entry")
+        accepted = spooled.get("accepted") is True
+        agent_type = _agent_type(data)
     except OSError as e:
         log(f"cannot read hook spool {path} (queued to retry): " + traceback.format_exc())
         return f"retry:{type(e).__name__}: {e}"
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
         try:
             path.rename(path.with_suffix(".invalid"))
         except OSError:
             return f"retry:could not quarantine invalid spool entry ({e})"
         log(f"invalid hook spool {path} (quarantined): " + traceback.format_exc())
         return f"dead:invalid spool entry ({e})"
-    accepted = spooled.get("accepted") is True
-    if not accepted and not is_worker(_agent_type(data), require_type=False):
+    if not accepted and not is_worker(agent_type, require_type=False):
         # Queued by a build that did not record its decision: the ASSAY_HOOK_AGENTS that accepted it may differ
         # from the current one. Keep it rather than drop it, so a replay with the original setting captures it.
-        reason = (f"agent type {_agent_type(data)!r} is not in the current ASSAY_HOOK_AGENTS and the entry predates "
+        reason = (f"agent type {agent_type!r} is not in the current ASSAY_HOOK_AGENTS and the entry predates "
                   "the recorded capture decision; to capture it run: ASSAY_HOOK_AGENTS=<the setting it was queued "
                   "under> assay hook replay")
         try:
@@ -599,7 +601,11 @@ def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
             if path.name in attempted:
                 continue
             seen.add(path.name)
-            outcome = process_file(path)
+            try:
+                outcome = process_file(path)
+            except Exception as e:  # noqa: BLE001 (one entry must not stop the others)
+                log(f"hook entry {path} could not be processed (queued to retry): " + traceback.format_exc())
+                outcome = f"retry:{type(e).__name__}: {e}"
             if outcome.startswith("retry:"):
                 left.append((path, outcome))
             else:
@@ -637,7 +643,7 @@ def replay_now(spool: Path) -> ReplaySummary:
     while any(p.name not in attempted for p in spool.glob("*.json")):
         with _lock(spool, blocking=True):
             attempted.update(_drain(spool, (), summary, attempted))
-    log(f"replay: {summary}")
+    log(f"replay {spool}: {summary}")  # doctor reads which spool a clean replay settled
     return summary
 
 

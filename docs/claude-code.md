@@ -19,8 +19,19 @@ command that fixes it:
 |---|---|
 | `assay on PATH` | `assay` is not on the PATH Claude Code inherits (or the `PATH` in its settings `env`) |
 | `claude code plugin` | `assay@assay` is not installed or not enabled (a manual install with `.mcp.json` passes) |
-| `ASSAY_DATA_DIR`, `ASSAY_PROJECT` | the shell value differs from the `env` in `~/.claude/settings.json`, `.claude/settings.json` or `.claude/settings.local.json` |
-| `hook failures` | `hook.log` has failure lines from the last 24 hours (after the last clean `assay hook replay`), or the spool's `dead/` holds reports |
+| `plugin hooks` | the installed plugin predates 0.1.1 and still runs the hook only for `assay-worker` |
+| `ASSAY_DATABASE_URL`, `ASSAY_DATA_DIR`, `ASSAY_PROJECT` | the shell value selects a different database or project than the `env` in `~/.claude/settings.json`, `.claude/settings.json` or `.claude/settings.local.json` (the URL itself is never printed) |
+| `hook failures` | for this shell's database: `hook.log` has failure lines from the last 24 hours (after the last clean `assay hook replay` of its spool), or its spool holds reports in `dead/` or queued for over 5 minutes |
+
+Claude Code keeps an installed plugin version until you update it. After pulling a new assay, update the plugin as
+well and restart Claude Code:
+
+```bash
+claude plugin marketplace update assay && claude plugin update assay@assay
+```
+
+Bump `version` in `integrations/claude-code/.claude-plugin/plugin.json` whenever a file under
+`integrations/claude-code/` changes; an install of the same version does not pick the change up.
 
 On macOS the embedded database lives in `~/Library/Application Support/assay/pg`. To keep it elsewhere set
 `ASSAY_DATA_DIR`, and set it in Claude Code's `settings.json` `env` too: the CLI, MCP server and hook must see the

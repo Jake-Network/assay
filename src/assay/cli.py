@@ -488,7 +488,11 @@ def _db_checks() -> list[Any]:
     from .doctor import Check
 
     checks: list[Check] = []
-    mode = "url" if os.environ.get("ASSAY_DATABASE_URL") else f"embedded ({data_dir()})"
+    try:
+        mode = "url" if os.environ.get("ASSAY_DATABASE_URL") else f"embedded ({data_dir()})"
+    except RuntimeError as e:  # ASSAY_DATA_DIR=~name of a user that does not exist
+        return [Check("connect", False, f"ASSAY_DATA_DIR: {e}", "export ASSAY_DATA_DIR=<an existing directory>"),
+                Check("db schema", False, "unknown (no connection)"), Check("build schema head", True, head())]
     build_head = Check("build schema head", True, head())
     try:
         url = database_url()

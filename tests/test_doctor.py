@@ -27,7 +27,7 @@ def env(tmp_path: Path, db_url: str, project: str) -> dict[str, Any]:
     (claude / "plugins" / "installed_plugins.json").write_text(json.dumps(
         {"version": 2, "plugins": {"assay@assay": [{"scope": "user", "installPath": "/x"}]}}))
     (claude / "settings.json").write_text(json.dumps(
-        {"enabledPlugins": {"assay@assay": True}, "env": {"ASSAY_PROJECT": project}}))
+        {"enabledPlugins": {"assay@assay": True}, "env": {"ASSAY_PROJECT": project, "ASSAY_DATABASE_URL": db_url}}))
     repo = tmp_path / "repo"
     repo.mkdir()
     e = {**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(claude), "XDG_STATE_HOME": str(tmp_path / "state"),
@@ -106,6 +106,11 @@ def test_settings_env_differs_from_shell(env: dict[str, Any], tmp_path: Path) ->
     assert code != 0 and "some-other-project" in line and str(local) in line
     local.unlink()
     env["env"]["ASSAY_DATA_DIR"] = str(tmp_path / "data")  # shell only: Claude Code started elsewhere misses it
+    # with ASSAY_DATABASE_URL on both sides the data directory is not used
+    assert doctor(env)[2]["ASSAY_DATA_DIR"]["ok"] is True
+    path, s = _settings(env)
+    del s["env"]["ASSAY_DATABASE_URL"]
+    path.write_text(json.dumps(s))
     code, out, _ = doctor(env)
     assert code != 0 and '"ASSAY_DATA_DIR"' in failing(out, "ASSAY_DATA_DIR")
 
@@ -168,6 +173,7 @@ def test_fix_commands_quote_paths_with_spaces(env: dict[str, Any], tmp_path: Pat
 
     data = str(tmp_path / "Library" / "Application Support" / "assay" / "pg")
     s = json.loads((env["claude"] / "settings.json").read_text())
+    del s["env"]["ASSAY_DATABASE_URL"]  # so the data directory is the database target on the Claude Code side
     s["env"]["ASSAY_DATA_DIR"] = data
     (env["claude"] / "settings.json").write_text(json.dumps(s))
     _, _, checks = doctor(env)
@@ -181,3 +187,92 @@ def test_fix_commands_quote_paths_with_spaces(env: dict[str, Any], tmp_path: Pat
     fix = doctor(env)[2]["ASSAY_DATA_DIR"]["fix"]
     snippet = fix[fix.index("{"):fix.index("}") + 1]
     assert json.loads(snippet) == {"ASSAY_DATA_DIR": data}
+
+
+def _settings(s: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    path = s["claude"] / "settings.json"
+    return path, json.loads(path.read_text())
+
+
+def test_claude_code_on_another_database(env: dict[str, Any]) -> None:
+    """Claude Code's MCP server and hook use the settings URL; a different database there is a failure, and the URL
+    (which can hold a password) is never printed."""
+    from psycopg.conninfo import make_conninfo
+
+    path, s = _settings(env)
+    shell_url = env["env"]["ASSAY_DATABASE_URL"]
+    s["env"]["ASSAY_DATABASE_URL"] = make_conninfo(shell_url, dbname="some_other_db", password="s3cret-pw")
+    path.write_text(json.dumps(s))
+    code, out, checks = doctor(env)
+    line = failing(out, "ASSAY_DATABASE_URL")
+    assert code != 0 and "different database" in line and "restart Claude Code" in line
+    assert "s3cret-pw" not in out and "some_other_db" not in out and shell_url not in out
+    assert "s3cret-pw" not in json.dumps(checks)
+    # the same server and database with another password is the same target
+    s["env"]["ASSAY_DATABASE_URL"] = make_conninfo(shell_url, password="s3cret-pw")
+    path.write_text(json.dumps(s))
+    assert doctor(env)[2]["ASSAY_DATABASE_URL"]["ok"] is True
+
+
+def test_bad_home_path_in_settings_keeps_json(env: dict[str, Any]) -> None:
+    path, s = _settings(env)
+    s["env"]["ASSAY_DATA_DIR"] = "~no-such-user-assay-test/pg"
+    path.write_text(json.dumps(s))
+    p = subprocess.run([sys.executable, "-m", "assay.cli", "--json", "doctor"], capture_output=True, text=True,
+                       cwd=env["repo"], env=env["env"], timeout=120)
+    assert p.returncode == 1, p.stderr
+    checks = {c["check"]: c for c in json.loads(p.stdout)["checks"]}
+    assert checks["ASSAY_DATA_DIR"]["ok"] is False and "cannot expand" in checks["ASSAY_DATA_DIR"]["detail"]
+    assert checks["ASSAY_DATA_DIR"]["fix"]
+    assert {"connect", "assay on PATH", "ASSAY_PROJECT", "hook failures"} <= set(checks)
+
+
+def test_hook_failures_are_read_per_database(env: dict[str, Any], tmp_path: Path,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """hook.log is shared, spools are per database: replaying database B's empty spool does not settle database A's
+    failure, and a report still queued in A's spool counts."""
+    monkeypatch.setenv("XDG_STATE_HOME", env["env"]["XDG_STATE_HOME"])
+    monkeypatch.delenv("ASSAY_DATA_DIR", raising=False)
+    monkeypatch.setenv("ASSAY_DATABASE_URL", env["env"]["ASSAY_DATABASE_URL"])
+    spool_a = hooks._spool_dir()
+    monkeypatch.setenv("ASSAY_DATABASE_URL", "postgresql://u@127.0.0.1:1/b")
+    spool_b = hooks._spool_dir()
+    spool_b.mkdir(parents=True)
+    hooks.replay_now(spool_b)  # clean: nothing queued in B
+    log = hooks._state_dir() / "hook.log"
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    text = log.read_text()
+    log.write_text(f"{now} hook processing failed for {spool_a}/r.json (queued to retry): Traceback\n" + text)
+    assert f"replay {spool_b}:" in text
+    code, out, _ = doctor(env)  # run against A
+    assert code != 0 and "1 failure line" in failing(out, "hook failures")
+    # a failure in B's spool does not count for A, and a clean replay of A settles A's
+    spool_a.mkdir(parents=True)
+    monkeypatch.setenv("ASSAY_DATABASE_URL", env["env"]["ASSAY_DATABASE_URL"])
+    hooks.replay_now(spool_a)
+    with log.open("a") as f:
+        f.write(f"{now} hook entry x.json moved to {spool_b}/dead: AssayError: unknown project\n")
+    assert doctor(env)[0] == 0
+    # a report the background processor never drained
+    stuck = spool_a / "stuck.json"
+    stuck.write_text("{}")
+    old = time.time() - 3600
+    os.utime(stuck, (old, old))
+    code, out, _ = doctor(env)
+    assert code != 0 and "1 report(s) queued for over 5 min" in failing(out, "hook failures")
+
+
+def test_installed_plugin_with_the_old_matcher(env: dict[str, Any], tmp_path: Path) -> None:
+    install = tmp_path / "cache" / "assay" / "0.1.0"
+    (install / "hooks").mkdir(parents=True)
+    (install / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"SubagentStop": [
+        {"matcher": "^assay:assay-worker$", "hooks": [{"type": "command", "command": "assay hook subagent-stop"}]}]}}))
+    (env["claude"] / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"assay@assay": [{"scope": "user", "installPath": str(install)}]}}))
+    code, out, _ = doctor(env)
+    assert code != 0 and "claude plugin update assay@assay" in failing(out, "plugin hooks")
+    current = Path(__file__).parents[1] / "integrations" / "claude-code"
+    (env["claude"] / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"assay@assay": [{"scope": "user", "installPath": str(current)}]}}))
+    code, out, checks = doctor(env)
+    assert code == 0, out and "plugin hooks" not in checks

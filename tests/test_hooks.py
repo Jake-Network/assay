@@ -479,3 +479,26 @@ def test_entry_without_a_recorded_decision_is_kept_for_a_replay_with_its_setting
     s = hooks.replay_now(spool)
     assert (s.captured, s.dead) == (1, 0) and not list(spool.rglob("*.json"))
     assert _notes(worker)[0]["payload"]["text"] == "Queued before the upgrade."
+
+
+def test_malformed_legacy_entry_does_not_stop_replay(repo: Path, worker: Ledger,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """An earlier build spooled Agent events whatever their tool_input; a string there must not stop the entries
+    after it."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS", raising=False)
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    bad = {"event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
+           "data": {"cwd": str(repo), "tool_name": "Agent", "tool_input": "not an object",
+                    "tool_response": "Legacy report."}}
+    (spool / "a-old.json").write_text(json.dumps(bad))
+    os.utime(spool / "a-old.json", (1, 1))  # first in the drain order
+    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id, "accepted": True,
+                               "data": {"cwd": str(repo), "last_assistant_message": "Valid report."}})
+    s = hooks.replay_now(spool)
+    assert s.queued == 0 and not list(spool.glob("*.json"))
+    assert {n["payload"]["text"] for n in _notes(worker)} == {"Legacy report.", "Valid report."}
+    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+                               "data": {"tool_name": "SubagentHandback", "tool_input": ["x"]}})
+    assert hooks.replay_now(spool).ok  # no text to capture, and no AttributeError

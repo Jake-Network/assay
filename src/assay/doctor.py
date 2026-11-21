@@ -17,11 +17,16 @@ from pathlib import Path
 from typing import Any
 
 PLUGIN = "assay@assay"
-ENV_KEYS = ("ASSAY_DATA_DIR", "ASSAY_PROJECT")
+ENV_KEYS = ("ASSAY_DATABASE_URL", "ASSAY_DATA_DIR", "ASSAY_PROJECT")
+# values doctor compares but never prints: a database URL can carry a password
+SECRET_KEYS = {"ASSAY_DATABASE_URL"}
 RECENT_SECONDS = 24 * 3600
 # hook.log lines that mean a report did not reach the ledger (see hooks.py)
 FAILURE_MARKERS = ("failed", "not captured", "moved to", "quarantined", "cannot read")
 NO_PROJECT = re.compile(r"no assay project for (.+?)(?: \(|$)")
+SPOOL_KEY = re.compile(r"/spool/([0-9a-f]{64})\b")
+# a queued report older than this was not drained by the background processor (its retries take about a minute)
+STUCK_SECONDS = 300
 
 
 @dataclass
@@ -97,27 +102,73 @@ def check_plugin(root: Path) -> Check:
                  f"claude plugin marketplace add Jake-Network/assay && claude plugin install {PLUGIN}")
 
 
-def _norm(key: str, v: str | None) -> str | None:
+def _norm(key: str, v: str | None) -> Any:
+    """The value as the database target it selects, so that equal targets written differently compare equal.
+    Raises ValueError for a value that names no target."""
     if not v:
         return None
     if key == "ASSAY_DATA_DIR":
-        return str(Path(v).expanduser().resolve())
+        try:
+            return str(Path(v).expanduser().resolve())
+        except RuntimeError as e:  # ~name of a user that does not exist
+            raise ValueError(f"cannot expand {v!r}: {e}") from e
+    if key == "ASSAY_DATABASE_URL":
+        from psycopg.conninfo import conninfo_to_dict
+
+        try:
+            parts = conninfo_to_dict(v.strip())
+        except Exception as e:  # noqa: BLE001 (never echo the value: it can carry a password)
+            raise ValueError("not a valid connection string") from e
+        # the server and database it reaches; the password does not change the target
+        return sorted((k, str(val)) for k, val in parts.items() if k != "password")
     return v.strip()
+
+
+def _shown(key: str, v: str | None) -> str:
+    if not v:
+        return "(unset)"
+    return "(set, not shown)" if key in SECRET_KEYS else v
 
 
 def check_env(root: Path) -> list[Check]:
     out: list[Check] = []
+    url_claude, _ = _effective(root, "env", "ASSAY_DATABASE_URL")
+    url_shell = os.environ.get("ASSAY_DATABASE_URL")
     for key in ENV_KEYS:
         raw, source = _effective(root, "env", key)
         claude = None if raw is None else str(raw)
         shell = os.environ.get(key)
-        if _norm(key, claude) == _norm(key, shell):
-            out.append(Check(key, True, f"{shell or 'unset'} (shell and Claude Code)"))
-            continue
         target = source or settings_files(root)[0]
-        detail = f"shell {shell or '(unset)'}, Claude Code {claude or '(unset)'}" + (f" ({source})" if source else "")
-        fix = (f'set "env": {json.dumps({key: shell})} in {target}, then restart Claude Code' if shell
-               else f"export {key}={shlex.quote(claude or '')}   (add it to your shell profile)")
+        where = f" ({source})" if source else ""
+        try:
+            n_shell = _norm(key, shell)
+        except ValueError as e:
+            out.append(Check(key, False, f"shell value: {e}", f"export {key}=<a valid value> in your shell profile"))
+            continue
+        try:
+            n_claude = _norm(key, claude)
+        except ValueError as e:
+            out.append(Check(key, False, f"Claude Code value{where}: {e}",
+                             f'fix "env".{key} in {target}, then restart Claude Code'))
+            continue
+        if n_claude == n_shell:
+            shown = "set, not shown" if key in SECRET_KEYS and shell else (shell or "unset")
+            out.append(Check(key, True, f"{shown} (shell and Claude Code)"))
+            continue
+        if key == "ASSAY_DATA_DIR" and url_shell and url_claude:
+            # both sides use a server, so the embedded data directory is not used (ASSAY_DATABASE_URL is checked)
+            out.append(Check(key, True, "not used: ASSAY_DATABASE_URL is set in the shell and Claude Code"))
+            continue
+        detail = f"shell {_shown(key, shell)}, Claude Code {_shown(key, claude)}{where}"
+        if key in SECRET_KEYS:
+            if shell and claude:
+                detail = "Claude Code uses a different database than this shell: " + detail
+            fix = (f'set "env": {{"{key}": "<the {key} value of your shell>"}} in {target}, then restart '
+                   "Claude Code" if shell
+                   else f"export {key}='<the value in {target}>'   (add it to your shell profile)")
+        else:
+            fix = (f'set "env": {json.dumps({key: shell})} in {target}, then restart Claude Code' if shell
+                   else f"export {key}={shlex.quote(claude or '')}   (add it to your shell profile)")
         out.append(Check(key, False, detail, fix))
     return out
 
@@ -140,14 +191,25 @@ def _counts(msg: str, root: Path) -> bool:
     return True
 
 
+def _spool_key(msg: str) -> str | None:
+    """The spool (one per database target) a hook.log line is about, or None for a line about no spool in
+    particular (a report that was never queued)."""
+    m = SPOOL_KEY.search(msg)
+    return m.group(1) if m else None
+
+
 def check_hook_log(root: Path) -> Check:
-    """Failure lines in hook.log since the later of 24 hours ago and the last clean `assay hook replay`, and the
-    reports waiting in the spool's dead/ folder for this database."""
+    """For this shell's database: failure lines in hook.log since the later of 24 hours ago and the last clean
+    replay of its spool, and the reports still waiting in that spool (dead/, or queued and not drained). hook.log
+    is shared by every database: a line about another database's spool does not count, and a replay of another
+    spool settles nothing here."""
     from .hooks import _spool_dir, _state_dir
 
     log = _state_dir() / "hook.log"
+    spool = _spool_dir()
+    mine = spool.name
     since = time.time() - RECENT_SECONDS
-    failures: list[str] = []
+    failures: list[tuple[str | None, str]] = []
     try:
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -157,25 +219,82 @@ def check_hook_log(root: Path) -> Check:
         if ts is None or ts < since:
             continue
         msg = line[20:]
-        if msg.startswith("replay:") and "dead 0; still queued 0" in msg:
-            failures = []  # everything before a clean replay was dealt with
+        key = _spool_key(msg)
+        if key not in (None, mine):
+            continue
+        if msg.startswith("replay") and "dead 0; still queued 0" in msg:
+            # a clean replay of this spool settles what came before it; a replay line that names no spool (an
+            # older build) settles only the lines that name none either
+            failures = [] if key == mine else [f for f in failures if f[0] is not None]
         elif _counts(msg, root):
-            failures.append(line)
-    dead = _spool_dir() / "dead"
+            failures.append((key, line))
+    dead = spool / "dead"
     n_dead = len(list(dead.glob("*.json"))) if dead.is_dir() else 0
-    if not failures and not n_dead:
-        return Check("hook failures", True, f"none in the last 24h; dead/ empty ({log})")
-    detail = f"{len(failures)} failure line(s) in the last 24h, {n_dead} report(s) in {dead}"
+    now = time.time()
+    n_stuck = 0
+    for p in spool.glob("*.json") if spool.is_dir() else []:
+        try:
+            n_stuck += now - p.stat().st_mtime > STUCK_SECONDS
+        except OSError:
+            continue
+    if not failures and not n_dead and not n_stuck:
+        return Check("hook failures", True, f"none in the last 24h; nothing waiting in {spool} ({log})")
+    detail = (f"{len(failures)} failure line(s) in the last 24h, {n_dead} report(s) in {dead}, "
+              f"{n_stuck} report(s) queued for over {STUCK_SECONDS // 60} min in {spool}")
     if failures:
-        detail += f"\n      last: {failures[-1][:200]}"
+        detail += f"\n      last: {failures[-1][1][:200]}"
     return Check("hook failures", False, detail, f"read {log}, fix the cause, then run: assay hook replay")
+
+
+def _installed_plugin_paths() -> list[Path]:
+    installed = _read_json(claude_dir() / "plugins" / "installed_plugins.json")
+    plugins = installed.get("plugins", installed)
+    entries = plugins.get(PLUGIN) if isinstance(plugins, dict) else None
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list):
+        return []
+    return [Path(e["installPath"]) for e in entries if isinstance(e, dict) and isinstance(e.get("installPath"), str)]
+
+
+def check_plugin_hooks() -> Check | None:
+    """An install from before the plugin's SubagentStop matcher was removed keeps running the hook only for
+    assay-worker, whatever ASSAY_HOOK_AGENTS says: Claude Code keeps an installed plugin version's files until the
+    plugin is updated."""
+    stale: list[Path] = []
+    for path in _installed_plugin_paths():
+        hooks = _read_json(path / "hooks" / "hooks.json").get("hooks")
+        entries = hooks.get("SubagentStop") if isinstance(hooks, dict) else None
+        if isinstance(entries, list) and any(isinstance(e, dict) and e.get("matcher") not in (None, "", "*")
+                                             for e in entries):
+            stale.append(path)
+    if not stale:
+        return None
+    return Check("plugin hooks", False,
+                 f"the installed plugin ({stale[0]}) runs the hook only for assay-worker, so ASSAY_HOOK_AGENTS "
+                 "cannot add other subagents",
+                 f"claude plugin marketplace update assay && claude plugin update {PLUGIN}, then restart Claude Code")
+
+
+def _guarded(name: str, fn: Any, *args: Any) -> list[Check]:
+    """A check that raises must not take the others (or --json) down with it."""
+    try:
+        res = fn(*args)
+    except Exception as e:  # noqa: BLE001
+        return [Check(name, False, f"check failed: {type(e).__name__}: {e}")]
+    if res is None:
+        return []
+    return res if isinstance(res, list) else [res]
 
 
 def claude_code_checks(root: Path) -> list[Check]:
     checks: list[Check] = []
     if claude_dir().is_dir():
-        checks += [check_path(root), check_plugin(root), *check_env(root)]
+        checks += _guarded("assay on PATH", check_path, root)
+        checks += _guarded("claude code plugin", check_plugin, root)
+        checks += _guarded("plugin hooks", check_plugin_hooks)
+        checks += _guarded("claude code env", check_env, root)
     else:
         checks.append(Check("claude code", True, f"{claude_dir()} not found; connection checks skipped"))
-    checks.append(check_hook_log(root.resolve()))
+    checks += _guarded("hook failures", check_hook_log, root.resolve())
     return checks
