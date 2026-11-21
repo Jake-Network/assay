@@ -65,7 +65,7 @@ filtered to the current project, read-only, 2 s timeout, 200 rows / ~4,000 token
 | `v_progress` | best-so-far curve (per partition): id, author, created_at, primary_value, best_so_far, n, tokens_cum, partition, seed |
 | `v_partition_best` | per partition: `verified` result claims and `candidate` first runs awaiting judgement, with mean, std, n, code_ref, author, origin_id, rank |
 | `v_lineage` | experiment, parent_id (derived_from), depth, root_id, changed, description, outcome, primary_value, partition |
-| `v_inflight` | claimed tasks with a live lease: agent, title, spec, is_intent, partition, lease_left_s |
+| `v_inflight` | claimed tasks with a live lease: agent, title, tags, spec, is_intent, partition, lease_left_s (a code piece: `spec.piece`, `spec.paths`, docs/code.md) |
 | `v_knob_history` | per (partition, knob, value) over first runs: n, n_improved, n_no_change, n_worse, n_failed, n_verified, n_refuted, n_inconclusive, last_at |
 | `v_agent_stats` | agent, role, experiments, improved, claims, dedup_avoided, dedup_rejected, last_active_at |
 | `v_dedup_savings` | rejected, avoided |

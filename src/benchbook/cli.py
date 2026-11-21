@@ -15,6 +15,7 @@ from .check_cli import check_app
 from .config import env
 from .errors import BenchbookError, Conflict, ValidationFailed
 from .ids import short
+from .piece_cli import piece_app
 
 if TYPE_CHECKING:
     from .ledger import Ledger
@@ -32,6 +33,7 @@ app.add_typer(claim_app, name="claim")
 app.add_typer(db_app, name="db")
 app.add_typer(agent_app, name="agent")
 app.add_typer(check_app, name="check")
+app.add_typer(piece_app, name="piece")
 
 STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 

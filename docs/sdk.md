@@ -21,8 +21,8 @@ Workers:
 | `link(src, relation, dst, note=None)` | link id |
 | `add_source(uri, title=None, locator=None, sha256=None)` | source id |
 | `complete_task(task_id, status="done", summary="")` | `Task`; raises `LeaseLost` |
-| `create_intent(title, spec=None, tags=None, lease_seconds=900, exclusive=())` | a task already claimed by you, tagged `intent` (needs `settings.worker_intents` for workers); `Conflict` when a live intent has the same value for an `exclusive` spec field |
-| `update_intent(task_id, spec_patch, lease_seconds=None, exclusive=())`, `my_intents()` | your live intents |
+| `create_intent(title, spec=None, tags=None, lease_seconds=900, exclusive=(), exclusive_paths=())` | a task already claimed by you, tagged `intent` (needs `settings.worker_intents` for workers); `Conflict` when a live intent has the same value for an `exclusive` spec field, or when an `exclusive_paths` spec field (a list of path globs) overlaps the same field of a live intent |
+| `update_intent(task_id, spec_patch, lease_seconds=None, exclusive=(), exclusive_paths=())`, `my_intents()` | your live intents |
 | `put_blob(data, media_type)`, `get_blob(uri)` | `benchbook://blob/<sha256>`; bytes |
 | `baseline(partition=None)` | `(value, epsilon)` that the next outcome is compared with |
 | `check_rerun(claim, evidence_ids)`, `completion_attempts(claim)` | what `decide(claim, "verified", "rerun", ...)` would check, without writing (raises `InvalidTransition`); a completion's piece, commit, implementers, status and attempts ([code.md](code.md#verified-completion)) |

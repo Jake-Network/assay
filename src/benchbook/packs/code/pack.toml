@@ -18,10 +18,11 @@ min_authors = 2
 
 # `benchbook init --pack code` without --metric/--direction. The partition is the piece (spec §6): best and outcome
 # are per piece, and v_leaderboard ranks within a piece, so one piece's failures are not pushed out by another's passes.
+# worker_intents: an implementer starts its own piece (`benchbook piece start`, path occupancy).
 [project]
 metric = "checks_passed"
 direction = "max"
-settings = { partition_key = "piece" }
+settings = { partition_key = "piece", worker_intents = true }
 
 [config]
 max_depth = 6

@@ -426,7 +426,7 @@ def test_init_pack_code(tmp_path: Path, db_url: str, cli_env: dict[str, str]) ->
     assert p.returncode == 0, p.stderr
     proj = Ledger.open(project=pid, agent="human", database_url=db_url).project
     assert (proj.pack, proj.primary_metric, proj.metric_direction) == ("code", "checks_passed", "max")
-    assert proj.settings == {"partition_key": "piece"}
+    assert proj.settings == {"partition_key": "piece", "worker_intents": True}
     p = run_cli(tmp_path, cli_env, "init", "--project", f"{pid}-x", "--pack", "nope")
     assert p.returncode == 1 and "unknown pack" in p.stderr
 
@@ -480,6 +480,6 @@ def test_code_pack() -> None:
     assert pack.claim_kinds == ["completion", "observation", "note"]
     assert pack.dedup_ignore == ["approach", "paths", "notes"] and pack.dedup_mode == "notify"
     assert pack.project_defaults == {"metric": "checks_passed", "direction": "max",
-                                     "settings": {"partition_key": "piece"}}
+                                     "settings": {"partition_key": "piece", "worker_intents": True}}
     assert {"experiment.config", "experiment.metrics", "claim.completion"} <= set(pack.validators)
     assert load_pack("core").project_defaults == {}

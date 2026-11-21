@@ -21,7 +21,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from . import config as localcfg
-from . import identity
+from . import globs, identity
 from .blobs import BLOB_PREFIX, blob_digest
 from .db import conn as dbconn
 from .db.migrate import head as migrate_head
@@ -501,10 +501,13 @@ class Ledger:
         return t
 
     def create_intent(self, title: str, spec: dict[str, Any] | None = None, tags: Sequence[str] | None = None,
-                      lease_seconds: int = 900, exclusive: Sequence[str] = ()) -> Task:
+                      lease_seconds: int = 900, exclusive: Sequence[str] = (),
+                      exclusive_paths: Sequence[str] = ()) -> Task:
         """Announce work you are about to do (C3): a task created already claimed by you, tagged 'intent'.
         Needs settings.worker_intents for workers. For each spec field named in `exclusive`, another live
-        intent with the same value is a conflict (raises Conflict, CLI exit 2)."""
+        intent with the same value is a conflict (raises Conflict, CLI exit 2). Each field named in
+        `exclusive_paths` holds a list of path globs (globs.py, a file escaped with globs.escape); another live
+        intent whose same field can match a common path is a conflict too (path occupancy, docs/code.md)."""
         if self.role not in DECIDERS and not self.project.settings.get("worker_intents"):
             self.refresh()
             if not self.project.settings.get("worker_intents"):
@@ -518,6 +521,7 @@ class Ledger:
         with self._conn() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
             self._check_exclusive(conn, spec, exclusive, None)
+            self._check_paths(conn, spec, exclusive_paths, None)
             r = conn.execute(
                 "INSERT INTO benchbook.tasks(project_id,title,spec,tags,created_by,status,lease_owner,lease_expires_at,"
                 "attempts,max_attempts) VALUES (%s,%s,%s,%s,%s,'claimed',%s,now() + make_interval(secs => %s),1,1)"
@@ -529,8 +533,9 @@ class Ledger:
             return Task(**r)
 
     def update_intent(self, task_id: str | UUID, spec_patch: dict[str, Any], lease_seconds: int | None = None,
-                      exclusive: Sequence[str] = ()) -> Task:
-        """Merge fields into the spec of your own live intent and optionally extend its lease."""
+                      exclusive: Sequence[str] = (), exclusive_paths: Sequence[str] = ()) -> Task:
+        """Merge fields into the spec of your own live intent and optionally extend its lease. `exclusive` and
+        `exclusive_paths` are checked against the other live intents as in create_intent."""
         tid = self._rid(task_id, "task")
         with self._conn() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
@@ -540,6 +545,7 @@ class Ledger:
                 raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
             spec = {**cur["spec"], **spec_patch}
             self._check_exclusive(conn, spec, exclusive, tid)
+            self._check_paths(conn, spec, exclusive_paths, tid)
             r = conn.execute(
                 "UPDATE benchbook.tasks SET spec=%s, updated_at=now(), lease_expires_at = CASE WHEN %s::int IS NULL"
                 " THEN lease_expires_at ELSE now() + make_interval(secs => %s::int) END WHERE id=%s RETURNING *",
@@ -560,6 +566,34 @@ class Ledger:
             if other is not None:
                 raise Conflict(f"{short('task', other['id'])} by {other['lease_owner']} is already working on this "
                                f"({key}): {other['title']}", existing=other["id"], agent=other["lease_owner"])
+
+    def _check_paths(self, conn: psycopg.Connection[Any], spec: dict[str, Any], keys: Sequence[str],
+                     own: UUID | None) -> None:
+        """Path occupancy: the caller holds the intent advisory lock, so two intents cannot both pass this check
+        and then both commit. Overlap is decided in Python (globs.first_overlap) over the live intents that hold
+        the same field; their number is the number of pieces in flight."""
+        for key in keys:
+            mine = spec.get(key)
+            if mine is None:
+                continue
+            problems = globs.invalid_patterns(mine)
+            if problems:
+                raise ValidationFailed([f"spec.{key}: {p}" for p in problems])
+            if not mine:
+                continue
+            rows = conn.execute(
+                "SELECT id, lease_owner, title, spec -> %s AS paths FROM benchbook.tasks WHERE project_id=%s"
+                " AND status='claimed' AND lease_expires_at > now() AND 'intent' = ANY(tags)"
+                " AND jsonb_typeof(spec -> %s) = 'array' AND id IS DISTINCT FROM %s ORDER BY created_at",
+                (key, self.project_id, key, own)).fetchall()
+            for other in rows:
+                theirs = [p for p in other["paths"] if isinstance(p, str)]
+                hit = globs.first_overlap(mine, theirs)
+                if hit is not None:
+                    path = f"{hit[0]}" if hit[0] == hit[1] else f"{hit[0]} and its {hit[1]} (both match {hit[2]})"
+                    raise Conflict(f"{short('task', other['id'])} by {other['lease_owner']} already holds these paths"
+                                   f" ({key}): {path}: {other['title']}", existing=other["id"],
+                                   agent=other["lease_owner"])
 
     def my_intents(self) -> list[Task]:
         """Your live intents, newest first."""
