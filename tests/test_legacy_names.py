@@ -109,10 +109,13 @@ def test_no_direct_reads_of_our_variables_are_left() -> None:
 
     direct = re.compile(r"""(environ(\.get\(|\[)|getenv\()\s*["'](BENCHBOOK|ASSAY)_""")
     setting = re.compile(r"""environ\[["']\w+["']\]\s*=(?!=)""")  # a variable set for child processes is not a read
+    # `benchbook exp run` sets these for the command it runs, under the new name only, and the example script that
+    # reads them must also run without benchbook installed
+    own = re.compile(r"BENCHBOOK_EXP_(CONFIG|SEED)")
     hits = [f"{p.relative_to(ROOT)}:{n}" for top in ("src", "bench", "examples")
             for p in sorted((ROOT / top).rglob("*.py"))
             for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
-            if direct.search(line) and not setting.search(line)]
+            if direct.search(line) and not setting.search(line) and not own.search(line)]
     assert hits == []
 
 

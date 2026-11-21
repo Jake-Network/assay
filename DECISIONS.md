@@ -190,3 +190,99 @@ One line per decision the spec left open or that changed during implementation. 
   `settings.lease_seconds` sets the live default for claims and heartbeats (900).
 - **Worktrees (U6).** When no `.benchbook/config.toml` is found upward, the main worktree's copy is used
   (`git rev-parse --git-common-dir`).
+
+## Name (2026-11-21)
+
+- **benchbook.** The notebook kept next to the bench. `assay` was dropped because four PyPI packages (`assay-ai`,
+  `assay-it`, `assay-kit`, `assay-sdk`) install a top-level import `assay`, three of them install an `assay`
+  command, and they describe themselves with the same words (AI evidence, verification layer). `benchbook` was
+  free on PyPI, npm, crates.io and as a GitHub account on 2026-11-21. Weak point: it can be read as a benchmark
+  tool, so the README puts "your agents' lab notebook" next to the name. No trademark search yet; one is done
+  before the names are reserved (docs/releasing.md).
+- **Never move a user's folder on upgrade.** A server or a hook may be using it. A pre-rename location (config
+  folder, embedded cluster, state directory) stays in use while the new one has no data, and doctor prints the move.
+- **Accept old names everywhere they are persisted; write only new ones.** Blob URIs, transcript markers, the
+  viewer cookie, bench keys. The exception is the auto-capture hash domain, which keeps `assay:auto-captured`
+  forever so stored hashes still match.
+- **A server started as `assay mcp` keeps the `assay_*` tool names.** The old plugin's agent definition and
+  permission rules name them; updating the plugin switches both.
+- **Old-name notices never reach stderr on the hook path.** They wait in memory and go to `hook.log`, and only for
+  a worker's event.
+- **Renaming existing databases is a bootstrap, not a revision.** Legacy databases (0007 at most) are renamed in
+  place before Alembic runs. The step is keyed on schema names, so Alembic continues from the database's own
+  revision. Function bodies are re-created from the newest definition in the SQL files up to that revision, so
+  they cannot drift from a new database (tests assert `pg_dump` equality). Roles are cluster-wide: only the old
+  role, rename it; both, grant the new one and revoke the old; only the new one, re-grant. `pg_shdepend` reports
+  other databases that still use the old role. Statements that need an administrator run first; if refused, the
+  whole transaction rolls back and the exact SQL is printed. Anything else in the catalog that still names the
+  old schema blocks the commit. Row data is never rewritten. `LOCK_KEY` keeps its pre-rename value so old and
+  new binaries serialise.
+- **Notification channel.** `benchbook_` + project id up to 53 bytes, the hashed form above that (Postgres limits
+  a channel name to 63 bytes).
+
+## Core for the verification ledger (2026-11-21)
+
+- **Dedup mode is the pack's (2-C1).** `dedup_mode` in pack.toml: `refuse` (default) or `notify`. The refusal was
+  also the unique indexes, so migration 0009 adds `experiments.duplicate_of` and narrows both indexes to rows
+  without it; a trigger accepts `duplicate_of` only when it names the original ok run of the same project,
+  dedup_key and seed. The database cannot read pack.toml: which projects may declare repeats is enforced by the
+  SDK only.
+- **Repeats point at the first run (2-C1).** Every repeat's `duplicate_of` is the one original, never the
+  previous repeat. A repeat is a valid run: it counts in `v_tried` (`attempts`, `ok_runs`; not `seeds`), can be
+  `v_best`, and is never a `v_partition_best` candidate. In notify mode a repeat of an invalidated run is stored.
+- **`dedup_hits.kind = 'notified'` (2-C1).** A recorded repeat is not a `rejected` hit, so `v_dedup_savings`,
+  `v_agent_stats` and "duplicates blocked" still count refusals only.
+- **Identity (2-C3, migration 0008).** The session setting carries the token itself and the triggers hash it again
+  on each row. A name in a setting is never trusted, and the identity lasts one transaction, so pooled
+  connections cannot leak it.
+- **Trust boundary (2-C3).** A session that may update `agents.token_hash` (the owner, a superuser) is trusted;
+  every other session needs a token. Enforcement is chosen by which login a machine is given: the owner URL is
+  local mode as before, a `benchbook_writer` login is enforced. An owner connection can still write as anyone.
+- **Mismatching author (2-C3).** It is refused, not rewritten; a missing author is filled from the token. (The
+  plan said the trigger replaces the author; refusing lets a client see its forgery attempt fail.)
+- **The writer's grants are explicit, table by table (2-C3).** A later migration that adds a table must grant it
+  to the writer, and a test pins this.
+- **Imports are first runs only (2-R1).** An imported record always has replication number 0 and is never imported
+  twice for the same hardware class, whoever imports it. No log can stand in for an independent re-run.
+- **The evaluator version is bound through the partition, not `code_ref` (2-R1).** `code_ref` stays the
+  `train.py` hash so live re-runs can match imported originals under the rerun rule. The `prepare.py` hash names
+  the partition and is stored in `trace_ref.evaluator`. (The plan said to put the evaluator version into
+  `code_ref`; that would make imported runs impossible to verify.)
+- **A measured run without recorded code is `invalid` (2-R1).** It is kept as a record that the approach was
+  tried, but it is never a candidate or a baseline.
+- **`ar gate on` adds no new mechanism (2-R1).** It restores the existing gate settings where they are missing or
+  weaker, and leaves stricter values and an explicit `time_budget_s = 0` alone.
+- **exp run duplicates (2-C2).** Refuse mode blocks a same-key, same-seed earlier run before it starts: ok runs
+  (invalidated included, the unique index counts them) always, failed-only runs unless `--retry-failed`. Notify
+  mode runs it and reports `duplicate_of`.
+- **exp run output (2-C2).** The command's output is unchanged; exp run adds one `benchbook: ` line (or a JSON
+  line with `--json`) after it and puts notes on stderr. Exit code is the command's, 124 on timeout, 128+N on
+  signal, 2 for a duplicate, 1 for a failed write (output log kept, no local queue).
+- **exp run metrics (2-C2).** Only existing formats are read: `parse_summary` lines and a last-line JSON object,
+  where `value` stands for the primary metric (the bench receipt) and `seed` is not a metric. The command gets
+  `BENCHBOOK_EXP_CONFIG` and `BENCHBOOK_EXP_SEED`.
+- **The benchmark keeps sessions (0-4).** It no longer uses `--no-session-persistence`. The stream's output counts
+  are taken at the start of each response, so only transcripts reconcile all four token classes; the input
+  classes reconcile from the stream alone. Side effect: the SubagentStop hook can now verify citations, so
+  configuration C's ledger differs from the first benchmark's.
+- **Cost verdicts are computed (0-4).** In `cost-breakdown.md` a hypothesis is supported when its mechanism
+  explains at least 50% of the gap it targets and contradicted below 20%. Near configs use a relative tolerance
+  per numeric key (25% decides hypothesis 2, as proposed in the plan). "tokens total" in report.md stays the
+  lead's own `result.usage`; whole-session totals (`modelUsage`) are in `cost-breakdown.md`.
+
+## Code pack (2026-11-21)
+
+- **check verify runs the merge-base's declarations (1-1)**, never the commit's or the verifier's checkout's.
+  Guard and `checks_changed` use the same merge-base; with no `[checks]` there, verify refuses. No
+  `[guard] paths` means the default `tests/**`, `**/conftest.py`, `.benchbook/config.toml`.
+- **Guard diff uses `--no-renames` (1-1)**, so a test moved out of a guarded folder shows as the deletion it is.
+- **Recording (1-1).** The completion claim is proposed in `--reported-by`'s name (one per piece and commit, tags
+  `piece:`/`commit:`); the attempt is by the verifier (`verifier@<host>`, harness role, by default), which must
+  differ from the reporter; a supports/refutes link joins them. An interrupted run is recorded with run_status
+  error and no link. Diff text and check output are never stored.
+- **Of `--report-file` (1-1)**, only sha256, size and the declared check names it mentions are kept.
+- **Packs can declare `[project]` defaults (1-1)** (metric, direction, settings) that `init --pack` applies. The
+  code pack partitions by piece, which keeps the false-completion query within `v_leaderboard`'s
+  50-per-partition cap.
+- **Failure signature (1-1, rough until signature.py).** `check:first failing JUnit test:exception type`,
+  `check:timeout`, or `check:exit N:<sha256 of the last output line with digits zeroed>`.

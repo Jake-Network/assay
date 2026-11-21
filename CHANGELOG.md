@@ -1,5 +1,77 @@
 # Changelog
 
+## Unreleased: code pack
+
+- `benchbook check verify <piece> <commit> [--reported-by NAME] [--report-file F] [--base REF] [--checks a,b]`
+  re-runs the checks declared in `.benchbook/config.toml` `[checks]` on a reported commit in a clean worktree. It
+  records the completion claim (the implementer's) and the attempt (the verifier's), linked supports/refutes, and
+  notes guarded files and `[checks]` changes. See docs/code.md.
+- New `code` pack and `benchbook init --pack`. `--pack code` defaults to metric `checks_passed` (max),
+  partitioned by piece.
+- `.benchbook/config.toml` accepts `[checks.<name>]` (cmd, junit, timeout) and `[guard]` (paths, base).
+
+## Unreleased: core for the verification ledger
+
+- `benchbook exp run --config '<json>' [--seed N] -- <cmd>` checks the ledger, runs the command (output shown
+  unchanged) and records the result in one command. Duplicates in a refuse-mode pack are not run (exit 2);
+  `--retry-failed` re-runs a config that only failed. Metrics come from `key: number` lines or a JSON last line.
+  Non-zero exits, timeouts and interrupts are recorded; the exit code passes through.
+- Worker instructions (plugin, manual copy, skill, AGENTS.md) use `exp run` where a shell is available; the MCP
+  tools remain the fallback. Plugin 0.1.2. The capture hook recognises `exp run` receipts.
+- circle-packing: `run_config.py` scores one `packing.py` config; README (b) uses `exp run`.
+- `bench`: real runs save the Claude Code session, copy the lead's and subagents' transcripts into the run
+  directory, and record per-run usage reconciliation (`usage_check`) in `metrics.json`. Configuration C also
+  keeps the queued hook entries and a `benchbook export` of its project.
+- `bench`: new `python -m bench.analyze_cost <runs>` writes `cost-breakdown.md`: prompt tokens by what entered
+  the context, repeated and near evaluations, and a verdict for each cost hypothesis.
+- Core (migration 0009): `dedup_mode = "refuse" | "notify"` in pack.toml. `refuse` (default; core and ml-research)
+  is the behaviour so far. With `notify`, `record_experiment` stores an ok run whose config, code_ref and seed
+  were already recorded and returns the first such run as `duplicate_of` with a `notice`; the MCP tool returns
+  both, `benchbook exp record` exits 0 (notice in `--json`, on stderr otherwise). `experiments.duplicate_of`
+  marks the repeat, `dedup_hits` logs it as `notified`, and the unique indexes still refuse any duplicate that
+  does not declare its original.
+- Hook: a recorded repeat (new id with `duplicate_of`) counts as the subagent's own write.
+- Per-agent tokens: `benchbook agent add NAME --role worker` prints a token once (only its SHA-256 is stored);
+  `--rotate`, `agent revoke` and `agent list` manage it. Clients read `BENCHBOOK_TOKEN`.
+- Migration 0008: the `benchbook_writer` login. On it, every write must carry the token of the agent it names,
+  and decisions, settings, open tasks and cancellations need an orchestrator or human token. Owner connections
+  (local mode) are unchanged. `export()` no longer includes agent token hashes.
+- Runner: the command runner is core (`benchbook.runner`). `run_command` takes `metric=None` (exit code 0 alone
+  is ok) and `tee=True` (the output goes to the log file and, unchanged and as it arrives, to stdout). The
+  autoresearch runner module re-exports the same names.
+- `benchbook ar import --from pi-autoresearch|uditgoenka|codex-autoresearch <path> --hw <class>` records the run
+  logs of the three autoresearch skills as experiments. Imported keeps become candidates that other agents
+  re-run. Importing the same log again adds nothing.
+- `benchbook ar gate on [--from <skill>]` turns on the reproduction gate (verified baseline, referee
+  replications, rerun rule) in one command, creating the project if needed, and writes a program fragment for
+  the skill. Imported runs, results.tsv included, now get the time-budget check on the training time the log
+  reports.
+
+## Unreleased: renamed to benchbook
+
+- The project is now `benchbook`: distribution, import package, command, `BENCHBOOK_*` environment variables,
+  `.benchbook/config.toml`, database schema `benchbook` / `benchbook_q`, role `benchbook_reader`, MCP tools
+  `benchbook_*`, plugin `benchbook@benchbook`, agent `benchbook-worker`, skills `benchbook` and
+  `benchbook-lead`, `program.benchbook.md`. Why: DECISIONS.md, "Name".
+- The `assay` command still works during 0.1.x: it prints one notice and runs `benchbook`. Deployed
+  `assay hook ...` hooks stay silent and write the notice to `hook.log`.
+- `ASSAY_*` variables are read when the `BENCHBOOK_*` one is unset, with one notice per process.
+- `.assay/config.toml`, the old embedded cluster (`~/.local/share/assay/pg`, or
+  `~/Library/Application Support/assay/pg` on macOS) with its `assay` database, and `~/.local/state/assay` stay
+  in use while no new one exists. `benchbook doctor` shows how to move each one; nothing is moved for you.
+- Records with `assay://blob/` artifacts, reports queued by the old build, and the old plugin (`assay@assay`,
+  `assay-worker`, `assay_*` tools) keep working.
+- A database made before the rename (schema `assay`, role `assay_reader`) is renamed in place by
+  `benchbook migrate` or the first connection, in one transaction. Functions and reader views are rebuilt, and
+  stored `search_path` settings are rewritten. Old rows keep their `assay://blob/...` URIs. `benchbook doctor`
+  reports a pre-rename schema; `benchbook migrate --json` includes `renamed_from`. A database holding both the
+  `assay` and `benchbook` schemas is refused, and the message says which one to drop. When the owner may not
+  rename or create roles, nothing changes and the message prints the SQL for an administrator.
+- Project ids longer than 53 bytes (was 57) use the hashed notification channel name.
+- Release: `.github/workflows/release.yml` publishes to PyPI from a `v*` tag with Trusted Publishing; CI builds the
+  wheel and runs `uvx --from dist/*.whl benchbook doctor` and `benchbook init` on empty Linux and macOS runners
+  (`scripts/smoke_wheel.sh`). The checklist is docs/releasing.md.
+
 ## Unreleased: release readiness
 
 - Build identity: the package version comes from git (`0.1.devN+g<commit>` between tags, `0.1.0` on `v0.1.0`);
