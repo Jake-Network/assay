@@ -17,6 +17,12 @@
       "type": "string",
       "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
     },
+    "reported_by": {
+      "description": "The implementer, when the claim was recorded by someone else on its behalf (check verify under a token, which can write only in the verifier's own name).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
     "reported_checks": {
       "type": "array",
       "items": {

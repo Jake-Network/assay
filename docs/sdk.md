@@ -25,6 +25,7 @@ Workers:
 | `update_intent(task_id, spec_patch, lease_seconds=None, exclusive=())`, `my_intents()` | your live intents |
 | `put_blob(data, media_type)`, `get_blob(uri)` | `benchbook://blob/<sha256>`; bytes |
 | `baseline(partition=None)` | `(value, epsilon)` that the next outcome is compared with |
+| `check_rerun(claim, evidence_ids)`, `completion_attempts(claim)` | what `decide(claim, "verified", "rerun", ...)` would check, without writing (raises `InvalidTransition`); a completion's piece, commit, implementers, status and attempts ([code.md](code.md#verified-completion)) |
 | `get(id)`, `search(text, kind, status, tags, limit, all_tags)` (`tags`: any of them, `all_tags`: every one), `status()`, `export()` | reads |
 
 Orchestrator / human only (`PermissionDenied` otherwise): `create_tasks([...])`, `cancel_task(id, reason)`,

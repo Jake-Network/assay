@@ -6,9 +6,13 @@ worktree, and record the report and the re-run as a pair (spec §8, measurement 
    and whether the [checks] tables differ between the merge-base and the commit.
 3. Run the declared checks of the merge-base (never the commit's own) in a detached worktree of the commit, each
    through the core runner with its timeout. The worktree is removed whatever happens, interruption included.
-4. Record: the completion claim in the implementer's name (--reported-by), the attempt in the verifier's, and a
-   supports or refutes link from the attempt to the claim. No decision: verifying the claim is a later step's job.
-5. Report one row per check; the CLI exits 0 only when every check passed.
+4. Record: the completion claim in the implementer's name (--reported-by; under a token, which is one agent, in the
+   verifier's name with payload.reported_by), the attempt in the verifier's, and a supports or refutes link from
+   the attempt to the claim.
+5. Decide, only with lead authority (the verifier has the orchestrator or human role): verified (oracle rerun) when
+   the pack's [verify] rule accepts the re-run, inconclusive when earlier attempts of the piece at the commit (the
+   implementer's own above all) disagree with it, nothing when a guarded path or [checks] changed: a person decides.
+6. Report one row per check; the CLI exits 0 only when every check passed.
 
 The diff and the check output are never stored: the commit, the guarded paths it changed, the failure signature and
 a hash of the last output line are. Nothing here imports the database layer at module level; the ledger is passed in."""
@@ -34,7 +38,7 @@ from uuid import UUID
 
 from . import config as localcfg
 from .config import CheckSpec, parse_checks, parse_guard
-from .errors import BenchbookError
+from .errors import BenchbookError, InvalidTransition
 from .globs import matching
 from .runner import Interrupted, _trap_signals, run_command
 
@@ -149,6 +153,18 @@ class Verification:
 
 
 @dataclass
+class Outcome:
+    """Step 5: what verify decided about the completion, and why, in one line."""
+    decision: str | None  # verified | inconclusive | None (nothing decided)
+    reason: str
+    evidence: list[UUID] = field(default_factory=list)  # the attempt ids the decision cites (or would cite)
+    decision_ids: list[UUID] = field(default_factory=list)  # supported then verified, or inconclusive
+    person: bool = False  # a person has to decide: guarded files or [checks] changed, or the rule refused
+    guard_files: list[str] = field(default_factory=list)
+    checks_changed: bool = False
+
+
+@dataclass
 class Recorded:
     experiment_id: UUID
     verifier: str
@@ -158,6 +174,7 @@ class Recorded:
     relation: str | None = None  # supports | refutes; None when the run was interrupted
     duplicate_of: UUID | None = None  # an earlier verification of the same piece, checks and commit
     notice: str | None = None
+    outcome: Outcome | None = None
 
 
 # ---------------------------------------------------------------------------------------------------- git
@@ -417,7 +434,9 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         except Exception as e:  # noqa: BLE001 - the interruption is what the caller must see
             interrupted.add_note(f"the interrupted attempt was not recorded: {e}")
         raise interrupted
-    return v, _record(lg, v, reported_by, report)
+    rec = _record(lg, v, reported_by, report)
+    rec.outcome = _decide(lg, v, rec)
+    return v, rec
 
 
 def _signal_name(e: BaseException | None) -> str | None:
@@ -435,7 +454,12 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
                                    "reported_checks": report.mentions if report else []}
         if report is not None:
             payload["report"] = {"sha256": report.sha256, "bytes": report.bytes}
-        claim = lg.as_agent(reported_by).propose_claim(
+        proposer = lg
+        if lg.token is None:
+            proposer = lg.as_agent(reported_by)
+        else:  # a token is one agent: the verifier records the claim and names the reporter (ledger.implementers)
+            payload["reported_by"] = reported_by
+        claim = proposer.propose_claim(
             "completion", f"{v.piece} is complete at {v.commit[:12]}", payload=payload,
             tags=[f"piece:{v.piece}", f"commit:{v.commit}"])
     r = lg.record_experiment(v.config(), v.metrics(), run_status=v.run_status, code_ref=v.commit, notes=v.notes(),
@@ -449,3 +473,64 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
             rec.relation = "supports" if v.all_passed else "refutes"
             lg.link(r.id, rec.relation, claim.id)
     return rec
+
+
+def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
+    """Step 5. The ledger's rule (decide, rule all_pass) is what makes a completion verified; this only picks the
+    decision the evidence calls for and asks the rule before writing anything."""
+    from .ids import short
+    from .ledger import DECIDERS, TRANSITIONS
+
+    if rec.claim_id is None:
+        return Outcome(None, "no completion claim to decide (no --reported-by)")
+    if lg.role not in DECIDERS:
+        return Outcome(None, f"recorded without a decision: {lg.agent} has role {lg.role}, and verify decides only "
+                             "with lead authority (orchestrator or human role)")
+    info = lg.completion_attempts(rec.claim_id)
+    assert info is not None
+    status, claim, attempts = info["status"], rec.claim_id, info["attempts"]
+    human = f"benchbook decide {short('claim', claim)} verified|refuted --oracle human --as human --rationale ..."
+    if touched := [a for a in attempts if a["guard_touched"] is True or a["checks_changed"] is True]:
+        files = sorted({f for a in touched for f in a["guard_files"]})
+        changed = any(a["checks_changed"] is True for a in touched)
+        what = " and ".join(([f"{len(files)} guarded file(s)"] if files else []) + (["[checks]"] if changed else []))
+        return Outcome(None, f"no decision: the commit changed {what or 'a guarded path'}, so a re-run cannot verify "
+                             f"it; a person has to decide ({human})", [a["id"] for a in touched], person=True,
+                       guard_files=files, checks_changed=changed)
+    mine = next((a for a in attempts if a["id"] == rec.experiment_id), None)
+    if mine is None:  # the claim names another piece or commit than this run (an older claim with the same text)
+        return Outcome(None, f"no decision: {short('claim', claim)} is about {info['piece']} at "
+                             f"{str(info['commit'])[:12]}, not this run", person=True)
+    others = [a for a in attempts if a["id"] != rec.experiment_id]
+    if differ := [a for a in others if a["passed"] != mine["passed"]]:
+        evidence = [rec.experiment_id, *(a["id"] for a in differ)]
+        ids = ", ".join(f"{short('experiment', a['id'])} by {a['author']}" for a in differ)
+        said = "passed" if mine["passed"] else "failed"
+        if "inconclusive" not in TRANSITIONS.get(status, set()):
+            return Outcome(None, f"no decision: this re-run {said} and {ids} did not, but the claim is already "
+                                 f"{status}; a person decides ({human})", evidence, person=True)
+        d = lg.decide(claim, "inconclusive", "rerun",
+                      f"check verify: the re-run of {v.piece} at {v.commit[:12]} {said}, {ids} did not", evidence)
+        return Outcome("inconclusive", f"inconclusive: the re-run {said} and {ids} did not", evidence, [d.id])
+    if not mine["passed"]:
+        return Outcome(None, "no decision: a check failed, and the refutes link records it (refuted is final, so a "
+                             "person decides it; or the implementer reports a fixed commit)", [rec.experiment_id])
+    evidence = [rec.experiment_id, *(a["id"] for a in others)]
+    if status == "verified":
+        return Outcome(None, "already verified; this re-run agrees", evidence)
+    if status not in ("proposed", "inconclusive", "supported"):
+        return Outcome(None, f"no decision: the claim is {status}", evidence)
+    try:
+        detail = lg.check_rerun(claim, evidence)
+    except InvalidTransition as e:
+        return Outcome(None, f"no decision: {e}", evidence, person=True)
+    why = (f"check verify: every declared check passed in a re-run of {v.piece} at {v.commit[:12]} by {lg.agent}, "
+           f"nothing guarded touched, [checks] unchanged; implementer {', '.join(detail['implementers'])}")
+    done = []
+    if status != "supported":
+        done.append(lg.decide(claim, "supported", "rerun", why, evidence).id)
+    try:
+        done.append(lg.decide(claim, "verified", "rerun", why, evidence).id)
+    except InvalidTransition as e:  # something was recorded between the check and the decision
+        return Outcome(None, f"supported, not verified: {e}", evidence, done, person=True)
+    return Outcome("verified", f"verified (oracle rerun, {len(evidence)} attempt(s) as evidence)", evidence, done)

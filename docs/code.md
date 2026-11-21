@@ -64,13 +64,15 @@ What it does:
    runner with its timeout. A commit that rewrites a check's command still gets the merge-base's command, and the
    change shows up as `checks_changed`. The worktree and its git metadata are removed afterwards, also when a check
    times out or the command is interrupted.
-4. Records, with no decision: the completion claim in the implementer's name (status `proposed`), the attempt in
-   the verifier's name, and a `supports` (every check passed) or `refutes` link from the attempt to the claim.
-   An interrupted run is recorded with `run_status = "error"` and no link.
-5. Prints the table.
+4. Records the completion claim in the implementer's name (status `proposed`; under a token, in the verifier's
+   name with `payload.reported_by`), the attempt in the verifier's name, and a `supports` (every check passed) or
+   `refutes` link from the attempt to the claim. An interrupted run is recorded with `run_status = "error"` and
+   no link.
+5. Decides, only with lead authority: see [Verified completion](#verified-completion).
+6. Prints the table and the decision.
 
-The verifier is `--agent` or `BENCHBOOK_AGENT` when set, else `verifier@<host>` (registered with the harness
-role). It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
+The verifier is `--agent` or `BENCHBOOK_AGENT` when set (with `BENCHBOOK_TOKEN`, the token's agent), else
+`verifier@<host>` (registered with the harness role). It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
 
 Verifying the same commit again is recorded too (the pack's `dedup_mode = "notify"`): the new attempt names the
 first one in `duplicate_of`, and its link goes to the same completion claim.
@@ -102,16 +104,103 @@ payload `{"piece", "commit", "reported_checks"}` and, with `--report-file`, `"re
 failure signature and a hash of the last output line. The output is shown to whoever runs the command and deleted
 with the worktree.
 
-## What "verified" will mean
+## Verified completion
 
-The measurement stage records evidence and decides nothing. When decisions are added, `verified` for a completion
-will mean exactly this: **the declared checks passed in an independent re-run** of the reported commit, by an agent
-other than the one that reported it, with no guarded path touched and no check changed.
+`verified` for a completion means exactly this: **the declared checks passed in an independent re-run** of the
+reported commit, by an agent other than the one that implemented it, with no guarded path touched and no check
+changed, and no finished attempt of that piece at that commit failed.
 
-It will not mean the code is correct, that the checks test what the piece promised, or that a reviewer read it.
+It does not mean the code is correct, that the checks test what the piece promised, or that a reviewer read it.
 An exit code only says a command finished; whether the checks test the claim is decided by the person who declares
-them. A commit that touched a guarded path or changed `[checks]` will need a person's judgement, however green its
+them. A commit that touched a guarded path or changed `[checks]` needs a person's judgement, however green its
 re-run.
+
+### The policy
+
+The code pack's `pack.toml` declares it:
+
+```toml
+[verify]
+rule = "all_pass"
+min_runs = 1      # passing independent re-runs needed
+min_authors = 2   # distinct agents needed, counting the implementer: the implementer and one other
+```
+
+`benchbook decide <claim> verified --oracle rerun --evidence <attempts>` on a completion is accepted only when all of
+these hold; otherwise it is refused, and the message says why and that a person decides with `--oracle human`:
+
+- every evidence id is a valid (not invalidated) attempt with `run_status = "ok"` of the claim's piece
+  (`config.piece`) at its commit (`code_ref`);
+- at least `min_runs` of them are by agents other than the implementer (see below), from at least
+  `min_authors - 1` such agents, each with `checks_passed == checks_total`, `checks_total > 0`, and
+  `guard_touched` and `checks_changed` stored as `false`;
+- no valid finished attempt of that piece at that commit, cited or not and by anyone, failed a check, touched a
+  guarded path or changed `[checks]`. A clean re-run does not wash out another run's guard flag, and runs that
+  disagree are a person's call. A lead who finds a run was broken (no network, wrong machine) invalidates it
+  (`benchbook decide <attempt> invalidated --oracle human ...`) and it stops counting;
+- the deciding agent is not the implementer, whatever the oracle (`human` included).
+
+The `human` oracle stays open for everything else: a person can verify a commit that changed a test on purpose,
+and the decision is recorded with oracle `human`. Other packs (core, ml-research) keep the replication rule
+(`rule = "replication"`, the default): seeds, authors and the baseline, as in [concepts.md](concepts.md).
+
+Claim status is the latest decision (`v_claim_status`); refuting links are counted there (`n_refute`) but do not
+change the status by themselves. What keeps a completion with a failing re-run from being verified is the third
+rule above, not the view. The state graph still applies: a claim goes `proposed -> supported -> verified`, and
+`refuted` is final.
+
+### Who the implementer is
+
+The implementer of a completion is the claim's author and the agent named in `payload.reported_by`, if any. The
+one exception is a claim recorded for someone else: when the author has the orchestrator, human or harness role
+and names a different `reported_by`, only that reporter is the implementer. That is how `check verify` records a
+completion under a token (below). A worker that names someone else as the reporter stays an implementer: naming
+another reporter can only add to the set. Attempts by the implementer, the reporter's own passing runs included,
+never count as independent, and the implementer cannot decide its own completion.
+
+### What `check verify` decides
+
+With lead authority (the verifier has the orchestrator or human role: `--agent lead`, or a lead's token),
+`check verify <piece> <commit> --reported-by <implementer>` decides after recording. There are three outcomes:
+
+1. **verified**: every check passed, nothing guarded was touched, `[checks]` is unchanged, and no earlier
+   attempt of the piece at the commit disagrees. verify asks the rule first (`Ledger.check_rerun`, which writes
+   nothing), then writes `supported` and `verified` (oracle `rerun`). The evidence is the re-run and the
+   earlier passing attempts of that commit; `oracle_detail.rerun_check` names the implementer and the
+   independent authors.
+2. **inconclusive**: an earlier attempt of the piece at the commit disagrees with the re-run. The main case is
+   the implementer's own recorded passing attempt against a failing re-run, but any earlier valid finished
+   attempt counts, in either direction (a re-run that now passes after an earlier one failed is flaky, and a
+   person looks at it). The decision's evidence holds the re-run's id and the disagreeing attempts' ids.
+3. **No decision, a person decides**: the commit touched a guarded path or changed `[checks]`. The output names
+   the changed files and the `benchbook decide ... --oracle human` line to run.
+
+Otherwise nothing is decided and the output says why: a check failed and no earlier pass disagrees (the refutes
+link records it; `refuted` is final, so a person decides it, or the implementer reports a fixed commit), the
+claim is already `verified` (a second verify of the same commit is recorded as a repeat with `duplicate_of` and
+decides nothing), or the rule refused (its message is printed).
+
+Without lead authority (the default `verifier@<host>` has the harness role) verify records the claim, the attempt
+and the link as before, decides nothing, and says so. A lead can decide later from those records.
+
+`--json` adds `decision` (`verified`, `inconclusive` or null), `decision_reason`, `needs_person`, `evidence`
+and `decisions`. The exit code still says only whether every check passed.
+
+### Local mode and tokens
+
+In local mode (the owner's database URL), agent names are whatever a process says it is, and roles are given when a
+name is first used. The rules above stop an agent from verifying its own report under its own name, and stop the
+lead from counting the implementer's own runs. They cannot stop an implementer from reporting as `impl` and
+re-running as `impl-2`, or from registering a name with the orchestrator role and deciding. Independence in local
+mode catches honest mistakes, not forgery.
+
+With per-agent tokens (a `benchbook_writer` login, [multi-machine.md](multi-machine.md)) every row carries the
+agent whose token wrote it. An implementer with a worker token can record attempts and claims only in its own name
+and cannot decide anything, so its runs never count for its own completion and the independent re-run is the lead's
+(or a CI agent's, with its own token). A token is one agent, so `check verify` under a token cannot propose the
+claim in the implementer's name: the verifier proposes it and puts `--reported-by` in `payload.reported_by`,
+which makes the reporter the implementer as described above. What tokens do not cover: an operator who issues one
+person two names, and the lead's role itself, which is trusted to record for others.
 
 ## The numbers
 

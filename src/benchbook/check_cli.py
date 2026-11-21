@@ -34,7 +34,9 @@ def verify(
 
     The checks are those declared at the merge-base of the base and COMMIT, never the ones COMMIT brings.
 
-    The verifier is --agent or BENCHBOOK_AGENT, else verifier@<host>; it must differ from --reported-by."""
+    The verifier is --agent or BENCHBOOK_AGENT (or BENCHBOOK_TOKEN's agent), else verifier@<host>; it must differ
+    from --reported-by. With lead authority (orchestrator or human role) verify also decides: verified, inconclusive,
+    or nothing when a guarded path or [checks] changed (docs/code.md)."""
     from .checks import default_verifier
     from .checks import verify as run_verify
     from .cli import STATE, csv, emit
@@ -43,7 +45,9 @@ def verify(
     from .runner import Interrupted
 
     name = STATE["agent"] or env("AGENT")
-    lg = Ledger.open(project=STATE["project"], agent=name or default_verifier(), role=None if name else "harness")
+    token = env("TOKEN")  # the token names the verifier; a default name would contradict it
+    lg = Ledger.open(project=STATE["project"], agent=name or (None if token else default_verifier()),
+                     role=None if name or token else "harness")
     want = lg.pack.project_defaults
     if want and (lg.project.primary_metric != want.get("metric")
                  or lg.project.settings.get("partition_key") != want.get("settings", {}).get("partition_key")):
@@ -70,6 +74,7 @@ def verify(
 def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
     from .ids import short
 
+    out = rec.outcome
     return {
         "ok": v.all_passed, "piece": v.piece, "commit": v.commit, "base": v.base.ref, "merge_base": v.base.merge_base,
         "results": [{"name": r.name, "status": r.status, "exit_code": r.exit_code, "duration_ms": r.duration_ms,
@@ -79,6 +84,10 @@ def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
         "claim": short("claim", rec.claim_id) if rec.claim_id else None, "reported_by": rec.reported_by,
         "relation": rec.relation,
         "duplicate_of": short("experiment", rec.duplicate_of) if rec.duplicate_of else None, "notice": rec.notice,
+        "decision": out.decision if out else None, "decision_reason": out.reason if out else None,
+        "needs_person": out.person if out else False,
+        "evidence": [short("experiment", e) for e in out.evidence] if out else [],
+        "decisions": [short("decision", d) for d in out.decision_ids] if out else [],
     }
 
 
@@ -111,4 +120,12 @@ def render(v: Verification, rec: Recorded) -> str:
         rel = (f" {rec.relation or 'recorded beside'} {short('claim', rec.claim_id)} "
                f"(completion reported by {rec.reported_by})")
     lines.append(f"recorded {short('experiment', rec.experiment_id)} as {rec.verifier}{rel}")
+    if rec.outcome is not None:
+        lines.append(f"decision: {rec.outcome.reason}")
+        if rec.outcome.guard_files:
+            lines += [f"  changed: {f}" for f in rec.outcome.guard_files[:20]]
+            if len(rec.outcome.guard_files) > 20:
+                lines.append(f"  ... and {len(rec.outcome.guard_files) - 20} more")
+        if rec.outcome.checks_changed:
+            lines.append("  changed: the [checks] table of .benchbook/config.toml")
     return "\n".join(lines)

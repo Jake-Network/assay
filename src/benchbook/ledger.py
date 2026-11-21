@@ -988,6 +988,8 @@ class Ledger:
                 if new_status not in TRANSITIONS.get(cur, set()) and not force:
                     raise InvalidTransition(f"{cur} -> {new_status} is outside the claim state graph; pass force=True "
                                             "if you mean it")
+                if new_status == "verified" and self.pack.verify.rule == "all_pass":
+                    self._check_not_implementer(conn, tid)  # whatever the oracle, human included
                 if new_status == "verified" and oracle == "rerun":
                     check = self._check_rerun(conn, tid, {eid for kind, eid in resolved if kind == "experiment"})
                     oracle_detail = {**(oracle_detail or {}), "rerun_check": check}
@@ -999,7 +1001,113 @@ class Ledger:
                  self.agent, last["created_at"] if last else None)).fetchone()
         return Decision(**{k: r[k] for k in Decision.model_fields})
 
+    def check_rerun(self, claim: str | UUID, evidence_ids: Sequence[str | UUID]) -> dict[str, Any]:
+        """What decide(claim, "verified", "rerun", evidence_ids=...) would check, without writing anything: the
+        rerun_check it would store, or the InvalidTransition it would raise. check verify asks before it writes the
+        'supported' step, so a refused rerun does not leave a claim half decided."""
+        cid = self._rid(claim, "claim")
+        assert cid is not None
+        resolved = [self.resolve(e) for e in evidence_ids]
+        with self._conn() as conn:
+            if self.pack.verify.rule == "all_pass":
+                self._check_not_implementer(conn, cid)
+            return self._check_rerun(conn, cid, {eid for kind, eid in resolved if kind == "experiment"})
+
+    def completion_attempts(self, claim: str | UUID) -> dict[str, Any] | None:
+        """A completion claim's piece, commit, implementers and status, and the valid finished attempts of that piece
+        at that commit, oldest first (attempt_summary). None for a claim of another kind."""
+        cid = self._rid(claim, "claim")
+        assert cid is not None
+        with self._conn() as conn:
+            info = self._completion(conn, cid)
+            if info is None:
+                return None
+            st = conn.execute("SELECT status FROM benchbook.v_claim_status WHERE id=%s", (cid,)).fetchone()
+            return {**info, "implementers": sorted(info["implementers"]), "status": st["status"],
+                    "attempts": self._attempts(conn, info["piece"], info["commit"])}
+
+    def _completion(self, conn: psycopg.Connection[Any], claim_id: UUID) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT c.kind, c.author, c.payload, a.role AS author_role FROM benchbook.claims c"
+            " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
+            " WHERE c.project_id=%s AND c.id=%s", (self.project_id, claim_id)).fetchone()
+        if row is None or row["kind"] != "completion":
+            return None
+        payload: dict[str, Any] = row["payload"]
+        return {"piece": payload.get("piece"), "commit": payload.get("commit"),
+                "implementers": implementers(row["author"], row["author_role"], payload.get("reported_by"))}
+
+    def _attempts(self, conn: psycopg.Connection[Any], piece: Any, commit: Any) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT id, author, metrics FROM benchbook.experiments_valid WHERE project_id=%s AND run_status='ok'"
+            " AND config ->> 'piece' = %s AND code_ref = %s ORDER BY created_at, id",
+            (self.project_id, piece, commit)).fetchall()
+        return [attempt_summary(r["id"], r["author"], r["metrics"]) for r in rows]
+
+    def _check_not_implementer(self, conn: psycopg.Connection[Any], claim_id: UUID) -> None:
+        info = self._completion(conn, claim_id)
+        if info is not None and self.agent in info["implementers"]:
+            raise InvalidTransition(
+                f"{self.agent} is the implementer of this completion ({', '.join(sorted(info['implementers']))}): an "
+                "implementer cannot verify its own completion, by any oracle. Another lead or a person decides.")
+
     def _check_rerun(self, conn: psycopg.Connection[Any], claim_id: UUID, experiment_ids: set[UUID]) -> dict[str, Any]:
+        """The pack's [verify] rule: all_pass for completions (code pack), replication otherwise."""
+        if self.pack.verify.rule == "all_pass":
+            return self._check_all_pass(conn, claim_id, experiment_ids)
+        return self._check_replication(conn, claim_id, experiment_ids)
+
+    def _check_all_pass(self, conn: psycopg.Connection[Any], claim_id: UUID,
+                        experiment_ids: set[UUID]) -> dict[str, Any]:
+        """A completion is verified by re-runs, not by its implementer's word or its own runs (docs/code.md):
+        at least min_runs cited attempts of the piece at the commit, by agents other than the implementer
+        (min_authors counts the implementer), with every check passed, guard_touched and checks_changed false.
+        And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, touched a
+        guarded path or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
+        that disagree are a person's call."""
+        human = "a person decides with oracle human (benchbook decide CLAIM verified --oracle human --as human)"
+        info = self._completion(conn, claim_id)
+        if info is None:
+            raise InvalidTransition(f"pack {self.pack.name} verifies only completion claims by rerun (rule all_pass); "
+                                    f"for this claim {human}")
+        piece, commit, impl = info["piece"], info["commit"], info["implementers"]
+        at = f"{piece} at {str(commit)[:12]}"
+        attempts = self._attempts(conn, piece, commit)
+        by_id = {a["id"]: a for a in attempts}
+        if not experiment_ids or not experiment_ids <= set(by_id):
+            raise InvalidTransition(f"rerun evidence must be valid finished attempts of {at} "
+                                    "(config.piece and code_ref of the completion)")
+        if touched := [a for a in attempts if a["guard_touched"] is True or a["checks_changed"] is True]:
+            files = sorted({f for a in touched for f in a["guard_files"]})
+            what = (f"changed guarded files ({', '.join(files[:10])}{' ...' if len(files) > 10 else ''})"
+                    if files else "touched a guarded path")
+            if any(a["checks_changed"] is True for a in touched):
+                what = (what + " and " if files else "") + "changed [checks]"
+            raise InvalidTransition(f"the commit of {at} {what} (attempt "
+                                    f"{', '.join(short('experiment', a['id']) for a in touched)}): a re-run cannot "
+                                    f"verify it, however green; {human}")
+        if failed := [a for a in attempts if not a["passed"]]:
+            raise InvalidTransition(
+                "not every attempt of " + at + " passed: " + ", ".join(
+                    f"{short('experiment', a['id'])} by {a['author']}" for a in failed)
+                + f" failed. Runs that disagree do not verify; decide inconclusive or refuted, or {human}")
+        pol = self.pack.verify
+        independent = [by_id[e] for e in experiment_ids
+                       if by_id[e]["author"] not in impl and by_id[e]["guard_touched"] is False
+                       and by_id[e]["checks_changed"] is False]
+        authors = {a["author"] for a in independent}
+        if len(independent) < pol.min_runs or len(authors) + 1 < pol.min_authors:
+            raise InvalidTransition(
+                f"rule all_pass needs >= {pol.min_runs} passing re-run(s) of {at} by >= {pol.min_authors - 1} "
+                f"agent(s) other than the implementer ({', '.join(sorted(impl))}), with guard_touched and "
+                f"checks_changed false; the evidence has {len(independent)} by {len(authors)} "
+                f"({', '.join(sorted(authors)) or 'none'}). The implementer's own runs do not count; "
+                f"run benchbook check verify as another agent, or {human}")
+        return {"rule": "all_pass", "piece": piece, "commit": commit, "implementers": sorted(impl),
+                "runs": len(independent), "authors": sorted(authors), "attempts": len(attempts)}
+
+    def _check_replication(self, conn: psycopg.Connection[Any], claim_id: UUID,
+                           experiment_ids: set[UUID]) -> dict[str, Any]:
         """Check the evidence mean and require independent reruns to also beat the baseline for an improvement."""
         prow = conn.execute("SELECT settings, improve_epsilon, primary_metric, metric_direction FROM benchbook.projects"
                             " WHERE id=%s", (self.project_id,)).fetchone()
@@ -1369,6 +1477,30 @@ class Ledger:
         """Full-privilege read for adapters (viewer). Not exposed to agents."""
         with self._conn() as conn:
             return conn.execute(query, params).fetchall()  # type: ignore[no-any-return]
+
+
+def implementers(author: str, author_role: str | None, reported_by: Any) -> set[str]:
+    """Who did the work a completion claim reports; none of them can verify it (docs/code.md). The claim's author
+    and the reporter named in payload.reported_by. The author is left out only when it recorded the claim for
+    someone else: a lead, a person or a harness verifier naming a different reporter, which is what check verify
+    does under a token, where it cannot write in the reporter's name. A worker that names someone else stays an
+    implementer: naming another reporter can only add to the set."""
+    reporter = reported_by if isinstance(reported_by, str) and reported_by else None
+    if reporter is not None and reporter != author and author_role in ("orchestrator", "human", "harness"):
+        return {reporter}
+    return {author} | ({reporter} if reporter is not None else set())
+
+
+def attempt_summary(id: UUID, author: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    """One code attempt as the all_pass rule reads it. passed: every check ran and passed (checks_total > 0). The
+    guard flags are kept as stored: only an explicit false counts as untouched."""
+    total, passed = metrics.get("checks_total"), metrics.get("checks_passed")
+    ok = (isinstance(total, int) and not isinstance(total, bool) and total > 0 and passed == total
+          and isinstance(passed, int) and not isinstance(passed, bool))
+    files = metrics.get("guard_files")
+    return {"id": id, "author": author, "passed": ok,
+            "guard_touched": metrics.get("guard_touched"), "checks_changed": metrics.get("checks_changed"),
+            "guard_files": [f for f in files if isinstance(f, str)] if isinstance(files, list) else []}
 
 
 def partition_text(v: Any) -> str | None:

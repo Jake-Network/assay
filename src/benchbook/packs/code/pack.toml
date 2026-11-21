@@ -7,6 +7,15 @@ dedup_ignore = ["approach", "paths", "notes"]
 dedup_mode = "notify"
 ok_metrics_required = ["checks_passed", "checks_total"]
 
+# What verifies a completion by oracle rerun (docs/code.md, "Verified completion"): at least min_runs re-runs of the
+# piece at its commit, by agents other than its implementer (min_authors counts the implementer), in which every
+# check passed, no guarded path was touched and [checks] did not change, and no finished attempt of that piece and
+# commit failed. Anything less needs a person's decision (oracle human).
+[verify]
+rule = "all_pass"
+min_runs = 1
+min_authors = 2
+
 # `benchbook init --pack code` without --metric/--direction. The partition is the piece (spec §6): best and outcome
 # are per piece, and v_leaderboard ranks within a piece, so one piece's failures are not pushed out by another's passes.
 [project]

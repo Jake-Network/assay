@@ -38,6 +38,11 @@ partition. A claim that states a reproduced value sets `payload.measurement: tru
 `payload.mean` that matches the evidence mean. Result claims also have to match the evidence mean.
 Decisions store the values checked in `oracle_detail.rerun_check`. `llm_judge` can support a claim.
 
+This is the default `rerun` rule (`[verify] rule = "replication"` in pack.toml). The code pack declares
+`rule = "all_pass"` instead: a completion is verified by passing, clean re-runs of its piece at its commit by
+agents other than its implementer, and a commit that touched a guarded path or changed `[checks]` needs a person
+([code.md](code.md#verified-completion)).
+
 An experiment's only status change is `invalidated` (an evaluator bug or exploit was found). Invalidated
 experiments are excluded from best, outcome calculation, "already tried", and recent brief activity. Claims
 that rely entirely on invalidated evidence are flagged `evidence_invalidated`. A lead or human decides whether
