@@ -23,13 +23,16 @@ if [[ ! -f "$WHEEL" ]]; then
     echo "smoke: no such wheel: $WHEEL" >&2
     exit 2
 fi
-WHEEL="$(cd "$(dirname "$WHEEL")" && pwd)/$(basename "$WHEEL")"
 # benchbook-<version>-py3-none-any.whl
 VERSION="$(basename "$WHEEL")"
 VERSION="${VERSION#benchbook-}"
 VERSION="${VERSION%%-*}"
 
 WORK="$(mktemp -d)"
+# uvx keeps a cached environment per wheel path, and a rebuilt wheel usually has the same file name. Run a copy at a
+# path no earlier run used, so that what is checked is this file and not the previous build.
+cp "$WHEEL" "$WORK/"
+WHEEL="$WORK/$(basename "$WHEEL")"
 # uv keeps its cache and its Pythons under HOME. Keep using the real ones, so that moving HOME moves only what
 # benchbook itself writes and a local run does not download every dependency again.
 UV_CACHE_DIR="$(uv cache dir)"

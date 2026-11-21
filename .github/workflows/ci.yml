@@ -35,6 +35,8 @@ jobs:
         with:
           fetch-depth: 0   # the package version is derived from git history and tags
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false   # every dependency is downloaded, as on a new user's machine
       - run: uv build --no-sources
       # uvx --from dist/*.whl benchbook doctor, benchbook init in an empty directory, doctor again
       - run: bash scripts/smoke_wheel.sh

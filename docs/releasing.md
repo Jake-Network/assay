@@ -14,7 +14,7 @@ uploads anything and the repository stores no PyPI token: PyPI trusts the workfl
 The version is not written in any file. hatch-vcs derives it from git: the commit tagged `v0.1.0` builds `0.1.0`, any
 other commit builds `0.1.devN+g<commit>`. `benchbook --version` and the first line of `benchbook doctor` print it.
 
-Two checks run long before a tag:
+These checks run long before a tag:
 
 - `ci.yml` has the same `smoke` job on every push and pull request. It builds the wheel and runs
   `uvx --from dist/*.whl benchbook doctor`, `benchbook init` in an empty directory and `doctor` again, on runners that
@@ -23,6 +23,8 @@ Two checks run long before a tag:
 - `tests/test_packaging.py` builds both distributions and compares them with git: every tracked file of the package
   is in the wheel (SQL, packs, templates, static files, `py.typed`, the generated `_version.py`), the sdist is the
   tracked tree, and a file that only a local or global git exclude hides is reported instead of shipped.
+  `tests/test_release.py` reads the two workflows: no stored token, the publishing permission in the `publish` job
+  alone, both systems in the smoke run, and the names in this document equal to the ones in `release.yml`.
 
 To run the smoke check yourself (it moves `HOME` to a temp directory, so it never touches your ledger):
 
