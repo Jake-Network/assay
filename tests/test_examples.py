@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -91,6 +92,30 @@ def test_scripted_verification_is_limited_to_the_recorded_seeds(lead: Ledger, wo
         (lead.project_id,),
     )
     assert [d["oracle_detail"]["seeds"] for d in decisions] == [[0, 1, 2], [0, 1, 2, 4]]
+
+
+def test_readme_exp_run_command_scores_and_records_a_config(db_url: str, tmp_path: Path) -> None:
+    """The one command README.md (b) gives workers: exp run around run_config.py."""
+    readme = (ROOT / "examples/circle-packing/README.md").read_text()
+    cmd = "benchbook exp run --config '<json>' --seed <n> --code-ref packing-v1 -- python run_config.py"
+    assert cmd in readme and "run_config.py" in (ROOT / "examples/circle-packing/scripted_swarm.py").read_text()
+    pid = f"cp-{uuid.uuid4().hex[:6]}"
+    Ledger.init_project(pid, goal="pack", metric="sum_radii", direction="max", database_url=db_url)
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "BENCHBOOK_PROJECT": pid, "BENCHBOOK_AGENT": "worker-1"}
+    argv = [sys.executable, "-m", "benchbook.cli", "exp", "run", "--config",
+            '{"init": "hex", "optimizer": "slsqp", "iters": 100}', "--seed", "0", "--code-ref", "packing-v1",
+            "--", sys.executable, "run_config.py"]
+    p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT / "examples/circle-packing", env=env, timeout=120)
+    assert p.returncode == 0, p.stderr
+    out, receipt = p.stdout.rstrip("\n").split("\n")
+    score = json.loads(out)["sum_radii"]
+    assert score > 2.6 and receipt.startswith("benchbook: recorded e:") and f"sum_radii={score}" in receipt
+    lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
+    [e] = lead.sql_internal("SELECT * FROM benchbook.experiments WHERE project_id=%s", (pid,))
+    assert e["metrics"]["sum_radii"] == score and e["code_ref"] == "packing-v1" and e["author"] == "worker-1"
+    again = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT / "examples/circle-packing", env=env,
+                           timeout=120)
+    assert again.returncode == 2 and receipt.split()[2] in again.stdout  # not run again
 
 
 def test_bench_dry(tmp_path: Path) -> None:

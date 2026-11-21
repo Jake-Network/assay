@@ -5,9 +5,11 @@ with no LLM calls. Used for CI, the viewer demo and `bench --dry`.
     benchbook serve     # in another terminal, then open http://127.0.0.1:7466
 
 Workers claim tasks, read their brief, check_tried before every evaluation and record every result,
-failures included. Some workers are deliberately careless (they sometimes re-run a config that was already
-tried) so that duplicate rejection shows up. The lead creates tasks, asks for replications of the best
-configuration and marks a claim verified once the rerun rule (>= 3 seeds, >= 2 agents) holds.
+failures included. They call the SDK in process; an agent with a shell does the same in one command per
+evaluation, `benchbook exp run ... -- python run_config.py` (README.md). Some workers are deliberately careless
+(they sometimes re-run a config that was already tried) so that duplicate rejection shows up. The lead creates
+tasks, asks for replications of the best configuration and marks a claim verified once the rerun rule
+(>= 3 seeds, >= 2 agents) holds.
 """
 from __future__ import annotations
 

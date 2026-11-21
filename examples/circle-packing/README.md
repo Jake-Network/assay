@@ -8,7 +8,8 @@ benchmark; the best known value is about 2.635). Evaluation takes well under a s
 | `evaluator.py` | runs a program and re-checks its circles itself (count, containment, overlap); never trusts reported scores. Violations within 1e-9 shrink every radius by that amount, so the tolerance cannot add score |
 | `seed_program.py` | a 6x5 grid starting point (2.1667) |
 | `packing.py` | configurable heuristics: `init` (grid, hex, random, lattice_perturb), `optimizer` (slsqp, penalty), `iters`, `perturb` |
-| `scripted_swarm.py` | N worker processes and a scripted lead, no LLM |
+| `run_config.py` | scores one `packing.py` configuration and prints `evaluator.py`'s JSON line; the command workers run through `benchbook exp run` |
+| `scripted_swarm.py` | N worker processes and a scripted lead, no LLM (they use the Python SDK in process) |
 
 Needs `numpy` and `scipy` (`pip install 'benchbook[examples]'`).
 
@@ -26,7 +27,7 @@ a different worker, it verifies the observed minimum for the tested seeds. The d
 ## (b) A real swarm in Claude Code
 
 ```bash
-cp examples/circle-packing/{evaluator.py,packing.py,seed_program.py} /path/to/scratch-repo/
+cp examples/circle-packing/{evaluator.py,packing.py,run_config.py,seed_program.py} /path/to/scratch-repo/
 cd /path/to/scratch-repo && git init
 benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles in the unit square." \
   --metric sum_radii --direction max
@@ -35,8 +36,22 @@ benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles i
 In Claude Code (with the plugin installed):
 
 ```
-/benchbook:benchbook-lead Maximize sum_radii; workers write program files and score them with python evaluator.py <file>; 2 rounds, 4 workers
+/benchbook:benchbook-lead Maximize sum_radii over packing.py configs (init, optimizer, iters, perturb); workers evaluate each one with: benchbook exp run --config '<json>' --seed <n> --code-ref packing-v1 -- python run_config.py ; 2 rounds, 4 workers
 ```
+
+Each evaluation is that one command. `benchbook exp run` asks the ledger first: a config, code_ref and seed that
+already ran is not run again (exit 2, with the earlier result and its id). Otherwise it runs `run_config.py`,
+which reads the config and seed from the environment `exp run` sets, shows its output, reads `sum_radii` from
+its JSON line and records the result, failures and timeouts included. Its last line names the record:
+
+```
+{"sum_radii": 2.6359317681882644, "max_violation": 0.0}
+benchbook: recorded e:1a2b3c4d improved sum_radii=2.6359317681882644  ★ new best (ok, 1.3s)
+```
+
+Change `--code-ref` when `packing.py` or `evaluator.py` changes. Workers that write their own program files
+score them the same way, with the program's hash as the code_ref:
+`benchbook exp run --config '{"program": "p7.py"}' --code-ref <git hash-object p7.py> -- python evaluator.py p7.py`.
 
 ## (c) What to look at in the viewer
 
