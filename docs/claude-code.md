@@ -89,7 +89,9 @@ time. The processor retries connection failures for about a minute and keeps tho
 Failures a retry cannot fix (the project does not exist in this database, the schema is newer than this assay) move
 the report to the spool's `dead/` folder. Malformed spool files are quarantined with the `.invalid` suffix.
 After an outage or a fix, `assay hook replay` retries pending and dead reports once in the foreground using
-the same database settings. See `~/.local/state/assay/hook.log` for capture and retry status.
+the same database settings. A report queued by a build before this one does not record which
+`ASSAY_HOOK_AGENTS` accepted it; if the current setting does not cover its agent type, it moves to `dead/` instead of
+being dropped, and `ASSAY_HOOK_AGENTS=<the original list> assay hook replay` captures it. See `~/.local/state/assay/hook.log` for capture and retry status.
 
 Earlier builds placed spool files directly in `~/.local/state/assay/spool/` without recording the database target.
 To recover one, use the environment and project settings from the original session and run

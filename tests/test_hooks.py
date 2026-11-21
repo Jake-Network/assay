@@ -455,3 +455,27 @@ def test_replay_keeps_the_capture_decision_made_at_enqueue(repo: Path, worker: L
     s = hooks.replay_now(spool)
     assert (s.captured, s.skipped) == (1, 0)
     assert _notes(worker)[0]["payload"]["text"] == "Implementer finding."
+
+
+def test_entry_without_a_recorded_decision_is_kept_for_a_replay_with_its_setting(
+        repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An earlier build queued an implementer report without `accepted`. Replaying under the default setting must not
+    delete it: it waits in dead/ until a replay with the original ASSAY_HOOK_AGENTS captures it."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS", raising=False)
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    entry = {"event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
+             "data": {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "implementer",
+                      "last_assistant_message": "Queued before the upgrade."}}
+    (spool / "old.json").write_text(json.dumps(entry))
+    s = hooks.replay_now(spool)
+    assert (s.captured, s.skipped, s.dead) == (0, 0, 1) and not s.ok
+    assert (spool / "dead" / "old.json").exists() and not _notes(worker)
+    assert "ASSAY_HOOK_AGENTS=" in (hooks._state_dir() / "hook.log").read_text()
+    s = hooks.replay_now(spool)  # a second replay with the wrong setting still keeps it
+    assert s.dead == 1 and (spool / "dead" / "old.json").exists()
+    monkeypatch.setenv("ASSAY_HOOK_AGENTS", "assay-worker,implementer")
+    s = hooks.replay_now(spool)
+    assert (s.captured, s.dead) == (1, 0) and not list(spool.rglob("*.json"))
+    assert _notes(worker)[0]["payload"]["text"] == "Queued before the upgrade."

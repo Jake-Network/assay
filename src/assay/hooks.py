@@ -544,9 +544,21 @@ def process_file(path: Path) -> str:
             return f"retry:could not quarantine invalid spool entry ({e})"
         log(f"invalid hook spool {path} (quarantined): " + traceback.format_exc())
         return f"dead:invalid spool entry ({e})"
+    accepted = spooled.get("accepted") is True
+    if not accepted and not is_worker(_agent_type(data), require_type=False):
+        # Queued by a build that did not record its decision: the ASSAY_HOOK_AGENTS that accepted it may differ
+        # from the current one. Keep it rather than drop it, so a replay with the original setting captures it.
+        reason = (f"agent type {_agent_type(data)!r} is not in the current ASSAY_HOOK_AGENTS and the entry predates "
+                  "the recorded capture decision; to capture it run: ASSAY_HOOK_AGENTS=<the setting it was queued "
+                  "under> assay hook replay")
+        try:
+            _bury(path, reason)
+        except OSError:
+            return f"retry:{reason}"
+        return f"dead:{reason}"
     try:
         result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
-                         fired_at=spooled.get("spooled_at"), accepted=spooled.get("accepted") is True)
+                         fired_at=spooled.get("spooled_at"), accepted=accepted)
         log(f"{event}: {result}")
         path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001
