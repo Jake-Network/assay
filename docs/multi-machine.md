@@ -114,7 +114,10 @@ On a connection made as `benchbook_writer` (or a member of it):
   decide in another agent's name, and a repeat recorded with `duplicate_of` is held to the same rule.
 - Lead-only actions are bound to the token's role: decisions, settings changes, creating open tasks and
   cancelling need an orchestrator or human token. Roles cannot change (migration 0006).
-- Task leases: only the holder heartbeats or completes; a task is claimed only in the claimer's own name.
+- Task leases: only the holder heartbeats or completes; a task is claimed only in the claimer's own name. The
+  `expired` event written when a lease is taken over may name only the previous holder. A worker creates an
+  intent only when the project's `settings.worker_intents` is `true`, and no lease (an intent, a renewal, a claim)
+  may run past `settings.max_lease_seconds` (default 86400 seconds) from now.
 - Setting `benchbook.token`, or any other setting, by hand proves nothing beyond a token the client already holds:
   the triggers hash the value again and look it up. The token hashes are unreadable to the writer, a token is valid
   only for its project, and the identity lasts one transaction, so a pooled connection carries none to its next user.
@@ -129,6 +132,11 @@ Not prevented:
   until it is rotated. A machine holding the lead's token can decide; keep it where the lead runs.
 - **Truthfulness.** An agent can still record made-up metrics under its own name. Independent reruns, CI and
   human review address that; tokens only make "who" checkable.
+- **Rules that live in the SDK.** The database binds rows to the token's agent and role; some rules about their
+  content are the SDK's only, and a writer that sends its own SQL skips them: whether an intent's piece or paths
+  overlap a live one's (path occupancy, docs/code.md; the overlapping row is in the writer's name and lasts at most
+  the lease cap) and `statement_hash`, which the client computes (the database checks only that
+  it is unique per project, so nothing takes a claim's identity from it).
 - **Reads and disruption.** A writer reads every project in the database (row-level security is planned), sees the
   statement text of other sessions of the same login (tokens travel as bind parameters, never in statement text),
   and can disrupt others: hold locks, fill tables, send spurious notifications, or change the shared login's

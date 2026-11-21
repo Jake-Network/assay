@@ -38,6 +38,15 @@ base = "origin/main"
 A check is a shell command run from the repository root; exit code 0 is a pass. Keys other than `cmd`, `junit`
 and `timeout` are errors, so a misspelt key cannot quietly fall back to a default.
 
+`junit = true` is also what makes "nothing ran" visible. An exit code alone cannot tell a passing test run from
+one that stopped before any test (code outside the guarded paths that ends the process with status 0 while the tests
+are collected, a filter that selects nothing). With `junit = true`, exit code 0 is a pass only when the JUnit file
+exists, holds at least one testcase that ran (not skipped), and none of them failed or erred; otherwise the check
+fails with the part `exit 0, no JUnit report` or `exit 0, no tests ran` (or the failing test's). `check verify`
+and `check run` both apply it (`check run` still exits with the command's code and records the failure). A check
+without `junit` is judged by its exit code only. The JUnit file is written by the code under test's own process,
+so this catches a run that ended early, not a commit written to forge the report.
+
 Guard globs are matched against the whole repository-relative path: `*`, `?` and `[...]` stay inside one
 path segment, a `**` segment spans any number of them (`tests/**` is every file under `tests/`, `**/conftest.py`
 is a conftest.py at any depth, the root included). Without `[guard] paths` the three globs above are used.
@@ -66,11 +75,15 @@ What it does:
 3. Runs the checks **declared at the merge-base** in a detached `git worktree` of the commit, each through the core
    runner with its timeout. A commit that rewrites a check's command still gets the merge-base's command, and the
    change shows up as `checks_changed`. The worktree and its git metadata are removed afterwards, also when a check
-   times out or the command is interrupted.
-4. Records the completion claim in the implementer's name (status `proposed`; under a token, in the verifier's
-   name with `payload.reported_by`), the attempt in the verifier's name, and a `supports` (every check passed) or
-   `refutes` link from the attempt to the claim. An interrupted run is recorded with `run_status = "error"` and
-   no link.
+   times out or the command is interrupted. The checks run with the verifier's environment minus the ledger's
+   credentials: `BENCHBOOK_TOKEN`, `BENCHBOOK_DATABASE_URL`, `BENCHBOOK_READER_PASSWORD`, their `ASSAY_` forms,
+   `PGPASSWORD` and `PGPASSFILE` are removed (the code under test is the implementer's, and must not write as the
+   verifier); everything else, `PATH` and the checks' own variables included, is kept. A check that needs a database
+   password takes it from a variable of another name. `check run` runs in the implementer's own environment.
+4. Records the completion claim of the report (status `proposed`; in the implementer's name, or under a token in
+   the verifier's name with `payload.reported_by`; see [the completion claim](#what-is-recorded)), the attempt in
+   the verifier's name, and a `supports` (every check passed) or `refutes` link from the attempt to the claim. An
+   interrupted run is recorded with `run_status = "error"` and no link.
 5. Decides, only with lead authority: see [Verified completion](#verified-completion).
 6. Prints the table and the decision.
 
@@ -146,8 +159,15 @@ FROM v_inflight WHERE is_intent AND tags @> ARRAY['mod:media']
 **Under tokens** (`benchbook_writer` login) the piece is the token's agent's: the intent, its lease and its events
 are in that name, and only that agent can renew it or mark it done; a lead's token can cancel it. On an owner
 connection the agent is `--agent` / `BENCHBOOK_AGENT`, as for every other write. Workers need
-`settings.worker_intents`, which `init --pack code` sets; in an older code project a lead turns it on with
-`Ledger.update_settings({"worker_intents": True})`, or starts the pieces itself.
+`settings.worker_intents` (JSON `true`), which `init --pack code` sets; in an older code project a lead turns it on
+with `Ledger.update_settings({"worker_intents": True})`, or starts the pieces itself. The database enforces that
+setting for a worker's intent, and caps every lease a token sets (an intent, a renewal, a claim) at
+`settings.max_lease_seconds` (default 86400).
+
+**A limit under tokens:** the overlap check (piece name and paths) runs in the SDK, not in the database. A worker
+that writes the task row with its own SQL on the writer login can still take a piece name or paths another agent
+holds, for at most the lease cap; the row is in its name, and `piece list` and `v_inflight` show it. Path occupancy
+prevents accidental collisions between agents that use benchbook, not a writer set on causing one.
 
 From the SDK the same check is available to any intent: `create_intent(..., exclusive_paths=["paths"])` and
 `update_intent(..., exclusive_paths=["paths"])` refuse when the named spec field (a list of globs) overlaps the same
@@ -176,6 +196,23 @@ paths; `guard_touched` counts all.
 The completion claim: statement `<piece> is complete at <sha12>`, tags `piece:<piece>` and `commit:<sha>`,
 payload `{"piece", "commit", "reported_checks"}` and, with `--report-file`, `"report": {"sha256", "bytes"}`.
 `reported_checks` lists the declared check names the report mentions (a mention, not a claimed result).
+
+A claim's identity is the triple (piece, commit, reporter), not its statement. `check verify` reuses a claim only
+when it carries both tags, its payload names the same piece and commit, its statement is one of the two below, and it
+records this reporter's report: its reporter is `--reported-by` (see [Who the implementer is](#who-the-implementer-is))
+or the verifier wrote it exactly as this call would. Otherwise it proposes a new one. When another agent's claim
+already holds the usual statement, the new claim's statement names the reporter:
+`<piece> is complete at <sha12>, reported by <reporter>`; when that one is taken too, it keeps that text under a
+random `statement_hash`. So nobody can take a completion first: a claim with the usual statement and the right payload
+does not give its author the credit, and one with a wrong commit in its payload does not block the piece. Older
+ledgers need nothing: their claims have the usual statement and are found the same way.
+
+`statement_hash` is computed by the client (`dedup.statement_hash`, or a caller's own hash for discarded approaches
+and findings). The database checks only that it is unique in the project; under a token, a writer can store any
+hash with any statement. Nothing reads a claim's identity from it: that is an SDK rule, and the triple above is
+what `check verify` and `pr` match on. A check in the database that the hash fits the statement is not possible
+without refusing the callers that supply their own hash, and would not stop anyone from writing the usual statement
+itself.
 
 **Never stored:** the diff, the check output, the report's text. Only the commit, the guarded paths it changed and
 the failure signature (with its hash of the last error line). The output is shown to whoever runs the command and
@@ -231,12 +268,24 @@ rule above, not the view. The state graph still applies: a claim goes `proposed 
 
 ### Who the implementer is
 
-The implementer of a completion is the claim's author and the agent named in `payload.reported_by`, if any. The
-one exception is a claim recorded for someone else: when the author has the orchestrator, human or harness role
-and names a different `reported_by`, only that reporter is the implementer. That is how `check verify` records a
-completion under a token (below). A worker that names someone else as the reporter stays an implementer: naming
-another reporter can only add to the set. Attempts by the implementer, the reporter's own passing runs included,
-never count as independent, and the implementer cannot decide its own completion.
+The *reporter* of a completion claim is the agent in `payload.reported_by` when the claim's author has the
+orchestrator, human or harness role (it records a report for someone else, as `check verify` does under a token,
+below), and otherwise the author itself, whatever name a worker put in its payload.
+
+The implementers of a completion claim are:
+
+- the claim's author and the agent named in `payload.reported_by`, if any; when the author has the orchestrator,
+  human or harness role and names a different `reported_by`, only that reporter. A worker that names someone else
+  stays an implementer: naming another reporter can only add to the set;
+- and the reporter of every other completion claim of the same piece and commit (same payload `piece` and
+  `commit`, or both tags), whoever wrote it. A second claim can add a name and never take one out, so an agent
+  cannot drop itself from the set by having a lead or CI record the piece again. An agent that claims someone else's
+  piece only makes itself an implementer of it too. A worker's `reported_by` reaches only its own claim, so a worker
+  cannot put the lead or CI into the set of someone else's completion.
+
+Attempts by an implementer, the reporter's own passing runs included, never count as independent, and an
+implementer cannot decide the completion. The rule (`decide`, `check_rerun`), `check verify`'s decision and
+`pr summary` read the same set.
 A run recorded from the implementer's checkout (`metrics.via` set by `check run` or the Bash hook) never counts
 as independent either, whoever its author is: the hook records it as `hook`. Its failure still blocks the commit.
 A run with `worktree_dirty` true did not test the commit it names and is no attempt of that commit at all.
@@ -311,7 +360,7 @@ SELECT count(*) AS completions,
 FROM done d LEFT JOIN touched t USING (id)
 ```
 
-- `completions`: reported completions (one claim per piece and commit). `rerun`: those with at least one finished
+- `completions`: reported completions (one claim per piece, commit and reporter). `rerun`: those with at least one finished
   re-run. `false_completions`: those with at least one re-run in which a check failed. The rate is over `rerun`;
   invalidated attempts do not count (`v_claim_status` leaves them out).
 - `touched_guard` and `changed_checks`: completions whose commit changed a guarded path, or the `[checks]` table.
@@ -527,8 +576,10 @@ benchbook pr comment --repo OWNER/NAME --pr N --body-file F [--author LOGIN] [--
 the end of the message; the key is case-insensitive, and one commit may carry several). For each piece named in
 `BASE..HEAD` the piece's commit is the last commit carrying its trailer. A value that is not a piece name (1-100
 characters, no spaces) is skipped with a warning. `--claims` adds the reporter of the completion claim for that
-piece at that commit (`payload.reported_by`, else the claim's author; `-` for none): passing it to
-`check verify --reported-by` links the re-run to that claim, because the same statement finds the same claim.
+piece at that commit (`-` for none): `payload.reported_by` when a lead, a person or a harness agent recorded the
+claim, otherwise its author ([Who the implementer is](#who-the-implementer-is)). A claim counts when it carries both
+tags and its payload names that piece and commit; with several, a verified one, else the oldest. Passing the reporter
+to `check verify --reported-by` links the re-run to that claim, which verify finds by piece, commit and reporter.
 
 **The action's run**, per piece: `check verify <piece> <commit> --base <base sha> --trace-ref '{"ci":
 "github-actions", "repository", "run_id", "run_attempt", "run_url", "pull_request"}' --no-decide`, with
@@ -564,8 +615,9 @@ run, which any holder of the URL could also use. With a `benchbook_writer` login
 token's agent's (a token is one agent, so all runs share it; the run is in `trace_ref`). The action passes
 `--no-decide` unless its `decide` input is `true` and it holds a token; check verify then decides only if the
 token's role is orchestrator or human. In both modes the checks run the pull request's code in the job that holds
-the credential, so the guarantee is against misreporting, not against a pull request written to take the
-credential; the action's README says what follows from that.
+the credential. `check verify` removes the ledger's credentials from the checks' environment, but the code runs as
+the same user as the verifier, so the guarantee is against misreporting, not against a pull request written to take
+the credential; the action's README says what follows from that.
 
 ## Out-of-scope findings
 

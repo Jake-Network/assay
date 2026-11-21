@@ -1068,8 +1068,20 @@ class Ledger:
         if row is None or row["kind"] != "completion":
             return None
         payload: dict[str, Any] = row["payload"]
-        return {"piece": payload.get("piece"), "commit": payload.get("commit"),
-                "implementers": implementers(row["author"], row["author_role"], payload.get("reported_by"))}
+        piece, commit = payload.get("piece"), payload.get("commit")
+        impl = implementers(row["author"], row["author_role"], payload.get("reported_by"))
+        if isinstance(piece, str) and isinstance(commit, str):
+            # Every completion of the same piece and commit adds whom it reports: a second claim, written by anyone,
+            # can add a name to the set and never take one out (docs/code.md, "Who the implementer is").
+            others = conn.execute(
+                "SELECT c.author, c.payload -> 'reported_by' AS reported_by, a.role AS author_role"
+                " FROM benchbook.claims c"
+                " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
+                " WHERE c.project_id = %s AND c.kind = 'completion' AND c.id <> %s"
+                " AND ((c.payload ->> 'piece' = %s AND c.payload ->> 'commit' = %s) OR c.tags @> %s)",
+                (self.project_id, claim_id, piece, commit, [f"piece:{piece}", f"commit:{commit}"])).fetchall()
+            impl |= {reporter_of(r["author"], r["author_role"], r["reported_by"]) for r in others}
+        return {"piece": piece, "commit": commit, "implementers": impl}
 
     def _attempts(self, conn: psycopg.Connection[Any], piece: Any, commit: Any) -> list[dict[str, Any]]:
         rows = conn.execute(
@@ -1519,14 +1531,28 @@ class Ledger:
             return conn.execute(query, params).fetchall()  # type: ignore[no-any-return]
 
 
+# Roles trusted to record a completion for someone else (check verify under a token, where the verifier cannot write
+# in the reporter's name). A worker's payload.reported_by is a name it chose, not a report it relays.
+RECORDS_FOR_OTHERS = ("orchestrator", "human", "harness")
+
+
+def reporter_of(author: str, author_role: str | None, reported_by: Any) -> str:
+    """Whose report a completion claim records, as far as the ledger can tell: payload.reported_by when the claim's
+    author has a role that records for others, otherwise the author itself, whatever name it put in the payload."""
+    if isinstance(reported_by, str) and reported_by and author_role in RECORDS_FOR_OTHERS:
+        return reported_by
+    return author
+
+
 def implementers(author: str, author_role: str | None, reported_by: Any) -> set[str]:
-    """Who did the work a completion claim reports; none of them can verify it (docs/code.md). The claim's author
+    """Who did the work one completion claim reports; none of them can verify it (docs/code.md). The claim's author
     and the reporter named in payload.reported_by. The author is left out only when it recorded the claim for
     someone else: a lead, a person or a harness verifier naming a different reporter, which is what check verify
     does under a token, where it cannot write in the reporter's name. A worker that names someone else stays an
-    implementer: naming another reporter can only add to the set."""
+    implementer: naming another reporter can only add to the set. Ledger._completion adds, from every other
+    completion of the same piece and commit, its reporter_of."""
     reporter = reported_by if isinstance(reported_by, str) and reported_by else None
-    if reporter is not None and reporter != author and author_role in ("orchestrator", "human", "harness"):
+    if reporter is not None and reporter != author and author_role in RECORDS_FOR_OTHERS:
         return {reporter}
     return {author} | ({reporter} if reporter is not None else set())
 

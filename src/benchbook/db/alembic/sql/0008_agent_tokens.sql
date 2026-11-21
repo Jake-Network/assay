@@ -187,16 +187,27 @@ CREATE TRIGGER projects_identity BEFORE UPDATE ON projects
   FOR EACH ROW EXECUTE FUNCTION guard_project();
 
 -- The task queue is the one table agents update. An untrusted session may make exactly the changes the SDK
--- makes, each tied to its identity; anything else is refused.
+-- makes, each tied to its identity; anything else is refused. Two project settings are enforced here as well:
+-- worker_intents (only a lead creates an intent without it) and max_lease_seconds (default 86400), the longest
+-- lease a claim, an intent or a heartbeat may set. What stays in the SDK: whether an intent's piece or paths
+-- overlap a live one's (Ledger._check_exclusive, _check_paths); a raw INSERT is not checked for that.
 CREATE FUNCTION guard_task() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, benchbook, pg_temp AS $$
-DECLARE me record; decider boolean; same_work boolean;
+DECLARE me record; decider boolean; same_work boolean; st jsonb; max_lease numeric;
 BEGIN
   IF benchbook.session_trusted() THEN
     RETURN NEW;
   END IF;
   me := benchbook.required_identity(NEW.project_id);
   decider := me.agent_role IN ('orchestrator', 'human');
+  SELECT p.settings INTO st FROM benchbook.projects p WHERE p.id = NEW.project_id;
+  max_lease := CASE WHEN jsonb_typeof(st -> 'max_lease_seconds') = 'number' AND (st ->> 'max_lease_seconds')::numeric >= 1
+                    THEN (st ->> 'max_lease_seconds')::numeric ELSE 86400 END;
+  IF NEW.status = 'claimed' AND NEW.lease_expires_at > clock_timestamp() + make_interval(secs => max_lease::float8)
+     AND (TG_OP = 'INSERT' OR NEW.lease_expires_at IS DISTINCT FROM OLD.lease_expires_at) THEN
+    RAISE EXCEPTION 'benchbook: a lease may last at most % s in project % (settings.max_lease_seconds)', max_lease,
+      NEW.project_id USING ERRCODE = 'insufficient_privilege';
+  END IF;
   IF TG_OP = 'INSERT' THEN
     IF NEW.created_by IS DISTINCT FROM me.agent_id THEN
       RAISE EXCEPTION 'benchbook: the token belongs to agent %; it cannot create a task as %', me.agent_id,
@@ -206,9 +217,13 @@ BEGIN
     IF decider AND NEW.status = 'open' AND NEW.lease_owner IS NULL AND NEW.attempts = 0 THEN
       RETURN NEW;
     END IF;
-    -- create_intent: a task its creator already holds
+    -- create_intent: a task its creator already holds; a worker needs settings.worker_intents
     IF NEW.status = 'claimed' AND NEW.lease_owner = me.agent_id AND 'intent' = ANY (NEW.tags)
        AND NEW.lease_expires_at IS NOT NULL THEN
+      IF NOT decider AND (st -> 'worker_intents') IS DISTINCT FROM 'true'::jsonb THEN
+        RAISE EXCEPTION 'benchbook: intents are off for project % (settings.worker_intents); agent % (role %) may not create one',
+          NEW.project_id, me.agent_id, me.agent_role USING ERRCODE = 'insufficient_privilege';
+      END IF;
       RETURN NEW;
     END IF;
     RAISE EXCEPTION 'benchbook: agent % (role %) may not create this task; only orchestrator or human create open tasks, and an intent is held by its creator (P2)',
@@ -263,7 +278,7 @@ CREATE TRIGGER tasks_identity BEFORE INSERT OR UPDATE ON tasks
 -- writes 'expired' (and 'failed' when no attempts are left) in the name of the agent that held it.
 CREATE FUNCTION guard_task_event() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, benchbook, pg_temp AS $$
-DECLARE me record; t record;
+DECLARE me record; t record; prev text;
 BEGIN
   IF benchbook.session_trusted() THEN
     RETURN NEW;
@@ -275,9 +290,15 @@ BEGIN
   SELECT status, lease_owner, lease_expires_at INTO t FROM benchbook.tasks
   WHERE id = NEW.task_id AND project_id = NEW.project_id;
   IF FOUND AND NEW.agent_id IS NOT NULL THEN
-    -- the caller has just taken over the expired lease
+    -- the caller has just taken over the expired lease: the event names the previous holder, the agent of the
+    -- task's last 'claimed' event (next_task writes the caller's own 'claimed' event after this one)
     IF NEW.event = 'expired' AND t.status = 'claimed' AND t.lease_owner = me.agent_id THEN
-      RETURN NEW;
+      SELECT e.agent_id INTO prev FROM benchbook.task_events e
+      WHERE e.project_id = NEW.project_id AND e.task_id = NEW.task_id AND e.event = 'claimed'
+      ORDER BY e.id DESC LIMIT 1;
+      IF prev IS NOT DISTINCT FROM NEW.agent_id THEN
+        RETURN NEW;
+      END IF;
     END IF;
     -- the lease ran out with no attempts left: the task failed and still names its last holder
     IF NEW.event IN ('expired', 'failed') AND t.status = 'failed' AND t.lease_owner = NEW.agent_id

@@ -21,6 +21,7 @@ passed in."""
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
 import shutil
@@ -35,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from . import config as localcfg
 from . import failures, signature
@@ -57,6 +58,11 @@ MAX_REPORT_BYTES = 10_000_000
 MAX_FAILED_SHOWN = 50  # failing test ids kept on a result for the table; the signature is made from all of them
 PIECE = re.compile(r"\S{1,100}")
 STATUSES = ("ok", "fail", "timeout", "not_run")
+# The ledger credentials a verifier may hold (integrations/github-action exports the first two), under both prefixes,
+# and libpq's own password sources. check verify runs the commit's code without them: the code under test is the
+# implementer's, and must not write to the ledger as the verifier.
+CREDENTIALS = frozenset([f"{prefix}_{name}" for prefix in ("BENCHBOOK", "ASSAY")
+                         for name in ("TOKEN", "DATABASE_URL", "READER_PASSWORD")] + ["PGPASSWORD", "PGPASSFILE"])
 
 
 @dataclass
@@ -274,9 +280,11 @@ def integrity(repo: Path, base: Base, commit: str) -> Integrity:
 
 # ---------------------------------------------------------------------------------------------------- running
 
-def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec]) -> tuple[list[CheckResult], BaseException | None]:
+def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec],
+               env: dict[str, str] | None = None) -> tuple[list[CheckResult], BaseException | None]:
     """Step 3. Returns the results and, when the run was interrupted (Ctrl-C, SIGTERM, SIGHUP), the interruption
-    for the caller to re-raise after recording. The worktree and its git metadata are gone when this returns."""
+    for the caller to re-raise after recording. The worktree and its git metadata are gone when this returns. env:
+    the checks' environment (None: this process's)."""
     results = [CheckResult(s.name, "not_run") for s in specs]
     tmp = Path(tempfile.mkdtemp(prefix="benchbook-verify-"))
     wt, out = tmp / "worktree", tmp / "out"  # out/ holds logs and JUnit files, outside the worktree
@@ -287,7 +295,7 @@ def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec]) -> tuple[lis
         try:
             _git(repo, "worktree", "add", "--detach", "--quiet", str(wt), commit)
             for i, spec in enumerate(specs):
-                results[i] = _run_one(spec, wt, out)
+                results[i] = _run_one(spec, wt, out, env)
         except (Interrupted, KeyboardInterrupt) as e:
             interrupted = e
         finally:
@@ -322,16 +330,26 @@ def _remove_worktree(repo: Path, wt: Path) -> None:
         _git(repo, "worktree", "prune", check=False)
 
 
-def _run_one(spec: CheckSpec, wt: Path, out: Path) -> CheckResult:
+def _run_one(spec: CheckSpec, wt: Path, out: Path, env: dict[str, str] | None = None) -> CheckResult:
     junit = out / f"{spec.name}.junit.xml"
     cmd = spec.cmd.replace("{junit}", shlex.quote(str(junit)))
     log = out / f"{spec.name}.log"
-    r = run_command(cmd, wt, log, spec.timeout, metric=None, tee=False)
+    r = run_command(cmd, wt, log, spec.timeout, metric=None, env=env, tee=False)
     status = {"ok": "ok", "timeout": "timeout"}.get(r.run_status, "fail")
     failed = signature.junit_failures(junit) if spec.junit and status != "ok" and junit.is_file() else []
+    part = None
+    if spec.junit and status == "ok":  # exit 0 passes only with a report in which a test ran and none failed
+        part, failed = signature.junit_exit0(junit)
+        status = "ok" if part is None else "fail"
     detail = signature.detail(signature.read_log(log), wt) if status != "ok" else None
     return CheckResult(spec.name, status, r.exit_code, r.duration_ms, failed[:MAX_FAILED_SHOWN], detail, r.log_tail,
-                       signature.check_part(status, r.exit_code, failed, detail))
+                       part or signature.check_part(status, r.exit_code, failed, detail))
+
+
+def check_env() -> dict[str, str]:
+    """The environment check verify runs the checks with: this process's, without CREDENTIALS. Everything else
+    (PATH, the checks' own variables) is kept."""
+    return {k: v for k, v in os.environ.items() if k not in CREDENTIALS}
 
 
 def failed_tests(path: Path, limit: int = MAX_FAILED_SHOWN) -> list[tuple[str, str | None]]:
@@ -400,7 +418,7 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     report = None if report_file is None else read_report(report_file, list(b.checks))
     integ = integrity(repo, b, sha)
     t0 = time.monotonic()
-    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names])
+    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env())
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted))
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
@@ -426,32 +444,79 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
             trace_ref: dict[str, Any] | None = None) -> Recorded:
     """Step 4. The claim is the implementer's (proposed, never decided here); the attempt and the link are the
     verifier's, so the ledger shows two different agents."""
-    claim = None
+    claim: tuple[UUID, bool] | None = None
     if reported_by is not None:
-        payload: dict[str, Any] = {"piece": v.piece, "commit": v.commit,
-                                   "reported_checks": report.mentions if report else []}
-        if report is not None:
-            payload["report"] = {"sha256": report.sha256, "bytes": report.bytes}
-        proposer = lg
-        if lg.token is None:
-            proposer = lg.as_agent(reported_by)
-        else:  # a token is one agent: the verifier records the claim and names the reporter (ledger.implementers)
-            payload["reported_by"] = reported_by
-        claim = proposer.propose_claim(
-            "completion", f"{v.piece} is complete at {v.commit[:12]}", payload=payload,
-            tags=[f"piece:{v.piece}", f"commit:{v.commit}"])
+        claim = _completion_claim(lg, v, reported_by, report)
     r = lg.record_experiment(v.config(), v.metrics(), run_status=v.run_status, code_ref=v.commit, notes=v.notes(),
                              duration_ms=v.duration_ms, trace_ref=trace_ref)
     if r.id is None:  # only a pack with dedup_mode "refuse" can get here
         raise BenchbookError(f"the verification was refused as a duplicate of {r.duplicate_of}")
     rec = Recorded(r.id, lg.agent, duplicate_of=r.duplicate_of, notice=r.notice, reported_by=reported_by)
     if claim is not None:
-        rec.claim_id, rec.claim_existed = claim.id, claim.duplicate_of is not None
+        rec.claim_id, rec.claim_existed = claim
         if v.run_status == "ok":
             rec.relation = "supports" if v.all_passed else "refutes"
-            lg.link(r.id, rec.relation, claim.id)
+            lg.link(r.id, rec.relation, rec.claim_id)
     _discard(lg, v, rec)
     return rec
+
+
+def statements(piece: str, commit: str, reporter: str) -> tuple[str, str]:
+    """The two statements a completion claim of check verify can have: the usual one, and the one naming the reporter
+    that is used when someone else's claim already holds the usual one."""
+    usual = f"{piece} is complete at {commit[:12]}"
+    return usual, f"{usual}, reported by {reporter}"
+
+
+# The completion claims check verify could have written for a piece and commit, oldest first.
+_OWN_CLAIMS = ("SELECT c.id, c.author, c.payload, a.role AS author_role FROM benchbook.claims c"
+               " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
+               " WHERE c.project_id = %s AND c.kind = 'completion' AND c.tags @> %s"
+               " AND c.payload ->> 'piece' = %s AND c.payload ->> 'commit' = %s AND c.statement = ANY(%s)"
+               " ORDER BY c.created_at, c.id")
+
+
+def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report | None) -> tuple[UUID, bool]:
+    """The completion claim of (piece, commit, reporter), and whether it existed. A claim's identity is that triple,
+    not its statement: propose_claim deduplicates on statement_hash, which any agent can take first (and which the
+    client computes), so a claim is reused only when it is about this piece and commit (tags and payload) and records
+    this reporter's report: ledger.reporter_of names the reporter, or the proposer wrote it exactly as this call
+    would. When another claim holds the usual statement, the claim names the reporter in its statement; when that
+    one is taken too, it gets the same statement under a hash nobody can know in advance."""
+    from .dedup import statement_hash
+    from .ledger import reporter_of
+
+    payload: dict[str, Any] = {"piece": v.piece, "commit": v.commit,
+                               "reported_checks": report.mentions if report else []}
+    if report is not None:
+        payload["report"] = {"sha256": report.sha256, "bytes": report.bytes}
+    proposer = lg
+    if lg.token is None:
+        proposer = lg.as_agent(reporter)
+    else:  # a token is one agent: the verifier records the claim and names the reporter (ledger.implementers)
+        payload["reported_by"] = reporter
+    named = payload.get("reported_by")
+    usual, with_reporter = statements(v.piece, v.commit, reporter)
+    tags = [f"piece:{v.piece}", f"commit:{v.commit}"]
+
+    def existing() -> UUID | None:
+        for row in lg.sql_internal(_OWN_CLAIMS, (lg.project_id, tags, v.piece, v.commit, [usual, with_reporter])):
+            by = (row["payload"] or {}).get("reported_by")
+            if reporter_of(row["author"], row["author_role"], by) == reporter or (
+                    row["author"] == proposer.agent and by == named):
+                return row["id"]  # type: ignore[no-any-return]
+        return None
+
+    if (found := existing()) is not None:
+        return found, True
+    for statement, h in ((usual, None), (with_reporter, None),
+                         (with_reporter, statement_hash(f"{with_reporter}\0{uuid4().hex}"))):
+        c = proposer._propose_claim("completion", statement, payload, tags, _dedup_hash=h)
+        if c.duplicate_of is None:
+            return c.id, False
+        if (found := existing()) is not None:  # a verify of the same report recorded it in the meantime
+            return found, True
+    raise BenchbookError("the completion claim could not be recorded")  # unreachable: the last hash is new
 
 
 def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:

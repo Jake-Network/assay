@@ -12,7 +12,7 @@ before Alembic runs; there is no revision number for that step. See
 
 | table | what | mutable |
 |---|---|---|
-| `projects` | goal, primary metric and direction, improve epsilon, pack, settings (`config_schema`, `rerun_min_seeds`, `rerun_min_authors`, `partition_key`, `worker_intents`, `partitions`, ...) | settings only, through `update_settings` |
+| `projects` | goal, primary metric and direction, improve epsilon, pack, settings (`config_schema`, `rerun_min_seeds`, `rerun_min_authors`, `partition_key`, `worker_intents`, `max_lease_seconds`, `partitions`, ...) | settings only, through `update_settings` |
 | `agents` | contributor identity per project, `role` in worker / orchestrator / human / harness; `token_hash`, the SHA-256 of the agent's token when one was issued (`benchbook agent add`), never readable by `benchbook_writer` | `token_hash` only, by the owner (`benchbook agent add --rotate`, `benchbook agent revoke`) |
 | `tasks` | unit of work with a lease (`lease_owner`, `lease_expires_at`, `attempts`) | lease fields, through SDK functions only |
 | `task_events` | audit log of task changes (created, claimed, heartbeat, expired, done, failed, cancelled) | no |

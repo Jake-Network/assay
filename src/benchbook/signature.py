@@ -39,6 +39,10 @@ SEPARATOR = "; "  # between the checks of one attempt
 MAX_JUNIT_BYTES = 50_000_000
 MAX_JUNIT_CASES = 100_000
 MAX_LOG_BYTES = 2_000_000  # the end of a log the detail is read from
+# The part of a check declared junit = true whose command exited 0 without a report that shows a test ran: exit 0
+# alone also comes from a run that stopped before any test (os._exit(0) while collecting, a filter that selects none).
+NO_REPORT = "exit 0, no JUnit report"
+NO_TESTS = "exit 0, no tests ran"
 WINDOW = 200  # non-empty lines, from the end, searched for the last error line
 
 LINE_HASH = re.compile(rf"[0-9a-f]{{{HASH_LEN}}}")
@@ -263,26 +267,47 @@ def read_log(path: Path) -> str:
 def junit_failures(path: Path) -> list[tuple[str, str | None]]:
     """(test id, exception type) of every failing or erroring testcase of a JUnit XML file, sorted by test id.
     pytest gives no type attribute; its failure text ends with "file.py:12: AssertionError"."""
+    found = junit_read(path)
+    return found[1] if found else []
+
+
+def junit_read(path: Path) -> tuple[int, list[tuple[str, str | None]]] | None:
+    """(testcases that ran, the failing or erroring ones as junit_failures gives them) of a JUnit XML file; None when
+    there is no readable report (missing, too large, not XML). A testcase marked skipped did not run."""
     import xml.etree.ElementTree as ET
 
     try:
         if path.stat().st_size > MAX_JUNIT_BYTES:
-            return []
+            return None
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError):
-        return []
+        return None
+    ran = 0
     out: list[tuple[str, str | None]] = []
     for case in root.iter("testcase"):
         bad = case.find("failure")
         if bad is None:
             bad = case.find("error")
         if bad is None:
+            ran += case.find("skipped") is None
             continue
-        name, cls = case.get("name") or "?", case.get("classname")
-        out.append((f"{cls}::{name}" if cls else name, bad.get("type") or _exception_type(bad)))
-        if len(out) >= MAX_JUNIT_CASES:
-            break
-    return sorted(set(out), key=lambda x: (x[0], x[1] or ""))
+        ran += 1
+        if len(out) < MAX_JUNIT_CASES:
+            name, cls = case.get("name") or "?", case.get("classname")
+            out.append((f"{cls}::{name}" if cls else name, bad.get("type") or _exception_type(bad)))
+    return ran, sorted(set(out), key=lambda x: (x[0], x[1] or ""))
+
+
+def junit_exit0(path: Path) -> tuple[str | None, list[tuple[str, str | None]]]:
+    """For a check declared junit = true whose command exited 0: (the part that makes it a failure, the failing
+    tests). The part is None only when the report exists, at least one testcase ran and none failed or erred."""
+    found = junit_read(path)
+    if found is None:
+        return NO_REPORT, []
+    ran, failed = found
+    if failed:
+        return junit_part(failed), failed
+    return (NO_TESTS if ran == 0 else None), []
 
 
 _TRAILING_TYPE = re.compile(r":\s*([A-Za-z_][\w.]*)\s*$")

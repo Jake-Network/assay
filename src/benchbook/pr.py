@@ -42,7 +42,7 @@ class PieceState:
     why: str
     claim_id: UUID | None = None
     claim_status: str | None = None
-    reporter: str | None = None  # payload.reported_by, else the claim's author: what check verify --reported-by takes
+    reporter: str | None = None  # ledger.reporter_of the claim: what check verify --reported-by takes
     implementers: list[str] = field(default_factory=list)
     passed: int = 0  # valid finished attempts of the piece at the commit in which every check passed
     failed: int = 0
@@ -88,11 +88,16 @@ def pieces(repo: Path, base: str, head: str) -> tuple[list[Piece], list[str]]:
 
 # ---------------------------------------------------------------------------------------------------- the ledger
 
+# The completion claim of a piece at a commit: tagged with both, and its payload naming the same piece and commit (a
+# claim whose payload names another commit is not about this one: the rule reads attempts by the payload). Several
+# agents can have reported it; a verified claim is shown first, then the oldest.
 _CLAIM = ("SELECT c.id, c.author, c.payload, a.role AS author_role, s.status, s.last_oracle"
           " FROM benchbook.claims c"
           " JOIN benchbook.v_claim_status s ON s.project_id = c.project_id AND s.id = c.id"
           " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
-          " WHERE c.project_id = %s AND c.kind = 'completion' AND c.tags @> %s ORDER BY c.created_at, c.id LIMIT 1")
+          " WHERE c.project_id = %s AND c.kind = 'completion' AND c.tags @> %s"
+          " AND c.payload ->> 'piece' = %s AND c.payload ->> 'commit' = %s"
+          " ORDER BY s.status = 'verified' DESC, c.created_at, c.id LIMIT 1")
 # the attempts the all_pass rule reads (Ledger._attempts): valid, finished, of this piece at this commit, not dirty
 _ATTEMPTS = ("SELECT id, author, metrics FROM benchbook.experiments_valid WHERE project_id = %s AND run_status = 'ok'"
              " AND config ->> 'piece' = %s AND code_ref = %s"
@@ -105,14 +110,21 @@ _FINDINGS = ("SELECT id FROM benchbook.v_claim_status WHERE project_id = %s AND 
 
 def reporter(lg: Ledger, p: Piece) -> str | None:
     """Who reported p's completion at its commit, if anyone did: what `check verify --reported-by` needs to link a
-    re-run to that claim (the same statement finds the same claim, so nothing new is proposed)."""
-    rows = lg.sql_internal(_CLAIM, (lg.project_id, [f"piece:{p.piece}", f"commit:{p.commit}"]))
+    re-run to that claim (check verify finds a claim by piece, commit and reporter, so nothing new is proposed).
+    payload.reported_by counts only on a claim recorded by a lead, a person or a harness agent; a worker's claim is
+    the worker's report, whomever it names (ledger.reporter_of)."""
+    rows = lg.sql_internal(_CLAIM, _claim_params(lg, p))
     return _reporter(rows[0]) if rows else None
 
 
+def _claim_params(lg: Ledger, p: Piece) -> tuple[Any, ...]:
+    return lg.project_id, [f"piece:{p.piece}", f"commit:{p.commit}"], p.piece, p.commit
+
+
 def _reporter(row: dict[str, Any]) -> str:
-    by = (row["payload"] or {}).get("reported_by")
-    return by if isinstance(by, str) and by else str(row["author"])
+    from .ledger import reporter_of
+
+    return reporter_of(str(row["author"]), row["author_role"], (row["payload"] or {}).get("reported_by"))
 
 
 def describe(lg: Ledger, found: Sequence[Piece]) -> list[PieceState]:
@@ -120,10 +132,10 @@ def describe(lg: Ledger, found: Sequence[Piece]) -> list[PieceState]:
 
 
 def _describe(lg: Ledger, p: Piece) -> PieceState:
-    from .ledger import attempt_summary, implementers
+    from .ledger import attempt_summary
 
     pid, tag = lg.project_id, f"piece:{p.piece}"
-    rows = lg.sql_internal(_CLAIM, (pid, [tag, f"commit:{p.commit}"]))
+    rows = lg.sql_internal(_CLAIM, _claim_params(lg, p))
     attempts = [attempt_summary(r["id"], r["author"], r["metrics"]) for r in
                 lg.sql_internal(_ATTEMPTS, (pid, p.piece, p.commit))]
     s = PieceState(p.piece, p.commit, UNREPORTED, "")
@@ -138,7 +150,8 @@ def _describe(lg: Ledger, p: Piece) -> PieceState:
         s.why = "no completion claim for this piece at this commit" + _runs(s)
         return s
     claim = rows[0]
-    impl = implementers(claim["author"], claim["author_role"], (claim["payload"] or {}).get("reported_by"))
+    info = lg.completion_attempts(claim["id"])  # the ledger's set: every completion of this piece and commit adds to it
+    impl = set(info["implementers"]) if info else set()
     s.claim_id, s.claim_status, s.reporter = claim["id"], claim["status"], _reporter(claim)
     s.implementers = sorted(impl)
     clean = [a for a in attempts if a["passed"] and a["author"] not in impl and a["via"] is None

@@ -111,9 +111,11 @@ the recorded runs). With `decide: true` and a lead's token (orchestrator or huma
 does for a lead (verified, or inconclusive when runs disagree). With an owner URL, `decide: true` is ignored with a
 warning: a self-declared name is no authority. A harness or worker token never decides.
 
-**What no setting covers.** The job runs the pull request's code (the checks) in the same job as the credential:
-code in the pull request can read `BENCHBOOK_DATABASE_URL` and `BENCHBOOK_TOKEN` from its environment and write
-as the CI agent. The GitHub token is kept out of the checks' environment, but a process of the same user can still
-read its parent's environment. So the guarantee is against agents that misreport their work, not against a pull
-request written to steal the CI credential. That is one more reason to keep the default `decide: false` and to give
+**What no setting covers.** The job runs the pull request's code (the checks) in the same job as the credential.
+`check verify` starts the checks without the ledger's credentials (`BENCHBOOK_DATABASE_URL`, `BENCHBOOK_TOKEN`,
+`BENCHBOOK_READER_PASSWORD`, their `ASSAY_` forms, `PGPASSWORD`, `PGPASSFILE`) and without the GitHub token, so
+code that only reads its own environment finds none of them. But the checks run as the same user as the action: a
+process can still read its parent's environment (`/proc/<pid>/environ` on Linux) and files the user can read. So
+the guarantee is against agents that misreport their work, not against a pull request written to steal the CI
+credential. That is one more reason to keep the default `decide: false` and to give
 CI a harness token rather than a lead's: a stolen harness token can add attempts, not decide.

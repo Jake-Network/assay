@@ -378,9 +378,10 @@ def test_action_twice_on_one_pull_request_leaves_one_comment(tmp_path: Path, db_
     assert {s["status"] for s in statuses} == {"proposed"}  # CI recorded and decided nothing
     assert pr.MARKER in (tmp_path / "step-summary.md").read_text()
 
-    # the checks (the pull request's code) never saw the GitHub token; gh never saw the ledger's URL
+    # the checks (the pull request's code) never saw the GitHub token or the ledger's URL; gh never saw the URL
     seen = dump.read_text()
     assert "BENCHBOOK_AGENT=ci:41" in seen and GH_TOKEN not in seen and "BB_GITHUB_TOKEN" not in seen
+    assert "BENCHBOOK_DATABASE_URL=" not in seen and db_url not in seen
     calls = json.loads(gh.read_text())["calls"]
     assert calls and all(call["token"] == GH_TOKEN and not call["db"] for call in calls)
 

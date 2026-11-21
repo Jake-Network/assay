@@ -258,7 +258,11 @@ def run(name: str, piece: str | None = None, approach: str | None = None, *, pro
             status, exit, duration = "interrupted", None, int((time.monotonic() - t0) * 1000)
         state = finish_git_state(git)
         failed = _failed_tests(junit) if p.junit and status == "fail" and junit.is_file() else []
-        sig = _sign(status, exit, failed, tmp / "out.log", p.repo) if status != "ok" else None
+        problem = None
+        if p.junit and status == "ok":  # as check verify: exit 0 passes only with a report in which a test ran
+            problem, failed = _junit_exit0(junit)
+            status = "ok" if problem is None else "fail"
+        sig = _sign(status, exit, failed, tmp / "out.log", p.repo, problem) if status != "ok" else None
     finally:
         _remove(tmp)
     code = exit_code(exit, status, signum)
@@ -272,18 +276,26 @@ def _failed_tests(junit: Path) -> list[tuple[str, str | None]]:
     return junit_failures(junit)
 
 
+def _junit_exit0(junit: Path) -> tuple[str | None, list[tuple[str, str | None]]]:
+    from .signature import junit_exit0
+
+    return junit_exit0(junit)
+
+
 @dataclass
 class Signed:
     detail: str | None  # signature.detail of the output (spool key last_line_hash)
     part: str | None  # this check's part of the attempt's signature; None when it did not fail (interrupted)
 
 
-def _sign(status: str, exit: int | None, failed: list[tuple[str, str | None]], log: Path, repo: Path) -> Signed:
-    """The failure's signature, from the whole log (up to signature.MAX_LOG_BYTES of its end), not only the tail."""
+def _sign(status: str, exit: int | None, failed: list[tuple[str, str | None]], log: Path, repo: Path,
+          problem: str | None = None) -> Signed:
+    """The failure's signature, from the whole log (up to signature.MAX_LOG_BYTES of its end), not only the tail.
+    problem: the part of a junit check that exited 0 without a passing report (signature.junit_exit0)."""
     from . import signature
 
     detail = signature.detail(signature.read_log(log), repo) if status in ("fail", "interrupted") else None
-    return Signed(detail, signature.check_part(status, exit, failed, detail))
+    return Signed(detail, problem or signature.check_part(status, exit, failed, detail))
 
 
 def _remove(tmp: Path) -> None:
@@ -308,6 +320,8 @@ def _receipt(p: Plan, status: str, exit: int | None, duration: int, failed: list
     if failed:
         shown = ", ".join(f"{t} ({k})" if k else t for t, k in failed[:3])
         head += f": failing {shown}" + (f" and {len(failed) - 3} more" if len(failed) > 3 else "")
+    elif status == "fail" and exit == 0 and sig is not None and sig.part:
+        head += f": {sig.part} (junit = true)"  # recorded as a failure; the exit code stays the command's
     if state is None or state.sha is None:
         why = "git could not report HEAD" if state is None else "the repository has no commit yet"
         print(f"{head}; not recorded: {why}", file=sys.stderr)
