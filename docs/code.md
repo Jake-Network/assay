@@ -60,7 +60,9 @@ benchbook check verify <piece> <commit> --reported-by <implementer>
 ```
 
 Options: `--base REF` (default `[guard] base`, else `origin/main`), `--checks a,b` (a subset of the declared
-checks), `--report-file F` (the implementer's report), `--trace-ref JSON` (a JSON object, or `@file`, stored as the
+checks: the attempt is recorded as partial and never verifies the completion, see below), `--claim ID` (the
+completion claim the re-run is evidence for, as `pr pieces --claims` prints it: it must be about the piece and
+commit, and its reporter is the implementer, so `--reported-by` may be left out), `--report-file F` (the implementer's report), `--trace-ref JSON` (a JSON object, or `@file`, stored as the
 attempt's `trace_ref`: the CI action puts its run's URL there), `--no-decide` (record only, even with lead
 authority). It prints one row per check and exits 0 only when every check passed, 1 otherwise; `--json` gives the
 same as one JSON object.
@@ -140,7 +142,9 @@ reserve a file you will create, name it (or a glob that matches no tracked file 
   paths; with `--paths` it replaces them (checked against everyone else's, the agent's own other pieces included).
   It is the same task, so the piece keeps its id and its tags (tags given on a restart are not added).
   `benchbook task heartbeat <task>` also renews, but with the project's default lease (900 seconds) unless
-  `--lease` is given.
+  `--lease` is given. Both renew only a live lease: once it has run out, another piece may hold the paths, so a
+  heartbeat fails with "lease lost", and `piece start <piece>` (without `--paths` it takes the declared paths again)
+  starts a new piece through the overlap check.
 - *Release:* `piece done <piece>` by the holder marks the task done (`--failed`: failed). A lead (orchestrator or
   human) running it on another agent's piece cancels that task, for instance after merging it. `check verify` does
   not release a piece: a refuted completion goes back to its implementer, who still needs the paths.
@@ -181,7 +185,7 @@ One attempt, in the shape of spec §6:
 config     {"piece": "media-upload-dedupe", "checks": ["pytest-media", "lint"]}
 code_ref   "a1b2c3d4..."                       # the full commit sha
 metrics    {"checks_passed": 1, "checks_total": 2,
-            "checks": {"pytest-media": "fail", "lint": "ok"},
+            "checks": {"pytest-media": "fail", "lint": "ok"}, "checks_declared": ["pytest-media", "lint"],
             "failure_signature": "pytest-media:tests.media.test_upload::test_reupload_same_file:AssertionError",
             "guard_touched": false, "guard_files": [], "checks_changed": false}
 run_status "ok"                                # the checks ran to the end; a failing check is a result
@@ -191,15 +195,17 @@ notes      "check verify: base origin/main 0123..., merge-base 4567...; checks f
 A check's status is `ok`, `fail`, `timeout` or `not_run` (after an interruption). The failure signature is
 `check:part` per failing check, where the part names the failing JUnit test, the TypeScript errors, or the exit code
 and a hash of the last error line ([Failure signatures](#failure-signatures)). `guard_files` keeps the first 100
-paths; `guard_touched` counts all.
+paths; `guard_touched` counts all. `checks_declared` names every check declared at the merge-base, run or not: a run
+of fewer (`--checks`) is *partial*. It is recorded and its failures count, but it is never evidence of
+`verified`, and `check verify` decides nothing on a partial pass.
 
 The completion claim: statement `<piece> is complete at <sha12>`, tags `piece:<piece>` and `commit:<sha>`,
 payload `{"piece", "commit", "reported_checks"}` and, with `--report-file`, `"report": {"sha256", "bytes"}`.
 `reported_checks` lists the declared check names the report mentions (a mention, not a claimed result).
 
 A claim's identity is the triple (piece, commit, reporter), not its statement. `check verify` reuses a claim only
-when it carries both tags, its payload names the same piece and commit, its statement is one of the two below, and it
-records this reporter's report: its reporter is `--reported-by` (see [Who the implementer is](#who-the-implementer-is))
+when it carries both tags, its payload names the same piece and commit, and it records this reporter's report,
+whatever its statement: its reporter is `--reported-by` (see [Who the implementer is](#who-the-implementer-is))
 or the verifier wrote it exactly as this call would. Otherwise it proposes a new one. When another agent's claim
 already holds the usual statement, the new claim's statement names the reporter:
 `<piece> is complete at <sha12>, reported by <reporter>`; when that one is taken too, it keeps that text under a
@@ -249,7 +255,8 @@ these hold; otherwise it is refused, and the message says why and that a person 
 - every evidence id is a valid (not invalidated) attempt with `run_status = "ok"` of the claim's piece
   (`config.piece`) at its commit (`code_ref`);
 - at least `min_runs` of them are by agents other than the implementer (see below), from at least
-  `min_authors - 1` such agents, each with `checks_passed == checks_total`, `checks_total > 0`, and
+  `min_authors - 1` such agents, each with every name in `checks_declared` among its `checks` (not partial),
+  `checks_passed == checks_total`, `checks_total > 0`, and
   `guard_touched` and `checks_changed` stored as `false`;
 - no valid finished attempt of that piece at that commit, cited or not and by anyone, failed a check, touched a
   guarded path or changed `[checks]`. A clean re-run does not wash out another run's guard flag, and runs that
@@ -567,7 +574,7 @@ request completes and keeps one comment on the pull request that says which comp
 confirmed. The logic is in three commands, which run anywhere:
 
 ```bash
-benchbook pr pieces --base BASE [--head HEAD] [--claims]   # piece<TAB>commit[<TAB>reporter], one line per piece
+benchbook pr pieces --base BASE [--head HEAD] [--claims]   # piece<TAB>commit[<TAB>reporter<TAB>claim], one per piece
 benchbook pr summary --base BASE [--head HEAD] [--run-url URL]   # the markdown, starting with the marker
 benchbook pr comment --repo OWNER/NAME --pr N --body-file F [--author LOGIN] [--update-only]
 ```
@@ -575,15 +582,15 @@ benchbook pr comment --repo OWNER/NAME --pr N --body-file F [--author LOGIN] [--
 **Pieces.** A commit names the piece it completes with the trailer `Benchbook-Piece: <piece>` (the trailer block at
 the end of the message; the key is case-insensitive, and one commit may carry several). For each piece named in
 `BASE..HEAD` the piece's commit is the last commit carrying its trailer. A value that is not a piece name (1-100
-characters, no spaces) is skipped with a warning. `--claims` adds the reporter of the completion claim for that
-piece at that commit (`-` for none): `payload.reported_by` when a lead, a person or a harness agent recorded the
+characters, no spaces) is skipped with a warning. `--claims` adds the reporter and the id of the completion claim
+for that piece at that commit (`-` for none). The reporter is `payload.reported_by` when a lead, a person or a harness agent recorded the
 claim, otherwise its author ([Who the implementer is](#who-the-implementer-is)). A claim counts when it carries both
-tags and its payload names that piece and commit; with several, a verified one, else the oldest. Passing the reporter
-to `check verify --reported-by` links the re-run to that claim, which verify finds by piece, commit and reporter.
+tags and its payload names that piece and commit; with several, a verified one, else the oldest. Passing the id to
+`check verify --claim` links the re-run to that very claim, whatever its statement.
 
 **The action's run**, per piece: `check verify <piece> <commit> --base <base sha> --trace-ref '{"ci":
 "github-actions", "repository", "run_id", "run_attempt", "run_url", "pull_request"}' --no-decide`, with
-`--reported-by` when a claim exists. Without a claim it records only the attempt, and the piece shows as *not
+`--claim` when a claim exists. Without a claim it records only the attempt, and the piece shows as *not
 reported*: CI never reports a completion on someone's behalf. Then `pr summary` and `pr comment`. The job fails when
 a re-run failed a check. A pull request rebased after the lead's `check verify` has new commit ids, so its pieces
 have no claim at the new commits until someone reports them there.
@@ -775,7 +782,8 @@ The attempt has check verify's shape, with two more metrics:
 ```
 config     {"piece": "media-upload-dedupe", "checks": ["pytest-media"]}
 code_ref   "a1b2c3d4..."                       # HEAD when the check ran
-metrics    {"checks_passed": 1, "checks_total": 1, "checks": {"pytest-media": "ok"}, "failure_signature": null,
+metrics    {"checks_passed": 1, "checks_total": 1, "checks": {"pytest-media": "ok"},
+            "checks_declared": ["pytest-media"], "failure_signature": null,
             "guard_touched": false, "guard_files": [], "checks_changed": false,
             "via": "check-run", "worktree_dirty": false}
 notes      "check run: pytest-media in /path/to/checkout; guard against origin/main (merge-base 4567...)"

@@ -31,7 +31,11 @@ def verify(
         "--base", help="The ref the piece branched from (default: base in config.toml's guard table, else "
                        "origin/main)")] = None,
     checks: Annotated[str | None, typer.Option(
-        "--checks", help="Run only these declared checks (comma separated)")] = None,
+        "--checks", help="Run only these declared checks (comma separated). The run is recorded as partial and never "
+                         "verifies the completion")] = None,
+    claim: Annotated[str | None, typer.Option(
+        "--claim", help="The completion claim this re-run is evidence for (its id, as pr pieces --claims prints it). "
+                        "It must be about PIECE at COMMIT; its reporter is the implementer")] = None,
     trace_ref: Annotated[str | None, typer.Option(
         "--trace-ref", help="JSON object (or @file) stored as the attempt's trace_ref, e.g. the CI run's URL")] = None,
     no_decide: Annotated[bool, typer.Option(
@@ -68,7 +72,7 @@ def verify(
     try:
         v, rec = run_verify(lg, piece, commit, repo=Path.cwd(), base=base, only=csv(checks) or None,
                             reported_by=reported_by, report_file=report_file, trace_ref=trace,
-                            decide=not no_decide)
+                            decide=not no_decide, claim=claim)
     except (Interrupted, KeyboardInterrupt) as e:
         signum = e.signum if isinstance(e, Interrupted) else int(signal.SIGINT)
         print(f"interrupted ({signal.Signals(signum).name}): the worktree was removed and the attempt recorded "
@@ -125,6 +129,9 @@ def render(v: Verification, rec: Recorded) -> str:
         if r.status in ("fail", "timeout") and not r.failed_tests and r.tail:
             lines += [f"      | {x}" for x in r.tail.splitlines()[-8:]]
     lines.append(f"checks {v.passed}/{v.total} passed")
+    if v.missing:
+        lines.append(f"partial: {v.total} of {len(v.declared)} declared checks run (not run: {', '.join(v.missing)}); "
+                     "recorded, but only a run of every declared check can verify")
     if v.integrity.guard_touched:
         files = v.integrity.guard_files
         lines.append(f"guard: {len(files)} guarded file(s) changed since the merge-base: "

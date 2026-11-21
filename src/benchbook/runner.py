@@ -24,6 +24,8 @@ _CHUNK = 65536
 # How long tee keeps copying after the command is gone. The pipe normally reaches end-of-file at once; it stays
 # open only when the command left a background process holding it, and a result must not wait for that one.
 _TEE_DRAIN_S = 2.0
+# How long the process group gets to end after SIGTERM before what is left of it gets SIGKILL.
+_KILL_GRACE_S = 10.0
 
 
 @dataclass
@@ -86,19 +88,48 @@ def tail(text: str, lines: int = 30, chars: int = 1500) -> str:
     return "\n".join(text.replace("\r", "\n").splitlines()[-lines:])[-chars:]
 
 
-def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+def _group_alive(pgid: int) -> bool:
+    """Whether any process is left in the group (a zombie counts until it is reaped)."""
     try:
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
-        else:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # a member we may not signal (it changed its user) is still a member
+    except OSError:
+        return False
+    return True
+
+
+def _wait_group(proc: subprocess.Popen[bytes], within: float) -> bool:
+    """Wait until the whole group is gone, reaping the shell as it exits (its zombie keeps the group alive)."""
+    deadline = time.monotonic() + within
+    while True:
+        proc.poll()
+        if not _group_alive(proc.pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+    """End the command's whole process group: SIGTERM, then SIGKILL to whatever is left after the grace time. The
+    shell is only the group's leader: it can exit at once while a child that ignores SIGTERM goes on, so the wait is
+    for the group, not the shell."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+    else:
+        try:
             os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            pass  # gone already (ProcessLookupError), or not ours to signal
+        if not _wait_group(proc, _KILL_GRACE_S):
             try:
-                proc.wait(timeout=10)
-                return
-            except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
+            except OSError:
+                pass
+            _wait_group(proc, _KILL_GRACE_S)  # SIGKILL cannot be ignored; this only bounds a stuck kernel
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:

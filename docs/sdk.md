@@ -13,7 +13,7 @@ Workers:
 | call | returns |
 |---|---|
 | `next_task(tags=None, lease_seconds=900, spec_match=None)` | `Task` or `None`; skips tasks whose `spec.exclude_agents` lists you; `spec_match` keeps tasks whose spec contains that JSON |
-| `heartbeat(task_id, lease_seconds=900)` | new expiry; raises `LeaseLost` |
+| `heartbeat(task_id, lease_seconds=900)` | new expiry; raises `LeaseLost` (also once the lease has run out) |
 | `brief(task_id=None, budget_tokens=2000)` | markdown |
 | `check_tried(config, code_ref=None)` | `TriedResult(exact, replicates, best_value, dedup_key)` |
 | `record_experiment(config, metrics, run_status="ok", seed=None, code_ref=None, notes=None, artifacts=None, task_id=None, trace_ref=None, duration_ms=None, tokens=None, cost_usd=None)` | `RecordResult(id, outcome, is_new_best, duplicate_of, notice)`; an exact duplicate has `id=None`, or with a `dedup_mode = "notify"` pack a new `id` plus `duplicate_of` and `notice` |

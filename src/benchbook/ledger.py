@@ -539,8 +539,11 @@ class Ledger:
         tid = self._rid(task_id, "task")
         with self._conn() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
+            # A live lease only: once it ran out, another agent may hold the same paths, and only a new intent
+            # (create_intent, which checks them) occupies them again.
             cur = conn.execute("SELECT * FROM benchbook.tasks WHERE id=%s AND status='claimed' AND lease_owner=%s"
-                               " AND 'intent' = ANY(tags) FOR UPDATE", (tid, self.agent)).fetchone()
+                               " AND lease_expires_at > now() AND 'intent' = ANY(tags) FOR UPDATE",
+                               (tid, self.agent)).fetchone()
             if cur is None:
                 raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
             spec = {**cur["spec"], **spec_patch}
@@ -605,6 +608,9 @@ class Ledger:
         return [Task(**r) for r in rows]
 
     def heartbeat(self, task_id: str | UUID, lease_seconds: int | None = None) -> datetime:
+        """Extend your live lease. LeaseLost once it has run out, even if nobody took the task since: an expired
+        intent's paths may be held by another piece by now, and a renewal would make both live (claim the task
+        again, or start the piece again, which checks for that)."""
         tid = self._rid(task_id, "task")
         if lease_seconds is not None and lease_seconds <= 0:
             raise BenchbookError("lease_seconds must be positive")
@@ -613,7 +619,8 @@ class Ledger:
                 lease_seconds = self._read_lease_default(conn)
             r = conn.execute(
                 "UPDATE benchbook.tasks SET lease_expires_at = now() + make_interval(secs => %s), updated_at=now()"
-                " WHERE id=%s AND status='claimed' AND lease_owner=%s RETURNING lease_expires_at",
+                " WHERE id=%s AND status='claimed' AND lease_owner=%s AND lease_expires_at > now()"
+                " RETURNING lease_expires_at",
                 (lease_seconds, tid, self.agent),
             ).fetchone()
             if r is None:
@@ -1109,7 +1116,8 @@ class Ledger:
                         experiment_ids: set[UUID]) -> dict[str, Any]:
         """A completion is verified by re-runs, not by its implementer's word or its own runs (docs/code.md):
         at least min_runs cited attempts of the piece at the commit, by agents other than the implementer
-        (min_authors counts the implementer), with every check passed, guard_touched and checks_changed false.
+        (min_authors counts the implementer), that ran every declared check (metrics.checks_declared: a --checks run
+        of some is partial) and passed them all, with guard_touched and checks_changed false.
         And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, touched a
         guarded path or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
         that disagree are a person's call."""
@@ -1143,16 +1151,16 @@ class Ledger:
         # A run marked `via` happened in the implementer's checkout. The Bash hook records it as `hook`, so the
         # author alone does not show whose run it was: it never counts as independent (its failure still blocks).
         independent = [by_id[e] for e in experiment_ids
-                       if by_id[e]["author"] not in impl and by_id[e]["via"] is None
+                       if by_id[e]["author"] not in impl and by_id[e]["via"] is None and by_id[e]["complete"]
                        and by_id[e]["guard_touched"] is False and by_id[e]["checks_changed"] is False]
         authors = {a["author"] for a in independent}
         if len(independent) < pol.min_runs or len(authors) + 1 < pol.min_authors:
             raise InvalidTransition(
-                f"rule all_pass needs >= {pol.min_runs} passing re-run(s) of {at} by >= {pol.min_authors - 1} "
-                f"agent(s) other than the implementer ({', '.join(sorted(impl))}), with guard_touched and "
-                f"checks_changed false; the evidence has {len(independent)} by {len(authors)} "
+                f"rule all_pass needs >= {pol.min_runs} passing re-run(s) of every declared check of {at} by "
+                f">= {pol.min_authors - 1} agent(s) other than the implementer ({', '.join(sorted(impl))}), with "
+                f"guard_touched and checks_changed false; the evidence has {len(independent)} by {len(authors)} "
                 f"({', '.join(sorted(authors)) or 'none'}). The implementer's own runs do not count, nor do runs "
-                f"recorded from its checkout (check run, the Bash hook); "
+                f"recorded from its checkout (check run, the Bash hook), nor runs of only some checks (--checks); "
                 f"run benchbook check verify as another agent, or {human}")
         return {"rule": "all_pass", "piece": piece, "commit": commit, "implementers": sorted(impl),
                 "runs": len(independent), "authors": sorted(authors), "attempts": len(attempts)}
@@ -1558,13 +1566,18 @@ def implementers(author: str, author_role: str | None, reported_by: Any) -> set[
 
 
 def attempt_summary(id: UUID, author: str, metrics: dict[str, Any]) -> dict[str, Any]:
-    """One code attempt as the all_pass rule reads it. passed: every check ran and passed (checks_total > 0). The
-    guard flags are kept as stored: only an explicit false counts as untouched."""
+    """One code attempt as the all_pass rule reads it. passed: every check it ran passed (checks_total > 0).
+    complete: it ran every check declared at the merge-base (metrics.checks_declared, which check verify records);
+    a run of some (--checks), or one that does not say what was declared, is partial and never verifies, though its
+    failure still counts. The guard flags are kept as stored: only an explicit false counts as untouched."""
     total, passed = metrics.get("checks_total"), metrics.get("checks_passed")
     ok = (isinstance(total, int) and not isinstance(total, bool) and total > 0 and passed == total
           and isinstance(passed, int) and not isinstance(passed, bool))
+    declared, ran = metrics.get("checks_declared"), metrics.get("checks")
+    complete = (isinstance(declared, list) and bool(declared) and all(isinstance(n, str) for n in declared)
+                and isinstance(ran, dict) and set(declared) <= set(ran))
     files = metrics.get("guard_files")
-    return {"id": id, "author": author, "passed": ok,
+    return {"id": id, "author": author, "passed": ok, "complete": complete,
             # set on a run in the implementer's own checkout (check run, the Bash hook), whoever recorded it
             "via": metrics.get("via"),
             "guard_touched": metrics.get("guard_touched"), "checks_changed": metrics.get("checks_changed"),

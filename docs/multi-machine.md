@@ -114,7 +114,8 @@ On a connection made as `benchbook_writer` (or a member of it):
   decide in another agent's name, and a repeat recorded with `duplicate_of` is held to the same rule.
 - Lead-only actions are bound to the token's role: decisions, settings changes, creating open tasks and
   cancelling need an orchestrator or human token. Roles cannot change (migration 0006).
-- Task leases: only the holder heartbeats or completes; a task is claimed only in the claimer's own name. The
+- Task leases: only the holder heartbeats or completes, and a heartbeat renews only a live lease (SDK); a task is
+  claimed only in the claimer's own name. The
   `expired` event written when a lease is taken over may name only the previous holder. A worker creates an
   intent only when the project's `settings.worker_intents` is `true`, and no lease (an intent, a renewal, a claim)
   may run past `settings.max_lease_seconds` (default 86400 seconds) from now.

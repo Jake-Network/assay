@@ -15,9 +15,12 @@ no piece, or no commit.
 Matching rule (docs/claude-code.md): the command and the declaration are split into words the way the shell would
 (quotes removed), leading VAR=value assignments (and `env` with them) and redirections are dropped, and the words
 must then be equal. One leading `cd DIR &&` is allowed (the check runs in DIR). A word with {junit} in the declaration
-matches a word of that shape or nothing. The check must have run from the repository root. A command that contains
-the check inside a pipeline or a list (`check | tail`, `a && check`) is observed but not recorded: its exit code is
-not the check's. `benchbook check run NAME` is observed and not recorded either: the wrapper records it itself.
+matches a word of that shape or nothing. A check declared junit = true that exits 0 is recorded as passed only when
+the command named a JUnit report, written by this run, in which a test ran and none failed (as check run and check
+verify read it); without such a report the run is observed and not recorded. The check must have run from the
+repository root. A command that contains the check inside a pipeline or a list (`check | tail`, `a && check`) is
+observed but not recorded: its exit code is not the check's. `benchbook check run NAME` is observed and not
+recorded either: the wrapper records it itself.
 
 Every match is appended to observed.jsonl in the spool directory: the denominator of the record coverage metric.
 """
@@ -42,6 +45,7 @@ EVENT = "bash-result"
 VIA = "bash-hook"
 MAX_INPUT = 2_000_000
 OBSERVED = "observed.jsonl"
+REPORT_SLACK_S = 120  # how much older than the command's start a JUnit report may look (clock steps, mtime)
 CONTROL = frozenset({"|", "||", "&&", ";", "&", "|&", ";;", "(", ")"})
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _EXIT = re.compile(r"Exit code (-?\d+)\s*$")
@@ -60,6 +64,8 @@ class Match:
     cwd: Path  # where the check ran: the hook's cwd, or the directory of a leading cd
     project: str | None = None
     reason: str = ""
+    junit: bool = False  # the check is declared junit = true
+    report: str | None = None  # the JUnit path the command gave where the declaration has {junit}, as written
 
 
 def words(command: str) -> list[str] | None:
@@ -206,12 +212,61 @@ def match(command: str, cwd: Path, load: Any = config.load) -> Match | None:
     declared = declare(cfg.checks)
     for d in declared:
         if _equal(d, rest, rest_ops):
-            return Match(d.name, "direct", where, cfg.project)
+            spec = cfg.checks[d.name]
+            return Match(d.name, "direct", where, cfg.project, junit=spec.junit,
+                         report=junit_report(spec.cmd, rest) if spec.junit else None)
     for d in declared:
         if _contains(d, segs, ops):
             return Match(d.name, "unrecordable", where, cfg.project,
                          "inside a pipeline or list: the exit code is not the check's")
     return None
+
+
+def junit_report(declared: str, segs: list[list[str]]) -> str | None:
+    """The JUnit path a matching command gave in place of the declaration's {junit}, or None when it gave none (the
+    word is optional in the matching rule). `--junitxml={junit}` takes what follows `--junitxml=`; a bare {junit}
+    takes the word after the option word before it."""
+    ws = words(declared)
+    if not ws:
+        return None
+    for dseg, cseg in zip(segments(ws)[0], segs, strict=False):
+        for k, w in enumerate(dseg):
+            if "{junit}" not in w:
+                continue
+            if w == "{junit}":
+                if k == 0:
+                    continue
+                for i in range(len(cseg) - 1):
+                    if cseg[i] == dseg[k - 1]:
+                        return cseg[i + 1]
+                continue
+            pre, _, post = w.partition("{junit}")
+            for c in cseg:
+                if len(c) > len(pre) + len(post) and c.startswith(pre) and c.endswith(post):
+                    return c[len(pre):len(c) - len(post)]
+    return None
+
+
+def junit_outcome(found: Match, duration_ms: int | None) -> tuple[str | None, list[tuple[str, str | None]], str]:
+    """A junit = true check that exited 0 passes only as check run and check verify pass it: with a JUnit report of
+    this run in which a test ran and none failed. (part, failing tests, reason): part None and no reason is a pass;
+    a part is a failure (signature.junit_exit0); a reason alone means the run proves nothing either way (no report
+    of this run to read), so it is observed and not recorded."""
+    if found.report is None:
+        return None, [], ("junit = true and the command wrote no JUnit report: exit 0 alone is not a pass "
+                          f"(benchbook check run {found.check} writes one)")
+    path = found.cwd / os.path.expanduser(found.report)
+    try:
+        st = path.stat()
+    except OSError:
+        return None, [], f"junit = true and no JUnit report at {found.report}"
+    # Older than the command: a report left by an earlier run. The slack covers a coarse or stepping wall clock.
+    if st.st_mtime < time.time() - (duration_ms or 0) / 1000 - REPORT_SLACK_S:
+        return None, [], f"junit = true and the JUnit report at {found.report} predates this run"
+    from .signature import junit_exit0
+
+    part, failed = junit_exit0(path)
+    return part, failed, ""
 
 
 # ---------------------------------------------------------------------------------------------- the result
@@ -310,7 +365,7 @@ def bash_result(harness: str = "claude-code") -> int:
 
 
 def _record(call: ShellCall, found: Match) -> None:
-    from .check_run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
+    from .check_run import MAX_FAILED_SPOOLED, find_repo, git_state, head_branch, resolve_piece, spool_attempt
     from .hooks import _spool_dir
 
     project = found.project
@@ -319,6 +374,14 @@ def _record(call: ShellCall, found: Match) -> None:
     piece, piece_from = resolve_piece(None, head_branch(repo) if repo else None)
     kind, reason = found.kind, found.reason
     state = None
+    part: str | None = None
+    failed: list[tuple[str, str | None]] = []
+    if kind == "direct" and found.junit and res.status == "ok":
+        part, failed, why = junit_outcome(found, call.duration_ms)
+        if why:
+            kind, reason = "unrecordable", why
+        elif part is not None:
+            res.status = "fail"  # exit 0 with no test run, or a failing testcase: as check run records it
     if kind == "direct":
         if res.status is None:
             kind, reason = "unrecordable", res.reason
@@ -346,8 +409,9 @@ def _record(call: ShellCall, found: Match) -> None:
         return
     entry: dict[str, Any] = {
         "piece": piece, "piece_from": piece_from, "check": found.check, "status": res.status,
-        "exit_code": res.exit_code, "duration_ms": call.duration_ms, "failed_tests": [],
-        "last_line_hash": res.line_hash, "sha": state.sha, "dirty": state.dirty, "changed": len(state.changed),
+        "exit_code": res.exit_code, "duration_ms": call.duration_ms,
+        "failed_tests": [list(t) for t in failed[:MAX_FAILED_SPOOLED]], "last_line_hash": res.line_hash,
+        "signature": part, "sha": state.sha, "dirty": state.dirty, "changed": len(state.changed),
         "repo": str(repo), "agent": None, "interrupted": None, "via": VIA, "session_id": call.session_id,
         "tool_use_id": call.tool_use_id, "agent_type": call.agent_type}
     if call.harness != "claude-code":

@@ -22,7 +22,8 @@ from tests.test_checks import make_repo, piece
 from tests.writer import as_writer, issue
 
 SHA = "a" * 40
-PASS = {"checks_passed": 2, "checks_total": 2, "checks": {"unit": "ok", "value": "ok"}, "failure_signature": None,
+PASS = {"checks_passed": 2, "checks_total": 2, "checks": {"unit": "ok", "value": "ok"},
+        "checks_declared": ["unit", "value"], "failure_signature": None,
         "guard_touched": False, "guard_files": [], "checks_changed": False}
 FAIL = {**PASS, "checks_passed": 1, "checks": {"unit": "fail", "value": "ok"}, "failure_signature": "unit:x"}
 

@@ -154,8 +154,8 @@ def test_declared_check_runs_are_recorded_by_the_hook(gate_repo: Path, tmp_path:
     assert ok["code_ref"] == head and ok["author"] == "hook" and ok["config"]["piece"] == "media"
     assert ok["duration_ms"] == 1234 and "tool_use_id toolu_01ABC123" in ok["notes"]
     assert ok["metrics"] == {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"},
-                             "failure_signature": None, "guard_touched": False, "guard_files": [],
-                             "checks_changed": False, "via": "bash-hook", "worktree_dirty": False}
+                             "checks_declared": ["unit", "quick"], "failure_signature": None, "guard_touched": False,
+                             "guard_files": [], "checks_changed": False, "via": "bash-hook", "worktree_dirty": False}
     assert bad["metrics"]["checks"] == {"quick": "fail"}
     line = "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
     assert bad["metrics"]["failure_signature"] == f"quick:exit 1:{last_line_hash(line)}"

@@ -43,8 +43,8 @@ TEST_IMPL = """def test_fixed():
     assert open("impl.txt").read().strip() == "fixed"
 """
 TEST_EXTRA = "def test_extra():\n    assert True\n"
-METRIC_KEYS = {"checks_passed", "checks_total", "checks", "failure_signature", "guard_touched", "guard_files",
-               "checks_changed"}
+METRIC_KEYS = {"checks_passed", "checks_total", "checks", "checks_declared", "failure_signature", "guard_touched",
+               "guard_files", "checks_changed"}
 DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
 
 
@@ -137,7 +137,8 @@ def test_passing_commit_supports_the_completion(repo: Path, vtmp: Path, verifier
     assert exp["config"] == {"piece": "media", "checks": ["unit", "value"]}
     assert set(exp["metrics"]) == METRIC_KEYS
     assert exp["metrics"] == {
-        "checks_passed": 2, "checks_total": 2, "checks": {"unit": "ok", "value": "ok"}, "failure_signature": None,
+        "checks_passed": 2, "checks_total": 2, "checks": {"unit": "ok", "value": "ok"},
+        "checks_declared": ["unit", "value"], "failure_signature": None,
         "guard_touched": False, "guard_files": [], "checks_changed": False}
     claim = row(verifier, "claims", rec.claim_id)
     assert claim["author"] == "impl" and claim["kind"] == "completion"  # two different agents in the ledger

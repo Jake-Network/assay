@@ -137,7 +137,11 @@ nothing else (no database module is imported), and compares the command with eac
 - One leading `cd DIR &&` is allowed; the check is then looked up, and its commit read, in DIR.
 - The check must have run from the repository root, where a declared check runs; the same words run in a
   subdirectory are observed as `unrecordable`.
-- A word with `{junit}` in the declaration matches a word of that shape or nothing.
+- A word with `{junit}` in the declaration matches a word of that shape or nothing. For a `junit = true` check
+  that exits 0, that word is where the hook reads the report: the run is recorded as passed only when that file
+  was written by this run and shows a test that ran and none that failed (a report with no test run is recorded as
+  a failure, as `check run` records it). Without the word, or with no such file, the run is `unrecordable`: exit 0
+  alone proves nothing for a JUnit check, and the completion gate asks for `benchbook check run`.
 - The remaining words must be equal. Extra arguments (`-k upload`, `-x`) are a different command and do not
   match.
 
@@ -191,7 +195,10 @@ each check at HEAD opens all of them until the next commit.
 ### Under a token
 
 Both hooks work the same with `BENCHBOOK_TOKEN`. The Bash hook only writes the spool; the processor it starts
-records the attempt as the token's agent (no name is given, so it never claims to be someone else). An entry that
+records the attempt as the token's agent (no name is given, so it never claims to be someone else). Each token
+has its own spool directory, and each entry carries a digest of the token it was queued with: a processor or
+`benchbook hook replay` under another token (or none) leaves it queued, so agents that share a database URL and
+a state directory never record each other's entries. Replay an entry with the token it was queued under. An entry that
 names an agent (`check run` with `--agent` or `BENCHBOOK_AGENT`) different from the token's is refused, moves to
 the spool's `dead/` and is recorded by `benchbook hook replay` run with that agent's token. On a
 `benchbook_writer` login without a token the processor cannot register `hook` and the entry goes to `dead/`, as

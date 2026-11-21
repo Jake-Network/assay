@@ -63,6 +63,7 @@ WORKER_TYPES = frozenset({"benchbook-worker", "assay-worker"})
 CAPTURE_DOMAIN = b"assay:auto-captured\0"
 # Spool entries that are check attempts (benchbook check run, the Bash hook); attempts.record_spooled records them.
 ATTEMPT_EVENTS = frozenset({"check-run", "bash-result"})
+SPOOL_IDENTITY_DOMAIN = b"benchbook:spool-writer\0"
 
 
 def _state_dir() -> Path:
@@ -79,9 +80,21 @@ def log(msg: str) -> None:
         pass
 
 
+def writer_identity() -> str | None:
+    """Who an entry is written as when it reaches the ledger: under BENCHBOOK_TOKEN the token's agent, so a digest
+    of the token (never the token itself); without one the owner connection, None. Two agents that share a database
+    URL and a state directory but not a token must never record each other's entries: the token, not the process
+    that happens to drain the spool, decides the author."""
+    token = env("TOKEN")
+    if not token:
+        return None
+    return hashlib.sha256(SPOOL_IDENTITY_DOMAIN + token.encode()).hexdigest()[:32]
+
+
 def _spool_dir() -> Path:
-    # Different database targets must never pick up one another's pending writes.
-    # The key is built from the values, not the variable names, so entries queued under ASSAY_* variables are found.
+    # Different database targets must never pick up one another's pending writes, nor different tokens on one target
+    # (writer_identity). The key is built from the values, not the variable names, so entries queued under ASSAY_*
+    # variables are found; without a token it is the key spools had before tokens.
     url = env("DATABASE_URL")
     data_dir = env("DATA_DIR")
     xdg_dir = os.environ.get("XDG_DATA_HOME")
@@ -89,7 +102,10 @@ def _spool_dir() -> Path:
         str(Path(d).expanduser().resolve()) if d else None
         for d in (data_dir, xdg_dir)
     ] if not url else []
-    key = hashlib.sha256(json.dumps([url, *embedded]).encode()).hexdigest()
+    parts: list[Any] = [url, *embedded]
+    if (writer := writer_identity()) is not None:
+        parts.append({"writer": writer})
+    key = hashlib.sha256(json.dumps(parts).encode()).hexdigest()
     return _state_dir() / "spool" / key
 
 
@@ -250,6 +266,9 @@ def _locked(spool: Path) -> bool:
 
 
 def _write_spool(spool: Path, entry: dict[str, Any]) -> None:
+    """Queue one entry, bound to the identity that queued it (writer_identity): only a processor or replay under the
+    same identity records it."""
+    entry = {**entry, "writer": writer_identity()}
     with tempfile.NamedTemporaryFile(mode="w", dir=spool, encoding="utf-8", delete=False) as f:
         path = Path(f.name)
         try:
@@ -649,7 +668,8 @@ def _bury(path: Path, reason: str) -> None:
 
 
 def process_file(path: Path) -> str:
-    """'ok:<process result>', 'dead:<reason>' (moved to dead/ or quarantined) or 'retry:<reason>' (left queued)."""
+    """'ok:<process result>', 'dead:<reason>' (moved to dead/ or quarantined), 'retry:<reason>' (left queued) or
+    'held:<reason>' (left queued, not retried: another identity queued it)."""
     try:
         spooled = json.loads(path.read_text(encoding="utf-8"))
         if "data" in spooled:
@@ -662,6 +682,9 @@ def process_file(path: Path) -> str:
             raise ValueError("invalid hook spool entry")
         accepted = spooled.get("accepted") is True
         agent_type = _agent_type(data)
+        writer = spooled.get("writer")  # absent: queued before entries were bound, when there were no tokens
+        if writer is not None and not isinstance(writer, str):
+            raise ValueError("invalid writer in hook spool entry")
     except OSError as e:
         log(f"cannot read hook spool {path} (queued to retry): " + traceback.format_exc())
         return f"retry:{type(e).__name__}: {e}"
@@ -672,6 +695,11 @@ def process_file(path: Path) -> str:
             return f"retry:could not quarantine invalid spool entry ({e})"
         log(f"invalid hook spool {path} (quarantined): " + traceback.format_exc())
         return f"dead:invalid spool entry ({e})"
+    if writer != writer_identity():
+        # Queued under another token (or with none): recording it now would name this process's agent as the
+        # author of another agent's report or run. It stays queued for a replay under the identity that queued it.
+        return ("held:queued under " + ("another BENCHBOOK_TOKEN" if writer else "no BENCHBOOK_TOKEN")
+                + "; replay it with the environment it was queued in")
     if not accepted and not is_worker(agent_type, require_type=False):
         # Queued by a build that did not record its decision: the BENCHBOOK_HOOK_AGENTS that accepted it may differ
         # from the current one. Keep it rather than drop it, so a replay with the original setting captures it.

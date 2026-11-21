@@ -93,7 +93,8 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
             source += " (" + ", ".join(f"{k} {v}" for k, v in ids.items()) + ")"
     approach = str(data["approach"]) if data.get("approach") else None
     return LocalRun(str(data["piece"]), sha, base, integ, [result], result.duration_ms, data.get("interrupted"),
-                    approach, via=str(data.get("via") or ("bash-hook" if event == "bash-result" else "check-run")),
+                    approach, declared=list(base.checks),
+                    via=str(data.get("via") or ("bash-hook" if event == "bash-result" else "check-run")),
                     dirty=bool(data.get("dirty")), changed=int(data.get("changed") or 0), integrity_note=note,
                     source_note=source)
 

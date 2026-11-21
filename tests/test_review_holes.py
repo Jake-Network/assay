@@ -53,8 +53,8 @@ base = "main"
 '''
 CHECK = "import app\nassert app.VALUE == 1, 'broken'\nprint('ok')\n"
 TEST_APP = "import app\n\n\ndef test_value():\n    assert app.VALUE == 1\n"
-PASSING = {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"}, "failure_signature": None,
-           "guard_touched": False, "guard_files": [], "checks_changed": False}
+PASSING = {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"}, "checks_declared": ["unit"],
+           "failure_signature": None, "guard_touched": False, "guard_files": [], "checks_changed": False}
 
 
 def git(repo: Path, *args: str) -> str:

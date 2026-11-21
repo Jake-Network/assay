@@ -23,6 +23,14 @@
         ]
       }
     },
+    "checks_declared": {
+      "description": "Every check declared at the merge-base, run or not. A run that left one out (--checks) is partial: it never verifies a completion.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000
+    },
     "failure_signature": {
       "type": [
         "string",

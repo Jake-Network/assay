@@ -94,6 +94,25 @@
 - Under tokens the database refuses a worker's intent without `settings.worker_intents`, a lease longer than
   `settings.max_lease_seconds` (new, default 86400), and an `expired` task event that does not name the previous
   holder.
+- check verify records `metrics.checks_declared` (every check declared at the merge-base). A run of only some
+  checks (`--checks`) is recorded as partial: it never verifies a completion, in the all_pass rule, in verify's own
+  decision or in the PR summary, though a check it ran that failed still counts.
+- check verify takes `--claim ID`: the re-run is evidence for that completion claim, after checking that it is
+  about the piece and commit; its reporter is the implementer. `pr pieces --claims` adds the claim id as a fourth
+  column and the GitHub Action passes it, so CI links its re-run to the claim the summary shows. Without `--claim`,
+  verify also finds a claim whatever its statement (by piece, commit and reporter).
+- The hook spool is bound to its writer: under `BENCHBOOK_TOKEN` each token has its own spool directory, and an
+  entry records a digest of the token it was queued with. A processor or `hook replay` under another token (or
+  none) leaves it queued, so one agent can no longer record another's queued reports or runs in its own name.
+  Without a token the spool is where it was.
+- The Bash hook records a `junit = true` check that exited 0 only with a JUnit report of that run, named on the
+  command line where the declaration has `{junit}`, in which a test ran and none failed. Without such a report the
+  run is observed as `unrecordable`, and the completion gate asks for `benchbook check run`.
+- `heartbeat` and `update_intent` refuse a lease that has run out (`LeaseLost`), so an expired piece is never
+  revived next to the piece that took its paths. `piece start` without `--paths` after its lease ran out takes the
+  same paths again as a new piece, through the overlap check.
+- After a timeout or an interruption the runner waits for the command's whole process group, not only the shell,
+  and sends SIGKILL to what is left after 10 s: a child that ignores SIGTERM no longer outlives the run.
 
 ## Unreleased: core for the verification ledger
 

@@ -99,22 +99,50 @@ def start(lg: Ledger, piece: str, patterns: Sequence[str], repo: Path, lease_sec
     piece = check_name(piece)
     lease = PIECE_LEASE if lease_seconds is None else lease_seconds
     mine = [t for t in lg.my_intents() if PIECE_TAG in t.tags and t.spec.get("piece") == piece]
+    if not patterns and not mine and (last := _expired(lg, piece)) is not None:
+        patterns, tags = last["declared"], [*last["tags"], *tags]  # start again what ran out, as it was declared
     if not patterns and not mine:
         raise BenchbookError(f"declare the paths piece {piece} will change: --paths 'glob' (repeatable)")
     paths, new = expand(patterns, tracked_files(repo)) if patterns else (None, [])
     if mine:
         cur = mine[0]
         patch: dict[str, Any] = {} if paths is None else {"paths": paths, "declared": _declared(patterns)}
-        t = lg.update_intent(cur.id, patch, lease_seconds=lease, exclusive=["piece"], exclusive_paths=["paths"])
-        extra = [x for x in tags if x not in cur.tags]
-        note = (f"tags are fixed when a piece starts; {', '.join(extra)} not added (piece done, then start again)"
-                if extra else None)
-        return Started(t, True, list(t.spec.get("paths", [])), new, note)
+        try:
+            t = lg.update_intent(cur.id, patch, lease_seconds=lease, exclusive=["piece"], exclusive_paths=["paths"])
+        except LeaseLost:
+            # The lease ran out since my_intents read it: the paths are free for anyone, so they are taken again
+            # as a new piece, through the overlap check, never by reviving the old one.
+            if paths is None:
+                patterns = [p for p in cur.spec.get("declared") or [] if isinstance(p, str)]
+                paths, new = expand(patterns, tracked_files(repo))
+            tags = [*_extra_tags(cur.tags, piece), *tags]
+        else:
+            extra = [x for x in tags if x not in cur.tags]
+            note = (f"tags are fixed when a piece starts; {', '.join(extra)} not added (piece done, then start "
+                    "again)" if extra else None)
+            return Started(t, True, list(t.spec.get("paths", [])), new, note)
     assert paths is not None
     spec = {"piece": piece, "paths": paths, "declared": _declared(patterns)}
     t = lg.create_intent(f"piece {piece}", spec, tags=[PIECE_TAG, f"piece:{piece}", *tags], lease_seconds=lease,
                          exclusive=["piece"], exclusive_paths=["paths"])
     return Started(t, False, paths, new)
+
+
+def _extra_tags(tags: Sequence[str], piece: str) -> list[str]:
+    return [x for x in tags if x not in ("intent", PIECE_TAG, f"piece:{piece}")]
+
+
+def _expired(lg: Ledger, piece: str) -> dict[str, Any] | None:
+    """lg's newest intent for PIECE whose lease ran out without a release: its declared globs and extra tags, so
+    `piece start` without --paths takes the paths again (through the overlap check) instead of failing."""
+    rows = lg.sql_internal(
+        "SELECT spec -> 'declared' AS declared, tags FROM benchbook.tasks WHERE project_id=%s AND status='claimed'"
+        " AND lease_owner=%s AND lease_expires_at <= now() AND 'intent' = ANY(tags) AND %s = ANY(tags)"
+        " AND spec ->> 'piece' = %s ORDER BY created_at DESC LIMIT 1", (lg.project_id, lg.agent, PIECE_TAG, piece))
+    if not rows or not isinstance(rows[0]["declared"], list):
+        return None
+    declared = [p for p in rows[0]["declared"] if isinstance(p, str)]
+    return {"declared": declared, "tags": _extra_tags(rows[0]["tags"] or [], piece)} if declared else None
 
 
 def done(lg: Ledger, piece: str, failed: bool = False, summary: str = "") -> Task:

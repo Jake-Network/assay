@@ -13,7 +13,8 @@ completions are verified without opening the ledger. What is recorded, and what 
    to end their commit message with it, or add it with `git commit --trailer "Benchbook-Piece: media-upload"`.
 2. For each piece, runs `benchbook check verify <piece> <commit> --base <the pull request's base>` with the
    workflow run's URL in the attempt's `trace_ref`. When the ledger already has a completion claim for that piece
-   and commit, the re-run is linked to it (`--reported-by` its reporter); otherwise only the attempt is recorded.
+   and commit, the re-run is linked to that claim (`--claim` its id, from `pr pieces --claims`); otherwise only the
+   attempt is recorded.
 3. Writes the summary (`benchbook pr summary`) to the job summary and creates or updates the comment that starts
    with `<!-- benchbook-summary -->` (`benchbook pr comment`). Running again on the same pull request updates that
    comment; extra copies left by two runs racing each other are deleted.

@@ -18,8 +18,8 @@ from tests.conftest import make_project
 
 PY = shlex.quote(sys.executable)
 SCRIPT = str(Path(sys.executable).parent / "benchbook")
-METRIC_KEYS = {"checks_passed", "checks_total", "checks", "failure_signature", "guard_touched", "guard_files",
-               "checks_changed", "via", "worktree_dirty"}
+METRIC_KEYS = {"checks_passed", "checks_total", "checks", "checks_declared", "failure_signature", "guard_touched",
+               "guard_files", "checks_changed", "via", "worktree_dirty"}
 CHECK_OK = r"""import sys
 sys.stdout.write("out line 1\n"); sys.stdout.flush()
 sys.stderr.write("err line 2\n"); sys.stderr.flush()
@@ -142,7 +142,8 @@ def test_output_is_the_commands_byte_for_byte_and_the_run_is_recorded(repo: Path
     assert exp["config"] == {"piece": "media", "checks": ["unit"]}
     assert set(exp["metrics"]) == METRIC_KEYS
     assert exp["metrics"] == {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"},
-                              "failure_signature": None, "guard_touched": False, "guard_files": [],
+                              "checks_declared": ["unit", "fails", "slow", "quick"], "failure_signature": None,
+                              "guard_touched": False, "guard_files": [],
                               "checks_changed": False, "via": "check-run", "worktree_dirty": False}
     assert exp["notes"].startswith("check run: unit in ")
     assert not spool_entries(tmp_path / "state")  # drained

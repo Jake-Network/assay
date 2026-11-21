@@ -119,6 +119,9 @@ class Verification:
     duration_ms: int = 0
     interrupted: str | None = None  # the signal's name when the run stopped before the last check
     approach: str | None = None  # config.approach: what the implementer says it tried (failures.py)
+    # Every check declared at the merge-base, whether this run ran it or not (--checks runs some). Stored as
+    # metrics.checks_declared: a run that left one out is partial, and the all_pass rule never counts it as evidence.
+    declared: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> int:
@@ -131,6 +134,17 @@ class Verification:
     @property
     def all_passed(self) -> bool:
         return self.interrupted is None and self.passed == self.total
+
+    @property
+    def missing(self) -> list[str]:
+        """Declared checks this run did not run (--checks)."""
+        ran = {r.name for r in self.results}
+        return [n for n in self.declared if n not in ran]
+
+    @property
+    def complete(self) -> bool:
+        """Every declared check ran: only such a run can verify a completion (ledger.attempt_summary)."""
+        return bool(self.declared) and not self.missing
 
     @property
     def run_status(self) -> str:
@@ -148,6 +162,7 @@ class Verification:
             "checks_passed": self.passed,
             "checks_total": self.total,
             "checks": {r.name: r.status for r in self.results},
+            "checks_declared": list(self.declared),
             "failure_signature": failure_signature(self.results),
             "guard_touched": self.integrity.guard_touched,
             "guard_files": self.integrity.guard_files[:MAX_GUARD_FILES],
@@ -161,6 +176,9 @@ class Verification:
             n += f"; no [guard] paths there, default guard {', '.join(DEFAULT_GUARD_PATHS)}"
         if len(self.integrity.guard_files) > MAX_GUARD_FILES:
             n += f"; {len(self.integrity.guard_files)} guarded files changed, first {MAX_GUARD_FILES} kept"
+        if self.declared and self.missing:
+            n += (f"; partial: {self.total} of {len(self.declared)} declared checks run (not run: "
+                  f"{', '.join(self.missing)}), so this run cannot verify the completion")
         if self.interrupted:
             done = sum(r.status != "not_run" for r in self.results)
             n += f"; interrupted ({self.interrupted}) after {done} of {self.total} checks"
@@ -392,10 +410,12 @@ def read_report(path: Path, declared: Sequence[str]) -> Report:
 def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None = None,
            only: Sequence[str] | None = None, reported_by: str | None = None,
            report_file: Path | None = None, trace_ref: dict[str, Any] | None = None,
-           decide: bool = True) -> tuple[Verification, Recorded]:
+           decide: bool = True, claim: str | None = None) -> tuple[Verification, Recorded]:
     """Steps 1 to 4 (the CLI prints step 5). `lg` acts as the verifier. Raises the interruption, after cleaning up
     and recording, when the run was interrupted. trace_ref is stored on the attempt as given (a CI run's URL, say);
-    decide=False records without deciding, even with lead authority."""
+    decide=False records without deciding, even with lead authority. claim: the completion claim the run is evidence
+    for (what `pr pieces --claims` found); it must be about this piece at this commit, and its reporter is the
+    implementer (reported_by, when also given, must name the same agent)."""
     if not PIECE.fullmatch(piece):
         raise BenchbookError("piece: 1-100 characters without spaces")
     if "completion" not in lg.pack.claim_kinds:
@@ -410,6 +430,13 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         raise BenchbookError(f"--report-file: no such file: {report_file}")
     repo = toplevel(repo)
     sha = resolve_commit(repo, commit)
+    given = None
+    if claim is not None:
+        given = given_claim(lg, claim, piece, sha, reported_by)
+        reported_by = given[1]
+        if reported_by == lg.agent:
+            raise BenchbookError(f"the verifier ({lg.agent}) cannot verify its own report: --claim "
+                                 f"{claim} was reported by {reported_by}")
     b = read_base(repo, base or localcfg.load(repo).guard_base or DEFAULT_BASE, sha)
     names = list(b.checks) if not only else list(dict.fromkeys(only))
     if unknown := [n for n in names if n not in b.checks]:
@@ -419,16 +446,18 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     integ = integrity(repo, b, sha)
     t0 = time.monotonic()
     results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env())
-    v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted))
+    v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
+                     declared=list(b.checks))
+    found = None if given is None else given[0]
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
     if interrupted is not None:
         try:
-            _record(lg, v, reported_by, report, trace_ref)
+            _record(lg, v, reported_by, report, trace_ref, found)
         except Exception as e:  # noqa: BLE001 - the interruption is what the caller must see
             interrupted.add_note(f"the interrupted attempt was not recorded: {e}")
         raise interrupted
-    rec = _record(lg, v, reported_by, report, trace_ref)
+    rec = _record(lg, v, reported_by, report, trace_ref, found)
     rec.seen_before = seen
     rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
     return v, rec
@@ -441,11 +470,13 @@ def _signal_name(e: BaseException | None) -> str | None:
 
 
 def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report | None,
-            trace_ref: dict[str, Any] | None = None) -> Recorded:
+            trace_ref: dict[str, Any] | None = None, given: UUID | None = None) -> Recorded:
     """Step 4. The claim is the implementer's (proposed, never decided here); the attempt and the link are the
-    verifier's, so the ledger shows two different agents."""
+    verifier's, so the ledger shows two different agents. given: a claim already checked by given_claim."""
     claim: tuple[UUID, bool] | None = None
-    if reported_by is not None:
+    if given is not None:
+        claim = (given, True)
+    elif reported_by is not None:
         claim = _completion_claim(lg, v, reported_by, report)
     r = lg.record_experiment(v.config(), v.metrics(), run_status=v.run_status, code_ref=v.commit, notes=v.notes(),
                              duration_ms=v.duration_ms, trace_ref=trace_ref)
@@ -468,12 +499,42 @@ def statements(piece: str, commit: str, reporter: str) -> tuple[str, str]:
     return usual, f"{usual}, reported by {reporter}"
 
 
-# The completion claims check verify could have written for a piece and commit, oldest first.
+# The completion claims of a piece and commit, oldest first: tagged with both and naming both in the payload, as
+# pr.py finds them. Whatever their statement: a report written in other words is the same report (the reporter
+# decides, in _completion_claim).
 _OWN_CLAIMS = ("SELECT c.id, c.author, c.payload, a.role AS author_role FROM benchbook.claims c"
                " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
                " WHERE c.project_id = %s AND c.kind = 'completion' AND c.tags @> %s"
-               " AND c.payload ->> 'piece' = %s AND c.payload ->> 'commit' = %s AND c.statement = ANY(%s)"
+               " AND c.payload ->> 'piece' = %s AND c.payload ->> 'commit' = %s"
                " ORDER BY c.created_at, c.id")
+_CLAIM_ROW = ("SELECT c.kind, c.author, c.tags, c.payload, a.role AS author_role FROM benchbook.claims c"
+              " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
+              " WHERE c.project_id = %s AND c.id = %s")
+
+
+def given_claim(lg: Ledger, ref: str, piece: str, commit: str, reported_by: str | None) -> tuple[UUID, str]:
+    """(claim id, reporter) of --claim, after checking that it is a completion claim of this project about piece at
+    commit (tags and payload, as pr.py finds it), and that --reported-by, when given, names its reporter."""
+    from .ids import short
+    from .ledger import reporter_of
+
+    _, cid = lg.resolve(ref, ["claim"])  # within lg's project: another project's claim is not found
+    rows = lg.sql_internal(_CLAIM_ROW, (lg.project_id, cid))
+    if not rows:
+        raise BenchbookError(f"--claim {ref}: no such claim in {lg.project_id}")
+    row, name = rows[0], short("claim", cid)
+    if row["kind"] != "completion":
+        raise BenchbookError(f"--claim {name} is a {row['kind']} claim, not a completion")
+    payload = row["payload"] if isinstance(row["payload"], dict) else {}
+    tags = set(row["tags"] or [])
+    if (payload.get("piece") != piece or payload.get("commit") != commit
+            or not {f"piece:{piece}", f"commit:{commit}"} <= tags):
+        raise BenchbookError(f"--claim {name} is about {payload.get('piece')!r} at {str(payload.get('commit'))[:12]} "
+                             f"(tags and payload), not {piece} at {commit[:12]}")
+    reporter = reporter_of(str(row["author"]), row["author_role"], payload.get("reported_by"))
+    if reported_by is not None and reported_by != reporter:
+        raise BenchbookError(f"--reported-by {reported_by}, but {name} records the report of {reporter}")
+    return cid, reporter
 
 
 def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report | None) -> tuple[UUID, bool]:
@@ -500,7 +561,7 @@ def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report
     tags = [f"piece:{v.piece}", f"commit:{v.commit}"]
 
     def existing() -> UUID | None:
-        for row in lg.sql_internal(_OWN_CLAIMS, (lg.project_id, tags, v.piece, v.commit, [usual, with_reporter])):
+        for row in lg.sql_internal(_OWN_CLAIMS, (lg.project_id, tags, v.piece, v.commit)):
             by = (row["payload"] or {}).get("reported_by")
             if reporter_of(row["author"], row["author_role"], by) == reporter or (
                     row["author"] == proposer.agent and by == named):
@@ -561,8 +622,14 @@ def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
     if mine is None:  # the claim names another piece or commit than this run (an older claim with the same text)
         return Outcome(None, f"no decision: {short('claim', claim)} is about {info['piece']} at "
                              f"{str(info['commit'])[:12]}, not this run", person=True)
+    if mine["passed"] and not mine["complete"]:
+        return Outcome(None, f"no decision: this run ran {v.total} of the {len(v.declared)} declared checks "
+                             f"(not run: {', '.join(v.missing)}); only a run of every declared check can verify",
+                       [rec.experiment_id])
     others = [a for a in attempts if a["id"] != rec.experiment_id]
-    if differ := [a for a in others if a["passed"] != mine["passed"]]:
+    # A failed run disagrees with a passing one that ran every declared check, not with one that skipped the check
+    # that failed here (--checks).
+    if differ := [a for a in others if a["passed"] != mine["passed"] and (mine["passed"] or a["complete"])]:
         evidence = [rec.experiment_id, *(a["id"] for a in differ)]
         ids = ", ".join(f"{short('experiment', a['id'])} by {a['author']}" for a in differ)
         said = "passed" if mine["passed"] else "failed"

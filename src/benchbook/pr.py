@@ -47,6 +47,7 @@ class PieceState:
     passed: int = 0  # valid finished attempts of the piece at the commit in which every check passed
     failed: int = 0
     independent: list[str] = field(default_factory=list)  # authors of clean passing runs other than the implementer
+    partial: int = 0  # passing runs of only some declared checks (--checks): never evidence of verified
     discarded: int = 0
     open_findings: list[UUID] = field(default_factory=list)
     guard_touched: bool | None = None  # None: no attempt of the commit says
@@ -108,13 +109,19 @@ _FINDINGS = ("SELECT id FROM benchbook.v_claim_status WHERE project_id = %s AND 
              " AND status IN ('proposed', 'inconclusive') ORDER BY created_at, id")
 
 
-def reporter(lg: Ledger, p: Piece) -> str | None:
-    """Who reported p's completion at its commit, if anyone did: what `check verify --reported-by` needs to link a
-    re-run to that claim (check verify finds a claim by piece, commit and reporter, so nothing new is proposed).
-    payload.reported_by counts only on a claim recorded by a lead, a person or a harness agent; a worker's claim is
-    the worker's report, whomever it names (ledger.reporter_of)."""
+def completion(lg: Ledger, p: Piece) -> tuple[UUID, str] | None:
+    """The completion claim of p at its commit and its reporter, if anyone reported it: the claim id is what
+    `check verify --claim` takes, so the CI's re-run is evidence for the very claim this summary shows, whatever its
+    statement. payload.reported_by counts only on a claim recorded by a lead, a person or a harness agent; a
+    worker's claim is the worker's report, whomever it names (ledger.reporter_of)."""
     rows = lg.sql_internal(_CLAIM, _claim_params(lg, p))
-    return _reporter(rows[0]) if rows else None
+    return (rows[0]["id"], _reporter(rows[0])) if rows else None
+
+
+def reporter(lg: Ledger, p: Piece) -> str | None:
+    """Who reported p's completion at its commit (completion), if anyone did."""
+    found = completion(lg, p)
+    return found[1] if found else None
 
 
 def _claim_params(lg: Ledger, p: Piece) -> tuple[Any, ...]:
@@ -154,8 +161,10 @@ def _describe(lg: Ledger, p: Piece) -> PieceState:
     impl = set(info["implementers"]) if info else set()
     s.claim_id, s.claim_status, s.reporter = claim["id"], claim["status"], _reporter(claim)
     s.implementers = sorted(impl)
-    clean = [a for a in attempts if a["passed"] and a["author"] not in impl and a["via"] is None
-             and a["guard_touched"] is False and a["checks_changed"] is False]
+    others = [a for a in attempts if a["passed"] and a["author"] not in impl and a["via"] is None
+              and a["guard_touched"] is False and a["checks_changed"] is False]
+    clean = [a for a in others if a["complete"]]
+    s.partial = len(others) - len(clean)
     s.independent = sorted({a["author"] for a in clean})
     if s.claim_status == "verified":
         s.state, s.why = VERIFIED, f"decided verified (oracle {claim['last_oracle']})"
@@ -168,7 +177,9 @@ def _describe(lg: Ledger, p: Piece) -> PieceState:
         s.state = CLAIMED
         s.why = "the commit changed tests (guarded paths or [checks]): a re-run cannot verify it, a person decides"
     elif not clean:
-        s.state, s.why = CLAIMED, "no independent re-run yet (the implementer's own runs do not count)"
+        s.state = CLAIMED
+        s.why = "no independent re-run of every declared check yet (the implementer's own runs do not count"
+        s.why += f"; {s.partial} run(s) of only some checks do not either)" if s.partial else ")"
     else:
         try:  # the ledger's own rule, so "verified" here means what decide would accept
             with lg._conn() as conn:
@@ -237,7 +248,7 @@ def render(states: Sequence[PieceState], *, project: str, agent: str, token: boo
         lines += ["", f"Skipped {len(skipped)} `{TRAILER}:` value(s) that are not a piece name (1-100 characters, "
                       "no spaces)."]
     lines += ["", "<details><summary>What the states mean</summary>", "",
-              "- **verified**: the declared checks passed in a re-run of that commit by an agent other than the "
+              "- **verified**: every declared check passed in a re-run of that commit by an agent other than the "
               "implementer, nothing guarded was touched, `[checks]` is unchanged and no run of the commit failed "
               "(the code pack's rule; a lead may not have decided the claim yet), or a lead or a person decided it "
               "verified. It does not mean the code is correct or that the checks test the piece.",

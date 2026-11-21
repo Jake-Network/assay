@@ -102,10 +102,16 @@ git cat-file -e "${BB_BASE_SHA:?}^{commit}" 2>/dev/null && git cat-file -e "${BB
 failed=0
 benchbook pr pieces --base "$BB_BASE_SHA" --head "$BB_HEAD_SHA" --claims > "$tmp/benchbook-pieces.tsv" \
   || fail "could not list the pieces of this pull request"
-while IFS=$'\t' read -r piece sha reporter; do
+while IFS=$'\t' read -r piece sha reporter claim; do
   [ -n "$piece" ] || continue
   args=(check verify "$piece" "$sha" --base "$BB_BASE_SHA" --trace-ref "$trace")
-  if [ "$reporter" != "-" ]; then args+=(--reported-by "$reporter"); fi  # links the run to that completion claim
+  # The run is evidence for the claim the summary shows: check verify checks that it is about this piece and commit
+  # and takes its reporter from it. Without a claim nothing is linked.
+  if [ -n "${claim:-}" ] && [ "$claim" != "-" ]; then
+    args+=(--claim "$claim")
+  elif [ "$reporter" != "-" ]; then
+    args+=(--reported-by "$reporter")
+  fi
   echo "::group::benchbook check verify ${sha:0:12} (piece $piece)"
   benchbook "${args[@]}" ${decide[@]+"${decide[@]}"} < /dev/null || failed=1
   echo "::endgroup::"

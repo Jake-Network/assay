@@ -21,13 +21,13 @@ def pieces_cmd(
     base: Annotated[str, BASE],
     head: Annotated[str, HEAD] = "HEAD",
     claims: Annotated[bool, typer.Option(
-        "--claims", help="Add a third column: the reporter of the piece's completion claim at that commit, from the "
-                         "ledger ('-' when nobody reported it)")] = False,
+        "--claims", help="Add two columns from the ledger: the reporter of the piece's completion claim at that "
+                         "commit and the claim's id, for check verify --claim ('-' when nobody reported it)")] = False,
 ) -> None:
     """One line per piece a commit of BASE..HEAD names in a Benchbook-Piece trailer: piece, commit (tab separated).
     The last commit carrying a piece's trailer is that piece's commit."""
     from .cli import emit, ledger
-    from .pr import pieces, reporter
+    from .pr import completion, pieces
 
     found, skipped = pieces(Path.cwd(), base, head)
     _warn(skipped)
@@ -35,13 +35,16 @@ def pieces_cmd(
     if claims and found:
         lg = ledger(read_only=True)
         for row, p in zip(rows, found, strict=True):
-            by = reporter(lg, p)
+            got = completion(lg, p)
+            by = got[1] if got else None
             if by is not None and (by.split() != [by] or by == "-"):  # the line is tab separated
-                print(f"warning: piece {p.piece}: reporter {by!r} cannot go on a line; left out", file=sys.stderr)
+                print(f"warning: piece {p.piece}: reporter {by!r} cannot go on a line; left out (the claim id "
+                      "still names it)", file=sys.stderr)
                 by = None
             row["reporter"] = by
+            row["claim"] = str(got[0]) if got else None
     emit(rows, "\n".join("\t".join([r["piece"] or "", r["commit"] or ""]
-                                    + ([r["reporter"] or "-"] if claims else [])) for r in rows))
+                                    + ([r["reporter"] or "-", r["claim"] or "-"] if claims else [])) for r in rows))
 
 
 @pr_app.command("summary")

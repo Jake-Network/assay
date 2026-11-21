@@ -426,6 +426,35 @@ A review of the merged token and verification code reproduced five holes; these 
   was edited in place because nothing with it has been released.
 - **The credential scrub is limited to `check verify`.** It removes the inherited copies; code under test runs as
   the verifier's user and can still read what that user can, so it is hygiene, not isolation.
-- **Still not prevented.** A fake JUnit report written by the code under test; a hook-recorded run that exits 0
-  with nothing run counting for the completion gate (never as an independent re-run); a raw writer taking a piece
-  name or paths up to the lease cap; self-declared names in local mode.
+- **Still not prevented.** A fake JUnit report written by the code under test; a raw writer taking a piece name or
+  paths up to the lease cap; self-declared names in local mode. (A hook-recorded run that exited 0 with nothing run
+  was closed by the second review, below.)
+
+## After the second review (2026-11-21)
+
+A second review reproduced six more holes (`tests/test_second_review.py`).
+
+- **An attempt says what was declared.** check verify stores `checks_declared`, the merge-base's check names. An
+  attempt is *complete* when it ran all of them; only complete attempts are evidence under all_pass and in the PR
+  summary. An attempt without the field (hand-recorded, or from before) is partial: the ledger cannot know what was
+  declared, and a missing field must not read as "everything". A failed check in a partial run still blocks, and a
+  partial pass does not make a full failure "disagree" (no `inconclusive` from it).
+- **The spool is keyed by writer.** The author of a spooled entry is decided at processing time from the
+  environment (the token), so the entry has to be bound to the token it was queued under. A per-token spool
+  directory keeps two agents' processors apart by construction; the digest in each entry (`writer`) makes a
+  misplaced entry wait instead of being recorded under the wrong name. Without a token the key is unchanged, so
+  queued entries from before are found. The token itself is never written; the digest has its own domain.
+- **The hook reads the report the command named.** The hook cannot see a report the command did not write, so a
+  junit check run without its `{junit}` word is observed, not recorded (neither pass nor fail): it is no evidence
+  either way, and recording it as a failure would block the commit's verification. A report older than the command
+  (by more than 120 s of slack, for coarse or stepping clocks) is ignored.
+- **A lease is renewed only while live.** Checked in the UPDATE itself (`lease_expires_at > now()`), so it is atomic.
+  Not added to `guard_task`: the path overlap it protects is checked in the SDK only (above), so a database rule
+  for renewal alone would not stop a raw writer.
+- **CI names the claim.** `pr pieces --claims` and check verify used different lookups; the claim id now travels
+  from one to the other, and verify checks project (the id resolves only in its project), piece, commit (tags and
+  payload) and reporter. verify's own lookup also stopped requiring one of its two statements: identity was
+  already (piece, commit, reporter).
+- **The runner waits for the group.** Signal 0 to the group, reaping the shell meanwhile (its zombie keeps the group
+  alive), then SIGKILL after the grace time. Only after a timeout or an interruption: background processes a
+  command leaves behind after a normal exit are still not killed.
