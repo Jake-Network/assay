@@ -41,3 +41,32 @@ line per bad field), `NotFound`, `Ambiguous`, `PermissionDenied`, `LeaseLost`, `
 `BenchbookError`.
 
 A full loop is in `examples/sdk-loop/loop.py`.
+
+## Running a command
+
+`benchbook.runner` is the runner behind `benchbook ar run`, with nothing of autoresearch in it. It does not touch
+the ledger: it runs one shell command and says how that went.
+
+```python
+from benchbook.runner import Interrupted, run_command
+
+res = run_command("uv run pytest tests/media", cwd, log_path, timeout=900, tee=True)
+res.run_status, res.exit_code, res.duration_ms, res.log_tail, res.reason, res.metrics
+```
+
+`run_command(cmd, cwd, log_path, timeout, metric=None, parse_regex=..., env=None, tee=False)`:
+
+- The command runs through the shell in its own process group, with stdin closed and stdout and stderr together in
+  `log_path` (overwritten). `env=None` inherits the environment.
+- `run_status` is `ok` for exit code 0, `error` for any other exit code (`reason` `exit N`), `timeout` when
+  `timeout` seconds passed: then the whole group is killed and `exit_code` is `None`.
+- `metric="name"` also asks for a `name: number` line in the output (`error`, `no name in the summary`, when it is
+  missing). `metrics` holds every such line either way. `benchbook.integrations.autoresearch.runner.run_command` is
+  the same function with `metric="val_bpb"` as its default.
+- `tee=True` also writes the output to this process's stdout while the command runs: the same bytes in the same
+  order as `cmd 2>&1`. The command sees a pipe, not a terminal, so stderr arrives on stdout. Output from a
+  background process that the command left running is copied for 2 more seconds, then dropped.
+- `duration_ms` is wall clock. `log_tail` is the last 30 lines of the output (at most 1500 characters); the whole
+  output is in `log_path`.
+- Ctrl-C raises `KeyboardInterrupt`, SIGTERM and SIGHUP raise `Interrupted` (when called from the main thread),
+  both after the group was killed. Catch them to record the run from `log_path`, then re-raise.
