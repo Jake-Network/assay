@@ -5,6 +5,25 @@ description = "Your agents' lab notebook. Nothing they find gets lost, repeated,
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+keywords = ["agents", "multi-agent", "claude-code", "mcp", "experiment-tracking", "reproducibility", "verification",
+            "ledger", "autoresearch", "postgres"]
+# Only what CI runs: Linux and macOS, Python 3.11 to 3.13. The licence is the SPDX expression above (PEP 639), so
+# there is no licence classifier.
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Quality Assurance",
+  "Typing :: Typed",
+]
 dependencies = [
   "psycopg[binary]>=3.2",
   "psycopg-pool>=3.2",
@@ -19,6 +38,13 @@ dependencies = [
   "alembic>=1.13",
   "sqlalchemy>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Jake-Network/benchbook"
+Documentation = "https://github.com/Jake-Network/benchbook/tree/main/docs"
+Repository = "https://github.com/Jake-Network/benchbook"
+Issues = "https://github.com/Jake-Network/benchbook/issues"
+Changelog = "https://github.com/Jake-Network/benchbook/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 examples = ["numpy>=1.26", "scipy>=1.12"]
