@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-import os
 import shlex
 import sys
 import time
@@ -23,7 +22,7 @@ from typing import Any
 import pytest
 
 from benchbook import checks, hooks, pieces, pr, runner
-from benchbook.check_hooks import junit_outcome, junit_report, match
+from benchbook.check_hooks import junit_outcome, junit_report, match, remember_before
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition, LeaseLost
 from benchbook.runner import run_command
 from tests.test_check_hooks import fixture, hook, observed
@@ -168,20 +167,22 @@ def test_a_junit_check_needs_a_fresh_passing_report(tmp_path: Path) -> None:
     (tmp_path / ".benchbook" / "config.toml").write_text(JUNIT_CONFIG.format(project="p"))
     bare = match(f"{PY} -m pytest -q tests", tmp_path)
     assert bare is not None and bare.kind == "direct" and bare.junit and bare.report is None
-    assert "wrote no JUnit report" in junit_outcome(bare, 1000)[2]
-    named = match(f"{PY} -m pytest -q tests --junitxml=r.xml", tmp_path)
-    assert named is not None and "gave no duration" in junit_outcome(named, None)[2]
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    assert "wrote no JUnit report" in junit_outcome(bare, "toolu_1", spool)[2]
     found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", tmp_path)
     assert found is not None and found.report == "r.xml"
-    assert "no JUnit report at r.xml" in junit_outcome(found, 1000)[2]
+    assert "gave no tool call id" in junit_outcome(found, None, spool)[2]
+    assert "nothing noted the JUnit report before" in junit_outcome(found, "toolu_1", spool)[2]
+    remember_before(spool, "toolu_2", tmp_path / "r.xml")
+    assert "no JUnit report at r.xml" in junit_outcome(found, "toolu_2", spool)[2]
+    remember_before(spool, "toolu_3", tmp_path / "r.xml")
     (tmp_path / "r.xml").write_text('<testsuite tests="0"></testsuite>')
-    part, _, why, _ = junit_outcome(found, 1000)
+    part, _, why, _ = junit_outcome(found, "toolu_3", spool)
     assert part is not None and not why  # exit 0 and no test ran: a failure, as check run records it
+    remember_before(spool, "toolu_4", tmp_path / "r.xml")
     (tmp_path / "r.xml").write_text(PASSING_XML)
-    assert junit_outcome(found, 1000)[:3] == (None, [], "")
-    old = time.time() - 3600
-    os.utime(tmp_path / "r.xml", (old, old))
-    assert "predates this run" in junit_outcome(found, 1000)[2]
+    assert junit_outcome(found, "toolu_4", spool)[:3] == (None, [], "")
 
 
 def test_the_gate_does_not_take_exit_0_of_a_junit_check_without_a_report(db_url: str, tmp_path: Path) -> None:
@@ -202,8 +203,9 @@ def test_the_gate_does_not_take_exit_0_of_a_junit_check_without_a_report(db_url:
     assert hook("task-completed", task, env, repo).returncode == 2
 
     report = tmp_path / "report.xml"  # outside the checkout, as the command would write it
-    report.write_text(PASSING_XML)
     cmd = f"{PY} -m pytest -q tests --junitxml={report}"
+    assert hook("bash-start", fixture("post_tool_use_bash.json", repo, cmd), env, repo).returncode == 0
+    report.write_text(PASSING_XML)
     assert hook("bash-result", fixture("post_tool_use_bash.json", repo, cmd), env, repo).returncode == 0
     [row] = wait_attempts(lg, 1)
     assert row["metrics"]["checks"] == {"unit": "ok"}

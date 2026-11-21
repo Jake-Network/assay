@@ -483,3 +483,27 @@ A third review found six gaps in the fixes above (`tests/test_third_review.py`).
   files. Entries of a token that never reached the ledger stay where they are.
 - **Matcher.** `parts.pop()` on the right-hand side ran before the assignment's index, so the word before the
   option was replaced; the test now goes through `match()` with the declaration.
+
+## After the fourth review (2026-11-21)
+
+Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
+
+- **Before and after, not a clock.** Any time window lets in a report written just before the command. A
+  PreToolUse hook (`bash-start`) now notes the report's state under the tool call's id and the PostToolUse hook
+  requires a different state afterwards. This costs a second hook on every Bash call, the same TOML read the
+  result hook already pays; on any other command it writes nothing. Codex, Cursor and Gemini get no PreToolUse
+  manifest here, so they cannot record a passing JUnit run through the hook (`check run` still can). A process
+  outside the command that rewrites the report while it runs is still taken for it.
+- **One lock from reading the report to marking it used.** An flock in the spool; held only for junit checks
+  that exited 0.
+- **Lease arithmetic after the lock.** create_intent, update_intent and the overlap checks use `clock_timestamp()`
+  as heartbeat already did: under the intent lock, `now()` can be older than the lock by however long it waited.
+- **A failed renewal looks before restoring.** A LeaseLost renewal without `--paths` restores the paths only if the
+  intent actually ran out (the same test as `_expired`); a release or a takeover is an error that asks for --paths.
+- **Every token's spool knows its target from the start.** `writer.info` is created with the target and writer
+  when the first entry is queued (no ledger needed); the agent is added once a ledger confirms it. A replay then
+  sees every queue on its target, and counts the ones it cannot attribute as `held`, which makes it fail.
+- **Adoption is idempotent.** The copy's name derives from the original's spool and file name; a copy is written
+  only when neither it (queued, dead or quarantined) nor a record of its processing (`adopted.done`, written by the
+  processor before it removes the copy) exists. The old spool's lock is taken (without waiting) while moving from
+  it.

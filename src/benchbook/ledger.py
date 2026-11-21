@@ -519,12 +519,16 @@ class Ledger:
             raise BenchbookError("lease_seconds must be positive")
         tg = list(dict.fromkeys(["intent", *(tags or [])]))
         with self._conn() as conn:
+            # Every time from here on is the database's clock after the lock (clock_timestamp), not now(): now() is
+            # when the transaction began, possibly long before the lock was ours, and a lease counted from it could
+            # already be over when this commits (another piece could then take the paths at once).
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
             self._check_exclusive(conn, spec, exclusive, None)
             self._check_paths(conn, spec, exclusive_paths, None)
             r = conn.execute(
                 "INSERT INTO benchbook.tasks(project_id,title,spec,tags,created_by,status,lease_owner,lease_expires_at,"
-                "attempts,max_attempts) VALUES (%s,%s,%s,%s,%s,'claimed',%s,now() + make_interval(secs => %s),1,1)"
+                "attempts,max_attempts) VALUES (%s,%s,%s,%s,%s,'claimed',%s,"
+                "clock_timestamp() + make_interval(secs => %s),1,1)"
                 " RETURNING *",
                 (self.project_id, title.strip()[:500], Jsonb(spec), tg, self.agent, self.agent, lease_seconds),
             ).fetchone()
@@ -552,7 +556,8 @@ class Ledger:
             self._check_paths(conn, spec, exclusive_paths, tid)
             r = conn.execute(
                 "UPDATE benchbook.tasks SET spec=%s, updated_at=now(), lease_expires_at = CASE WHEN %s::int IS NULL"
-                " THEN lease_expires_at ELSE now() + make_interval(secs => %s::int) END WHERE id=%s RETURNING *",
+                " THEN lease_expires_at ELSE clock_timestamp() + make_interval(secs => %s::int) END WHERE id=%s"
+                " RETURNING *",
                 (Jsonb(spec), lease_seconds, lease_seconds, tid)).fetchone()
             self._event(conn, tid, "updated", {"spec": spec_patch})  # type: ignore[arg-type]
             return Task(**r)
@@ -564,7 +569,7 @@ class Ledger:
                 continue
             other = conn.execute(
                 "SELECT id, lease_owner, title FROM benchbook.tasks WHERE project_id=%s AND status='claimed'"
-                " AND lease_expires_at > now() AND 'intent' = ANY(tags) AND spec -> %s = %s::jsonb"
+                " AND lease_expires_at > clock_timestamp() AND 'intent' = ANY(tags) AND spec -> %s = %s::jsonb"
                 " AND id IS DISTINCT FROM %s ORDER BY created_at LIMIT 1",
                 (self.project_id, key, Jsonb(spec[key]), own)).fetchone()
             if other is not None:
@@ -587,7 +592,7 @@ class Ledger:
                 continue
             rows = conn.execute(
                 "SELECT id, lease_owner, title, spec -> %s AS paths FROM benchbook.tasks WHERE project_id=%s"
-                " AND status='claimed' AND lease_expires_at > now() AND 'intent' = ANY(tags)"
+                " AND status='claimed' AND lease_expires_at > clock_timestamp() AND 'intent' = ANY(tags)"
                 " AND jsonb_typeof(spec -> %s) = 'array' AND id IS DISTINCT FROM %s ORDER BY created_at",
                 (key, self.project_id, key, own)).fetchall()
             for other in rows:

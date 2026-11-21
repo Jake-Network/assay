@@ -142,10 +142,12 @@ reserve a file you will create, name it (or a glob that matches no tracked file 
   paths; with `--paths` it replaces them (checked against everyone else's, the agent's own other pieces included).
   It is the same task, so the piece keeps its id and its tags (tags given on a restart are not added).
   `benchbook task heartbeat <task>` also renews, but with the project's default lease (900 seconds) unless
-  `--lease` is given. Both renew only a live lease, read under the same lock the overlap check holds: once it has
-  run out, another piece may hold the paths, so a heartbeat fails with "lease lost", and `piece start <piece>`
-  starts a new piece through the overlap check. Without `--paths` it takes the paths the expired piece declared,
-  also when a `next_task` has since marked it failed; a piece released with `piece done` needs `--paths` again.
+  `--lease` is given. Both renew only a live lease, read under the same lock the overlap check holds, and every
+  lease (a new piece's, a renewal's) counts from the database's clock after that lock, not from the transaction's
+  start: once it has run out, another piece may hold the paths, so a heartbeat fails with "lease lost", and
+  `piece start <piece>` starts a new piece through the overlap check. Without `--paths` it takes the paths the
+  expired piece declared, also when a `next_task` has since marked it failed; a piece released with `piece done`
+  (even while a renewal was under way) needs `--paths` again.
 - *Release:* `piece done <piece>` by the holder marks the task done (`--failed`: failed). A lead (orchestrator or
   human) running it on another agent's piece cancels that task, for instance after merging it. `check verify` does
   not release a piece: a refuted completion goes back to its implementer, who still needs the paths.

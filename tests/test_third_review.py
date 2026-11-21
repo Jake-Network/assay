@@ -22,7 +22,7 @@ import psycopg
 import pytest
 
 from benchbook import checks, hooks, identity, pieces
-from benchbook.check_hooks import JUNIT_USED, junit_outcome, mark_report_used, match
+from benchbook.check_hooks import JUNIT_USED, junit_outcome, mark_report_used, match, remember_before
 from benchbook.errors import BenchbookError, LeaseLost
 from tests.test_check_hooks import fixture, hook, observed
 from tests.test_check_run import cli_env, make_checkout, wait_attempts
@@ -43,29 +43,22 @@ def _junit_repo(tmp_path: Path, cmd_tail: str = "--junitxml={{junit}}") -> Path:
     return tmp_path
 
 
-def test_a_report_older_than_the_command_is_not_this_runs(tmp_path: Path) -> None:
-    repo = _junit_repo(tmp_path)
-    (repo / "r.xml").write_text(PASSING_XML)
-    old = time.time() - 30  # a passing report from 30 s ago; this run (5 s) wrote none
-    os.utime(repo / "r.xml", (old, old))
-    found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", repo)
-    assert found is not None
-    assert "predates this run" in junit_outcome(found, 5000)[2]
-    (repo / "r.xml").write_text(PASSING_XML)  # written now, during the run
-    part, _, why, fingerprint = junit_outcome(found, 5000, repo)
-    assert (part, why) == (None, "") and fingerprint is not None
-
-
 def test_a_report_counts_for_one_run_only(tmp_path: Path) -> None:
     repo = _junit_repo(tmp_path)
-    (repo / "r.xml").write_text(PASSING_XML)
     found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", repo)
     assert found is not None
-    fingerprint = junit_outcome(found, 5000, repo)[3]
+    remember_before(repo, "toolu_1", repo / "r.xml")
+    (repo / "r.xml").write_text(PASSING_XML)
+    fingerprint = junit_outcome(found, "toolu_1", repo)[3]
     assert fingerprint is not None
     mark_report_used(repo, fingerprint)
     assert (repo / JUNIT_USED).exists()
-    assert "read for an earlier run" in junit_outcome(found, 5000, repo)[2]
+    os.utime(repo / "r.xml", ns=(1, 1))  # a different file state, so before and after differ
+    remember_before(repo, "toolu_2", repo / "r.xml")
+    os.utime(repo / "r.xml", ns=(2, 2))
+    st = (repo / "r.xml").stat()
+    mark_report_used(repo, json.dumps([str(repo / "r.xml"), st.st_ino, st.st_size, st.st_mtime_ns]))
+    assert "read for an earlier run" in junit_outcome(found, "toolu_2", repo)[2]
 
 
 def test_the_hook_records_a_report_once(db_url: str, tmp_path: Path) -> None:
@@ -78,15 +71,17 @@ def test_the_hook_records_a_report_once(db_url: str, tmp_path: Path) -> None:
     repo = make_checkout(tmp_path / "repo", project, cfg=JUNIT_CONFIG.format(project=project))
     env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
     report = tmp_path / "report.xml"
-    report.write_text(PASSING_XML)
     data = fixture("post_tool_use_bash.json", repo, f"{PY} -m pytest -q tests --junitxml={report}")
-    data["duration_ms"] = 60_000
+    assert hook("bash-start", data, env, repo).returncode == 0
+    report.write_text(PASSING_XML)
     assert hook("bash-result", data, env, repo).returncode == 0
     wait_attempts(lg, 1)
-    assert hook("bash-result", data, env, repo).returncode == 0  # the same command again, no new report
+    again = {**data, "tool_use_id": "toolu_again"}  # the same command again; it writes nothing this time
+    assert hook("bash-start", again, env, repo).returncode == 0
+    assert hook("bash-result", again, env, repo).returncode == 0
     kinds = [o["kind"] for o in observed(tmp_path)]
     assert kinds == ["direct", "unrecordable"]
-    assert "read for an earlier run" in observed(tmp_path)[1]["reason"]
+    assert "did not write the JUnit report" in observed(tmp_path)[1]["reason"]
     time.sleep(1)
     assert len(wait_attempts(lg, 2, timeout=2)) == 1
 
@@ -243,7 +238,8 @@ def test_entries_no_processor_confirmed_stay_where_they_are(db_url: str, tmp_pat
     spool_new.mkdir(parents=True)
     summary = hooks.replay_now(spool_new)
     assert summary.adopted == 0 and len(list(spool_old.glob("*.json"))) == 1
-    assert any("no processor confirmed" in e for e in summary.errors)
+    assert summary.held == 1 and not summary.ok
+    assert any("no processor ever confirmed" in e for e in summary.errors)
 
 
 # ------------------------------------------------------------------------------------------- 6. --junitxml {junit}

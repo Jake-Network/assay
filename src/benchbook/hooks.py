@@ -64,7 +64,9 @@ CAPTURE_DOMAIN = b"assay:auto-captured\0"
 # Spool entries that are check attempts (benchbook check run, the Bash hook); attempts.record_spooled records them.
 ATTEMPT_EVENTS = frozenset({"check-run", "bash-result"})
 SPOOL_IDENTITY_DOMAIN = b"benchbook:spool-writer\0"
-WRITER_INFO = "writer.info"  # in a token's spool: the agent the ledger said that token is, per project
+WRITER_INFO = "writer.info"  # in a token's spool: its target and writer, and the agent the ledger said it is
+ADOPTED_PREFIX = "adopted-"  # entries moved from the spool of the agent's earlier token
+ADOPTED_DONE = "adopted.done"  # ids of adopted entries already processed (_adopt never copies them again)
 
 
 def _state_dir() -> Path:
@@ -146,9 +148,7 @@ def remember_writer(project: str, agent: str) -> None:
             return
         info["agents"][project] = agent
         spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tmp = path.with_name(WRITER_INFO + ".tmp")
-        tmp.write_text(json.dumps(info, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        _write_info(path, info)
     except OSError:
         pass
 
@@ -166,6 +166,7 @@ class ReplaySummary:
     cited: int = 0
     recorded: int = 0  # check attempts
     adopted: int = 0  # entries moved here from the spool of this agent's earlier token
+    held: int = 0  # entries under another token on this target that cannot be attributed to an agent
     skipped: int = 0
     dead: int = 0
     queued: int = 0
@@ -178,7 +179,7 @@ class ReplaySummary:
 
     @property
     def ok(self) -> bool:
-        return not self.dead and not self.queued
+        return not self.dead and not self.queued and not self.held
 
     def add(self, path: Path, outcome: str) -> None:
         kind, _, detail = outcome.partition(":")
@@ -203,13 +204,14 @@ class ReplaySummary:
     def as_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "processed": self.processed, "captured": self.captured, "cited": self.cited,
                 "recorded": self.recorded, "skipped": self.skipped, "dead": self.dead, "queued": self.queued,
-                "requeued": self.requeued, "adopted": self.adopted, "errors": self.errors}
+                "requeued": self.requeued, "adopted": self.adopted, "held": self.held, "errors": self.errors}
 
     def __str__(self) -> str:
         head = (f"processed {self.processed} (captured {self.captured}, cited {self.cited}, recorded {self.recorded}, "
                 f"skipped {self.skipped});"
                 f" dead {self.dead}; still queued {self.queued}"
-                + (f"; adopted {self.adopted} from this agent's earlier token" if self.adopted else ""))
+                + (f"; adopted {self.adopted} from this agent's earlier token" if self.adopted else "")
+                + (f"; held {self.held} queued under a token no processor confirmed" if self.held else ""))
         return "\n".join([head, *self.errors])
 
 
@@ -311,19 +313,30 @@ def _locked(spool: Path) -> bool:
         return not got
 
 
-def _write_spool(spool: Path, entry: dict[str, Any]) -> None:
+def _write_spool(spool: Path, entry: dict[str, Any], name: str | None = None) -> None:
     """Queue one entry, bound to the identity that queued it (writer_identity): only a processor or replay under the
-    same identity records it."""
-    entry = {**entry, "writer": writer_identity()}
+    same identity records it. name: a fixed file name (an adopted entry's); otherwise a new one. Under a token the
+    spool also gets its WRITER_INFO (target and writer, no agent yet), so a replay under a later token can tell
+    whose database this queue is for even if the ledger was never reached."""
+    writer = writer_identity()
+    entry = {**entry, "writer": writer}
+    if writer is not None and not (spool / WRITER_INFO).exists():
+        _write_info(spool / WRITER_INFO, {"target": _target_key(), "writer": writer, "agents": {}})
     with tempfile.NamedTemporaryFile(mode="w", dir=spool, encoding="utf-8", delete=False) as f:
         path = Path(f.name)
         try:
             json.dump(entry, f, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-            path.replace(path.with_suffix(".json"))
+            path.replace(spool / name if name else path.with_suffix(".json"))
         finally:
             path.unlink(missing_ok=True)
+
+
+def _write_info(path: Path, info: dict[str, Any]) -> None:
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(info, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
 
 
 def extract_text(data: dict[str, Any]) -> str:
@@ -771,6 +784,11 @@ def process_file(path: Path) -> str:
                              fired_at=spooled.get("spooled_at"), accepted=accepted,
                              out_of_scope_heading=heading if isinstance(heading, str) else None)
         log(f"{event}: {result}")
+        if path.name.startswith(ADOPTED_PREFIX):  # before the removal: _adopt must never copy it again
+            with (path.parent / ADOPTED_DONE).open("a", encoding="utf-8") as f:
+                f.write(path.name[len(ADOPTED_PREFIX):-len(".json")] + "\n")
+                f.flush()
+                os.fsync(f.fileno())
         path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001
         reason = f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
@@ -857,16 +875,36 @@ def replay_now(spool: Path) -> ReplaySummary:
     return summary
 
 
+def _adopted_done(spool: Path) -> set[str]:
+    try:
+        return set((spool / ADOPTED_DONE).read_text(encoding="utf-8").split())
+    except OSError:
+        return set()
+
+
+def _copy_exists(spool: Path, name: str) -> bool:
+    """The adopted copy is still waiting here, in dead/, or quarantined."""
+    stem = name[:-len(".json")]
+    return any(p.exists() for p in (spool / name, spool / "dead" / name, spool / f"{stem}.invalid"))
+
+
 def _adopt(spool: Path, summary: ReplaySummary) -> None:
     """Move here the entries queued under this agent's earlier token (rotated or replaced), so they are recorded
     under its current one. An entry is the agent's when the old spool's WRITER_INFO, written while the old token
-    authenticated, names for the entry's project the same agent the ledger says the current token is. Other
-    agents' spools, other database targets and entries no processor ever confirmed stay where they are."""
+    authenticated, names for the entry's project the same agent the ledger says the current token is. Entries of
+    other agents and of other database targets stay where they are; entries whose token no processor ever
+    confirmed stay too, and are counted as held, with the reason.
+
+    A move is idempotent: the copy's name is fixed by the original (adopted-<id>.json), a copy is written only when
+    neither it nor a record of its processing (ADOPTED_DONE) exists, and the original is removed after. A retry after
+    a failed removal therefore removes the original and copies nothing. The old spool's lock is held meanwhile, so
+    its own processor does not move the same files."""
     me = writer_identity()
     if me is None or not spool.parent.is_dir():
         return
     target = _target_key()
     current: dict[str, str | None] = {}
+    done = _adopted_done(spool)
 
     def agent_in(project: str) -> str | None:
         if project not in current:
@@ -885,31 +923,46 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
         info = _read_info(old / WRITER_INFO)
         if info is None or info["target"] != target or info["writer"] == me:
             continue
-        dead = old / "dead"
-        unconfirmed = 0
-        for path in [*old.glob("*.json"), *(dead.glob("*.json") if dead.is_dir() else [])]:
-            try:
-                entry = json.loads(path.read_text(encoding="utf-8"))
-                project = entry["project"]
-            except (OSError, ValueError, KeyError, TypeError):
+        with _lock(old, blocking=False) as got:
+            if not got:
+                summary.errors.append(f"{old.name}: its processor is running; entries queued there under an earlier "
+                                      "token were not looked at (run replay again)")
                 continue
-            if entry.get("writer") != info["writer"]:
-                continue  # not queued under the token that spool belongs to
-            known = info["agents"].get(project)
-            if not isinstance(known, str):
-                unconfirmed += 1
-                continue
-            if agent_in(project) != known:
-                continue  # another agent's
-            entry.pop("writer", None)
-            _write_spool(spool, entry)  # bound to the current token
-            path.unlink(missing_ok=True)
-            summary.adopted += 1
-            log(f"replay: adopted {path.name} from {old.name} ({known} in {project}, earlier token)")
+            dead = old / "dead"
+            unconfirmed = 0
+            for path in [*old.glob("*.json"), *(dead.glob("*.json") if dead.is_dir() else [])]:
+                try:
+                    entry = json.loads(path.read_text(encoding="utf-8"))
+                    project = entry["project"]
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+                if entry.get("writer") != info["writer"]:
+                    continue  # not queued under the token that spool belongs to
+                known = info["agents"].get(project)
+                if not isinstance(known, str):
+                    unconfirmed += 1
+                    continue
+                if agent_in(project) != known:
+                    continue  # another agent's
+                mid = hashlib.sha256(f"{old.name}/{path.name}".encode()).hexdigest()[:32]
+                name = f"{ADOPTED_PREFIX}{mid}.json"
+                if mid not in done and not _copy_exists(spool, name):
+                    entry.pop("writer", None)
+                    _write_spool(spool, entry, name=name)  # bound to the current token
+                    summary.adopted += 1
+                    log(f"replay: adopted {path.name} from {old.name} as {name} ({known} in {project})")
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as e:
+                    summary.errors.append(f"{old.name}/{path.name}: adopted, but the original could not be removed "
+                                          f"({e}); the next replay removes it and copies nothing")
         if unconfirmed:
-            summary.errors.append(f"{old.name}: {unconfirmed} entr{'y' if unconfirmed == 1 else 'ies'} queued under "
-                                  "another token for a project in which no processor confirmed that token's agent; "
-                                  "left there")
+            summary.held += unconfirmed
+            summary.errors.append(
+                f"{old.name}: {unconfirmed} entr{'y' if unconfirmed == 1 else 'ies'} queued under another token on "
+                "this database, which no processor ever confirmed as an agent (the ledger was never reached with "
+                f"it); held there, not recorded. If it was this agent's token before a rotation, these are its "
+                f"reports: record them by hand from {old}")
 
 
 if __name__ == "__main__":

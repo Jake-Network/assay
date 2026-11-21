@@ -10,7 +10,8 @@ import sys
 
 # the events the harnesses' hooks run (with an optional --harness NAME); anything else (--help, replay, a typo) goes
 # through the CLI
-CHECK_HOOK_EVENTS = ("bash-result", "task-completed")  # check_hooks.py: their exit code is the hook's answer
+# check_hooks.py: their exit code is the hook's answer
+CHECK_HOOK_EVENTS = ("bash-start", "bash-result", "task-completed")
 HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS)
 LEGACY_NOTICE = ("the `assay` command is now `benchbook` (same arguments); `assay` keeps working during 0.1.x. "
                  "Update the scripts, hooks and plugin that still call it: `benchbook doctor` lists what it finds")

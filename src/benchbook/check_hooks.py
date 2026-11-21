@@ -26,12 +26,15 @@ Every match is appended to observed.jsonl in the spool directory: the denominato
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shlex
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,8 +48,10 @@ EVENT = "bash-result"
 VIA = "bash-hook"
 MAX_INPUT = 2_000_000
 OBSERVED = "observed.jsonl"
-REPORT_SLACK_S = 1.0  # file systems that keep mtime in coarse steps, and the hook's own start-up
-JUNIT_USED = "junit-used.jsonl"  # reports a recorded pass was read from: each proves one run only
+JUNIT_USED = "junit-used.jsonl"  # reports a recorded run was read from: each proves one run only
+JUNIT_LOCK = "junit.lock"
+JUNIT_BEFORE = "junit-before"  # bash-start's notes, one per tool call
+BEFORE_TTL_S = 86400
 MAX_JUNIT_USED = 1000
 CONTROL = frozenset({"|", "||", "&&", ";", "&", "|&", ";;", "(", ")"})
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -251,7 +256,19 @@ def junit_report(declared: str, segs: list[list[str]]) -> str | None:
 
 
 def report_fingerprint(path: Path, st: os.stat_result) -> str:
-    return json.dumps([str(path.resolve()), st.st_ino, st.st_size, st.st_mtime_ns])
+    return json.dumps([str(path), st.st_ino, st.st_size, st.st_mtime_ns])
+
+
+def _report_path(found: Match) -> Path:
+    assert found.report is not None
+    return Path(os.path.abspath(found.cwd / os.path.expanduser(found.report)))
+
+
+def _fingerprint_of(path: Path) -> str | None:
+    try:
+        return report_fingerprint(path, path.stat())
+    except OSError:
+        return None
 
 
 def _used_reports(spool: Path) -> list[str]:
@@ -262,44 +279,118 @@ def _used_reports(spool: Path) -> list[str]:
 
 
 def mark_report_used(spool: Path, fingerprint: str) -> None:
-    """Remember a report a recorded pass was read from (the newest MAX_JUNIT_USED)."""
+    """Remember a report a recorded run was read from (the newest MAX_JUNIT_USED). Under _junit_lock."""
     lines = [*_used_reports(spool), fingerprint][-MAX_JUNIT_USED:]
     tmp = spool / (JUNIT_USED + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(spool / JUNIT_USED)
 
 
-def junit_outcome(found: Match, duration_ms: int | None,
-                  spool: Path | None = None) -> tuple[str | None, list[tuple[str, str | None]], str, str | None]:
+@contextmanager
+def _junit_lock(spool: Path) -> Iterator[None]:
+    """Held from reading a report to marking it used, so two hooks that end at once cannot both record one report."""
+    import fcntl
+
+    with (spool / JUNIT_LOCK).open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _before_path(spool: Path, tool_use_id: str) -> Path:
+    return spool / JUNIT_BEFORE / (hashlib.sha256(tool_use_id.encode()).hexdigest()[:32] + ".json")
+
+
+def remember_before(spool: Path, tool_use_id: str, report: Path) -> None:
+    """bash-start: the report file's state before the command runs (None: no file), for this tool call."""
+    d = spool / JUNIT_BEFORE
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    now = time.time()
+    for old in d.glob("*.json"):  # calls whose result never came (interrupted, or another harness)
+        try:
+            if old.stat().st_mtime < now - BEFORE_TTL_S:
+                old.unlink()
+        except OSError:
+            pass
+    target = _before_path(spool, tool_use_id)
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"report": str(report), "before": _fingerprint_of(report)}), encoding="utf-8")
+    tmp.replace(target)
+
+
+def _take_before(spool: Path, tool_use_id: str) -> dict[str, Any] | None:
+    path = _before_path(spool, tool_use_id)
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    path.unlink(missing_ok=True)  # one result per call
+    return rec if isinstance(rec, dict) else None
+
+
+def junit_outcome(found: Match, tool_use_id: str | None,
+                  spool: Path) -> tuple[str | None, list[tuple[str, str | None]], str, str | None]:
     """A junit = true check that exited 0 passes only as check run and check verify pass it: with a JUnit report of
     this run in which a test ran and none failed. (part, failing tests, reason, fingerprint): part None and no
     reason is a pass; a part is a failure (signature.junit_exit0); a reason alone means the run proves nothing either
-    way (no report of this run to read), so it is observed and not recorded.
+    way, so it is observed and not recorded.
 
-    "Of this run": modified after the command started (the hook fires as it ends, so the start is now minus its
-    duration), and not a report an earlier recorded pass was read from (spool/JUNIT_USED). A harness that reports no
-    duration cannot show that, and its run is not recorded."""
+    "Of this run" is shown by linking the two ends of the tool call: `hook bash-start` (PreToolUse) noted the
+    report's state before the command, under its tool_use_id, and the report must differ from it now (created or
+    rewritten while the command ran). No clock is compared. A report also counts once only (JUNIT_USED); the caller
+    holds _junit_lock from here until it has queued the run and marked the report used."""
     if found.report is None:
         return None, [], ("junit = true and the command wrote no JUnit report: exit 0 alone is not a pass "
                           f"(benchbook check run {found.check} writes one)"), None
-    if not duration_ms:
-        return None, [], ("junit = true and the harness gave no duration, so the JUnit report cannot be shown to be "
-                          f"this run's (benchbook check run {found.check} writes its own)"), None
-    path = found.cwd / os.path.expanduser(found.report)
-    try:
-        st = path.stat()
-    except OSError:
+    if tool_use_id is None:
+        return None, [], ("junit = true and the harness gave no tool call id, so the JUnit report cannot be tied to "
+                          f"this run (benchbook check run {found.check} writes its own)"), None
+    path = _report_path(found)
+    before = _take_before(spool, tool_use_id)
+    if before is None or before.get("report") != str(path):
+        return None, [], ("junit = true and nothing noted the JUnit report before the command ran (the PreToolUse "
+                          "hook `benchbook hook bash-start` is not installed?)"), None
+    now = _fingerprint_of(path)
+    if now is None:
         return None, [], f"junit = true and no JUnit report at {found.report}", None
-    started = time.time() - duration_ms / 1000
-    if st.st_mtime < started - REPORT_SLACK_S:
-        return None, [], f"junit = true and the JUnit report at {found.report} predates this run", None
-    fingerprint = report_fingerprint(path, st)
-    if spool is not None and fingerprint in _used_reports(spool):
+    if now == before.get("before"):
+        return None, [], f"junit = true and the command did not write the JUnit report at {found.report}", None
+    if now in _used_reports(spool):
         return None, [], f"junit = true and the JUnit report at {found.report} was read for an earlier run", None
     from .signature import junit_exit0
 
     part, failed = junit_exit0(path)
-    return part, failed, "", fingerprint
+    return part, failed, "", now
+
+
+def bash_start(harness: str = "claude-code") -> int:
+    """`benchbook hook bash-start` (PreToolUse on Bash): for a declared junit = true check that names its report,
+    note the report's state before the command runs (remember_before). Writes nothing for any other command, never
+    answers anything, always exits 0."""
+    config.hold_notices()
+    from .harnesses import answer, shell_call
+
+    try:
+        call = shell_call(harness, _read_input())
+        if call is None or call.tool_use_id is None:
+            return 0
+        found = match(call.command, call.cwd)
+        if found is None or found.kind != "direct" or not found.junit or found.report is None:
+            return 0
+        from .hooks import _spool_dir
+
+        spool = _spool_dir()
+        spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+        remember_before(spool, call.tool_use_id, _report_path(found))
+    except Exception:  # noqa: BLE001 - a hook must not fail the tool call
+        import traceback
+
+        _log(f"bash-start failed ({harness}): " + traceback.format_exc())
+    finally:
+        sys.stdout.write(answer(harness))
+    return 0
 
 
 # ---------------------------------------------------------------------------------------------- the result
@@ -398,7 +489,7 @@ def bash_result(harness: str = "claude-code") -> int:
 
 
 def _record(call: ShellCall, found: Match) -> None:
-    from .check_run import MAX_FAILED_SPOOLED, find_repo, git_state, head_branch, resolve_piece, spool_attempt
+    from .check_run import find_repo, head_branch, resolve_piece
     from .hooks import _spool_dir
 
     project = found.project
@@ -406,18 +497,29 @@ def _record(call: ShellCall, found: Match) -> None:
     repo = find_repo(found.cwd)
     piece, piece_from = resolve_piece(None, head_branch(repo) if repo else None)
     kind, reason = found.kind, found.reason
-    state = None
     part: str | None = None
     failed: list[tuple[str, str | None]] = []
     fingerprint: str | None = None
     spool = _spool_dir()
     spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if kind == "direct" and found.junit and res.status == "ok":
-        part, failed, why, fingerprint = junit_outcome(found, call.duration_ms, spool)
-        if why:
-            kind, reason = "unrecordable", why
-        elif part is not None:
-            res.status = "fail"  # exit 0 with no test run, or a failing testcase: as check run records it
+    with ExitStack() as held:
+        if kind == "direct" and found.junit and res.status == "ok":
+            held.enter_context(_junit_lock(spool))  # until the report is marked used
+            part, failed, why, fingerprint = junit_outcome(found, call.tool_use_id, spool)
+            if why:
+                kind, reason = "unrecordable", why
+            elif part is not None:
+                res.status = "fail"  # exit 0 with no test run, or a failing testcase: as check run records it
+        _record_run(call, found, res, kind, reason, project, repo, piece, piece_from, spool, part, failed,
+                    fingerprint)
+
+
+def _record_run(call: ShellCall, found: Match, res: Outcome, kind: str, reason: str, project: str | None,
+                repo: Path | None, piece: str | None, piece_from: str, spool: Path, part: str | None,
+                failed: list[tuple[str, str | None]], fingerprint: str | None) -> None:
+    from .check_run import MAX_FAILED_SPOOLED, git_state, spool_attempt
+
+    state = None
     if kind == "direct":
         if res.status is None:
             kind, reason = "unrecordable", res.reason
@@ -547,4 +649,6 @@ def main(event: str, harness: str | None = None) -> int:
     """harness: `--harness` from the manifest's command. The completion gate is Claude Code's alone (TaskCompleted)."""
     if event == "bash-result":
         return bash_result(harness or "claude-code")
+    if event == "bash-start":
+        return bash_start(harness or "claude-code")
     return task_completed()

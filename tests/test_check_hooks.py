@@ -323,6 +323,8 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
     files = [plugin / "hooks" / "hooks.json", plugin / "manual" / "settings.hooks.json"]
     for f in files:
         h = json.loads(f.read_text())["hooks"]
+        [before] = h["PreToolUse"]  # notes a JUnit report's state before the command (check_hooks.bash_start)
+        assert before["matcher"] == "Bash" and [x["command"] for x in before["hooks"]] == ["benchbook hook bash-start"]
         bash = [e for e in h["PostToolUse"] if e.get("matcher") == "Bash"]
         assert [x["command"] for e in bash for x in e["hooks"]] == ["benchbook hook bash-result"], f
         assert [x["command"] for e in h["PostToolUseFailure"] for x in e["hooks"]] == ["benchbook hook bash-result"]

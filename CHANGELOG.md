@@ -125,6 +125,16 @@
 - `hook replay` under an agent's new token (after `agent add --rotate`) adopts the entries queued under its
   earlier token, when a processor had confirmed that token's agent (`writer.info` in the spool).
 - The Bash hook matches a check declared with a bare `--junitxml {junit}`: the word before the option was lost.
+- New `benchbook hook bash-start` (PreToolUse on Bash; plugin 0.1.4 and the manual hooks add it): it notes a
+  JUnit report's state before a declared check runs, and the Bash hook records a passing JUnit run only when the
+  report differs from that note afterwards. No clock is compared any more. Reading a report and marking it used
+  happen under one lock. Harnesses other than Claude Code cannot record a passing JUnit run through the hook.
+- A new piece and a renewal count their lease from the database's clock after the intent lock, and the overlap
+  checks read expiry with the same clock.
+- `piece start` without `--paths` no longer restarts a piece that `piece done` released while it was renewing it.
+- `hook replay` reports entries queued under a token no processor ever confirmed as `held` (and exits non-zero),
+  instead of a clean, empty replay. Adopting an earlier token's entries is idempotent: a retry after a failed
+  removal of the original records nothing twice.
 
 ## Unreleased: core for the verification ledger
 

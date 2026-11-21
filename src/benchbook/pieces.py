@@ -110,8 +110,12 @@ def start(lg: Ledger, piece: str, patterns: Sequence[str], repo: Path, lease_sec
         try:
             t = lg.update_intent(cur.id, patch, lease_seconds=lease, exclusive=["piece"], exclusive_paths=["paths"])
         except LeaseLost:
-            # The lease ran out since my_intents read it: the paths are free for anyone, so they are taken again
-            # as a new piece, through the overlap check, never by reviving the old one.
+            # Either the lease ran out since my_intents read it (the paths are free for anyone, so they are taken
+            # again as a new piece, through the overlap check, never by reviving the old one), or the piece was
+            # released meanwhile (piece done, a lead's cancel): then there is nothing to restore.
+            if paths is None and not _ran_out(lg, cur.id):
+                raise BenchbookError(f"piece {piece} ({cur.short_id}) was released (or taken over) while it was "
+                                     "being renewed; start it again with --paths") from None
             if paths is None:
                 patterns = [p for p in cur.spec.get("declared") or [] if isinstance(p, str)]
                 paths, new = expand(patterns, tracked_files(repo))
@@ -132,6 +136,18 @@ def _extra_tags(tags: Sequence[str], piece: str) -> list[str]:
     return [x for x in tags if x not in ("intent", PIECE_TAG, f"piece:{piece}")]
 
 
+# An intent whose lease ran out: still claimed past its expiry, or failed by next_task, which leaves the expiry as it
+# was. A release (complete_task, cancel_task) clears lease_expires_at.
+_RAN_OUT = ("(status = 'claimed' AND lease_expires_at <= clock_timestamp())"
+            " OR (status = 'failed' AND lease_expires_at IS NOT NULL)")
+
+
+def _ran_out(lg: Ledger, task_id: Any) -> bool:
+    rows = lg.sql_internal(f"SELECT {_RAN_OUT} AS ran_out FROM benchbook.tasks WHERE project_id=%s AND id=%s",
+                           (lg.project_id, task_id))
+    return bool(rows and rows[0]["ran_out"])
+
+
 def _expired(lg: Ledger, piece: str) -> dict[str, Any] | None:
     """lg's newest intent for PIECE, when its lease ran out without a release: its declared globs and extra tags, so
     `piece start` without --paths takes the paths again (through the overlap check) instead of failing.
@@ -140,10 +156,9 @@ def _expired(lg: Ledger, piece: str) -> dict[str, Any] | None:
     out and leaves lease_expires_at as it was; a release (piece done, done --failed, a lead's cancel) clears it. So a
     failed intent that still has an expiry ran out, and one without was ended on purpose: nothing to restore."""
     rows = lg.sql_internal(
-        "SELECT spec -> 'declared' AS declared, tags,"
-        " (status = 'claimed' AND lease_expires_at <= now()) OR (status = 'failed' AND lease_expires_at IS NOT NULL)"
-        " AS ran_out FROM benchbook.tasks WHERE project_id=%s AND lease_owner=%s AND 'intent' = ANY(tags)"
-        " AND %s = ANY(tags) AND spec ->> 'piece' = %s ORDER BY created_at DESC LIMIT 1",
+        f"SELECT spec -> 'declared' AS declared, tags, {_RAN_OUT} AS ran_out FROM benchbook.tasks"
+        " WHERE project_id=%s AND lease_owner=%s AND 'intent' = ANY(tags) AND %s = ANY(tags)"
+        " AND spec ->> 'piece' = %s ORDER BY created_at DESC LIMIT 1",
         (lg.project_id, lg.agent, PIECE_TAG, piece))
     if not rows or not rows[0]["ran_out"] or not isinstance(rows[0]["declared"], list):
         return None
