@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 import typer
 
 from .agent_cli import agent_app
+from .check_cli import check_app
 from .config import env
 from .errors import BenchbookError, Conflict, ValidationFailed
 from .ids import short
@@ -30,6 +31,7 @@ app.add_typer(exp_app, name="exp")
 app.add_typer(claim_app, name="claim")
 app.add_typer(db_app, name="db")
 app.add_typer(agent_app, name="agent")
+app.add_typer(check_app, name="check")
 
 STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 
@@ -120,6 +122,7 @@ def init(
     epsilon: Annotated[float, typer.Option(help="Minimum change that counts as improved")] = 0.0,
     config_schema: Annotated[str | None, typer.Option("--config-schema",
                                                       help="JSON Schema for experiment configs (@file)")] = None,
+    pack: Annotated[str, typer.Option(help="core, ml-research or code (coding pieces and their checks)")] = "core",
 ) -> None:
     """Create a project and write .benchbook/config.toml in the repository root."""
     import re
@@ -128,14 +131,19 @@ def init(
     pid = project or STATE["project"] or re.sub(r"[^a-z0-9_-]+", "-", root.name.lower()).strip("-") or "benchbook"
     schema = load_json(config_schema, "--config-schema")
     from .ledger import Ledger
+    from .packs import load_pack
 
+    defaults = load_pack(pack).project_defaults  # e.g. code: checks_passed (max), partitioned by piece
+    if metric is None and direction is None:
+        metric, direction = defaults.get("metric"), defaults.get("direction")
     p, created = Ledger.init_project(pid, title=title, goal=goal or "", metric=metric, direction=direction,
-                                     epsilon=epsilon, config_schema=schema)
+                                     epsilon=epsilon, config_schema=schema, pack=pack,
+                                     settings=dict(defaults.get("settings", {})) or None)
     from .config import write_config
 
     cfg = write_config(root, p.id)
-    emit({"ok": True, "project": p.id, "created": created, "config": str(cfg)},
-         f"{'created' if created else 'using existing'} project {p.id}\n"
+    emit({"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack},
+         f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
          f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
          f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n"
          f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   benchbook ui")

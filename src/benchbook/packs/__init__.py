@@ -29,6 +29,9 @@ class Pack:
     dedup_mode: str = "refuse"
     ok_metrics_required: list[str] = field(default_factory=list)
     brief_compiler: str | None = None  # "module:function", replaces the default brief (§6.7)
+    # [project] in pack.toml: what `benchbook init --pack` uses when the command line leaves it out
+    # (metric, direction, settings).
+    project_defaults: dict[str, Any] = field(default_factory=dict)
     validators: dict[str, Draft202012Validator] = field(default_factory=dict)
 
     def validate(self, schema_name: str, value: Any, label: str) -> None:
@@ -72,6 +75,7 @@ def read_pack(name: str, root: Traversable) -> Pack:
         config_max_bytes=int(meta.get("config", {}).get("max_bytes", 65536)),
         ok_metrics_required=list(meta.get("ok_metrics_required", [])),
         brief_compiler=meta.get("brief_compiler"),
+        project_defaults=dict(meta.get("project", {})),
     )
     schemas = root.joinpath("schemas")
     for f in schemas.iterdir():
