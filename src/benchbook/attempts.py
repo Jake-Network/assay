@@ -87,7 +87,7 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
         (base, integ), note = found, None
     source = f"{SOURCES[event]}: {name} in {data['repo']}"
     if event == "bash-result":
-        ids = {k: data.get(k) for k in ("session_id", "tool_use_id", "agent_type") if data.get(k)}
+        ids = {k: data.get(k) for k in ("harness", "session_id", "tool_use_id", "agent_type") if data.get(k)}
         if ids:
             source += " (" + ", ".join(f"{k} {v}" for k, v in ids.items()) + ")"
     return LocalRun(str(data["piece"]), sha, base, integ, [result], result.duration_ms, data.get("interrupted"),

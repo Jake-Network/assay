@@ -501,7 +501,8 @@ Claude Code hook observed.
 - **Denominator.** Every Bash call the hook matches to a declared check appends one line to `observed.jsonl` in the
   spool directory of the database target (`~/.local/state/benchbook/spool/<key>/`; `benchbook doctor` prints the
   path on its `hook failures` line). A line has `ts`, `project`, `piece`, `check`, `kind`, `exit_code`,
-  `reason`, `session_id` and `tool_use_id`. `kind` is `direct` (the hook queued the attempt), `wrapped` (a
+  `reason`, `session_id`, `tool_use_id` and `harness` (`claude-code`, or `codex`/`cursor`/`gemini` from their
+  manifests, docs/harnesses.md; Cursor's lines add `harness_version`). `kind` is `direct` (the hook queued the attempt), `wrapped` (a
   `benchbook check run`, which records itself) or `unrecordable` (piped or chained, in the background,
   interrupted, no exit code, no piece or no commit: observed, not recorded).
 - **Numerator.** The attempts with `via` `bash-hook` or `check-run` in the ledger.

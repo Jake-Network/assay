@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "command": "benchbook hook bash-result --harness cursor",
+        "matcher": "Shell",
+        "timeout": 5
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "benchbook hook bash-result --harness cursor",
+        "matcher": "Shell",
+        "timeout": 5
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "benchbook hook subagent-stop --harness cursor",
+        "timeout": 5
+      }
+    ]
+  }
+}

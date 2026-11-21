@@ -245,4 +245,6 @@ server and the hook must still see the same database. The order of the steps doe
 
 ## Other MCP clients (Codex, ...)
 
-See `integrations/agents-md/AGENTS.md`: the same rules, runtime-neutral, and an MCP config example.
+See `integrations/agents-md/AGENTS.md`: the same rules, runtime-neutral, and an MCP config example. The Bash hook
+and the result-capture hook also come as Codex and Cursor manifests (`integrations/codex/`, `integrations/cursor/`;
+docs/harnesses.md says what each harness's hook input lets them capture).

@@ -7,11 +7,27 @@ from __future__ import annotations
 
 import sys
 
-# the events Claude Code's hooks run; anything else (--help, replay, a typo) goes through the CLI
+# the events the harnesses' hooks run (with an optional --harness NAME); anything else (--help, replay, a typo) goes
+# through the CLI
 CHECK_HOOK_EVENTS = ("bash-result", "task-completed")  # check_hooks.py: their exit code is the hook's answer
 HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS)
 LEGACY_NOTICE = ("the `assay` command is now `benchbook` (same arguments); `assay` keeps working during 0.1.x. "
                  "Update the scripts, hooks and plugin that still call it: `benchbook doctor` lists what it finds")
+
+
+def hook_args(argv: list[str]) -> tuple[str, str | None] | None:
+    """(event, harness) for `hook EVENT` and `hook EVENT --harness NAME` (or --harness=NAME), the commands the
+    manifests in integrations/ run; None for anything else."""
+    if len(argv) < 2 or argv[0] != "hook" or argv[1] not in HOOK_EVENTS:
+        return None
+    rest = argv[2:]
+    if not rest:
+        return argv[1], None
+    if len(rest) == 2 and rest[0] == "--harness":
+        return argv[1], rest[1]
+    if len(rest) == 1 and rest[0].startswith("--harness="):
+        return argv[1], rest[0].partition("=")[2]
+    return None
 
 
 def main(legacy: bool = False) -> None:
@@ -26,14 +42,15 @@ def main(legacy: bool = False) -> None:
         if "hook" in argv and argv[argv.index("hook") + 1:][:1] != ["replay"]:
             config.hold_notices()
         config.legacy_notice("command", LEGACY_NOTICE)
-    if len(argv) == 2 and argv[0] == "hook" and argv[1] in CHECK_HOOK_EVENTS:
-        from .check_hooks import main as check_hook_main
+    if (hook := hook_args(argv)) is not None:
+        event, harness = hook
+        if event in CHECK_HOOK_EVENTS:
+            from .check_hooks import main as check_hook_main
 
-        sys.exit(check_hook_main(argv[1]))
-    if len(argv) == 2 and argv[0] == "hook" and argv[1] in HOOK_EVENTS:
+            sys.exit(check_hook_main(event, harness))
         from .hooks import main as hook_main
 
-        hook_main(argv[1])
+        hook_main(event, harness)
         sys.exit(0)
     if argv[:2] == ["check", "run"]:
         # A check's own run pays this start-up (the wrapper's budget is 300 ms); --help and other options go

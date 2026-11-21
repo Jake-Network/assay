@@ -151,9 +151,20 @@ class ReplaySummary:
         return "\n".join([head, *self.errors])
 
 
-def main(event: str) -> ReplaySummary | None:
+def main(event: str, harness: str | None = None) -> ReplaySummary | None:
     """Spool atomically and detach without waiting for Postgres. `replay` drains in the foreground instead and
-    returns a summary (the caller prints it)."""
+    returns a summary (the caller prints it). harness: `--harness codex|cursor` from that harness's manifest; its
+    subagent-stop input is read into Claude Code's shape first (harnesses.report_input)."""
+    try:
+        return _main(event, harness)
+    finally:
+        if harness and event != "replay":
+            from .harnesses import answer
+
+            sys.stdout.write(answer(harness))
+
+
+def _main(event: str, harness: str | None) -> ReplaySummary | None:
     if event != "replay":
         # Claude Code runs this: nothing may reach stderr. Notes about pre-rename names (the `assay` command,
         # ASSAY_* variables) are held and written to hook.log once the event turns out to be a worker's.
@@ -170,6 +181,10 @@ def main(event: str) -> ReplaySummary | None:
         data = json.loads(raw or "{}")
         if not isinstance(data, dict):
             raise ValueError("hook input must be a JSON object")
+        if harness:
+            from .harnesses import report_input
+
+            data = report_input(harness, data)
         if not is_worker(_agent_type(data)):
             # The plugin hook fires for every subagent; BENCHBOOK_HOOK_AGENTS decides which ones are captured. Leave
             # before reading config, spooling or importing anything heavier.
@@ -558,7 +573,8 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     when = datetime.fromtimestamp(fired_at, UTC) if fired_at else datetime.now(UTC)
     source = {"session_id": data.get("session_id"), "event": data.get("hook_event_name") or event,
               "agent_id": data.get("agent_id"), "agent_type": data.get("agent_type"),
-              "tool_name": data.get("tool_name")}
+              "tool_name": data.get("tool_name"), "harness": data.get("harness"),
+              "harness_version": data.get("harness_version")}
     if out_of_scope_heading and lg.pack.name == "code":
         _capture_findings(lg, event, text, out_of_scope_heading, data, when,
                           {k: v for k, v in source.items() if v})

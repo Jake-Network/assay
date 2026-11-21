@@ -1,6 +1,7 @@
 """Claude Code hooks for declared checks (spec §7, layers 2 and 3).
 
-`benchbook hook bash-result` (PostToolUse and PostToolUseFailure on Bash): when a Bash command is one of the checks
+`benchbook hook bash-result` (PostToolUse and PostToolUseFailure on Bash; `--harness codex|cursor|gemini` reads those
+harnesses' shell-result events instead, harnesses.py): when a Bash command is one of the checks
 declared in .benchbook/config.toml, queue the run for the ledger as an attempt. It reads config.toml and nothing
 else, imports no database module and writes only on a match, so every other Bash call costs a TOML read (the
 budget is 50 ms, tests/test_hooks.py). The attempt carries a rough signature: the exit code from the error's
@@ -30,9 +31,12 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import config
+
+if TYPE_CHECKING:
+    from .harnesses import ShellCall
 
 EVENT = "bash-result"
 VIA = "bash-hook"
@@ -232,6 +236,7 @@ class Outcome:
     exit_code: int | None = None
     line_hash: str | None = None
     reason: str = ""
+    shape_ok: bool = True  # False: the hook input is not shaped as its harness documents (harnesses.py, doctor)
 
 
 def outcome(data: dict[str, Any]) -> Outcome:
@@ -286,31 +291,34 @@ def _observe(spool: Path, line: dict[str, Any]) -> None:
         f.write(json.dumps(line, sort_keys=True, ensure_ascii=False) + "\n")
 
 
-def bash_result() -> int:
-    config.hold_notices()  # Claude Code runs this: nothing may reach stderr
+def bash_result(harness: str = "claude-code") -> int:
+    """harness: which harness runs the hook (`--harness` in its manifest); harnesses.py reads its input."""
+    config.hold_notices()  # the harness runs this: nothing may reach stderr
+    from .harnesses import answer, shell_call
+
     try:
-        data = _read_input()
-        ti = data.get("tool_input")
-        command = ti.get("command") if isinstance(ti, dict) else None
-        if data.get("tool_name") != "Bash" or not isinstance(command, str):
+        call = shell_call(harness, _read_input())
+        if call is None:
             return 0
-        found = match(command, Path(data.get("cwd") or os.getcwd()))
+        found = match(call.command, call.cwd)
         if found is None:
             return 0
-        _record(data, found)
+        _record(call, found)
     except Exception:  # noqa: BLE001 - a hook must not fail the tool call
         import traceback
 
-        _log(f"{EVENT} failed: " + traceback.format_exc())
+        _log(f"{EVENT} failed ({harness}): " + traceback.format_exc())
+    finally:
+        sys.stdout.write(answer(harness))
     return 0
 
 
-def _record(data: dict[str, Any], found: Match) -> None:
+def _record(call: ShellCall, found: Match) -> None:
     from .check_run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
     from .hooks import _spool_dir
 
     project = found.project
-    res = outcome(data)
+    res = call.outcome()
     repo = find_repo(found.cwd)
     piece, piece_from = resolve_piece(None, head_branch(repo) if repo else None)
     kind, reason = found.kind, found.reason
@@ -328,19 +336,26 @@ def _record(data: dict[str, Any], found: Match) -> None:
             kind, reason = "unrecordable", "no commit at HEAD"
     spool = _spool_dir()
     spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _observe(spool, {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "project": project, "piece": piece,
-                     "check": found.check, "kind": kind, "exit_code": res.exit_code, "reason": reason or None,
-                     "session_id": data.get("session_id"), "tool_use_id": data.get("tool_use_id")})
+    line: dict[str, Any] = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "project": project, "piece": piece, "check": found.check,
+        "kind": kind, "exit_code": res.exit_code, "reason": reason or None, "session_id": call.session_id,
+        "tool_use_id": call.tool_use_id, "harness": call.harness}
+    if call.version:
+        line["harness_version"] = call.version
+    if not res.shape_ok:
+        line["input_shape"] = "unexpected"  # doctor: the harness changed what its hook sends
+    _observe(spool, line)
     if kind != "direct" or project is None or piece is None or state is None or state.sha is None:
         _log(f"{EVENT}: observed {found.check} ({kind}{': ' + reason if reason else ''})")
         return
-    duration = data.get("duration_ms")
     entry: dict[str, Any] = {
         "piece": piece, "piece_from": piece_from, "check": found.check, "status": res.status,
-        "exit_code": res.exit_code, "duration_ms": duration if isinstance(duration, int) else 0, "failed_tests": [],
+        "exit_code": res.exit_code, "duration_ms": call.duration_ms, "failed_tests": [],
         "last_line_hash": res.line_hash, "sha": state.sha, "dirty": state.dirty, "changed": len(state.changed),
-        "repo": str(repo), "agent": None, "interrupted": None, "via": VIA, "session_id": data.get("session_id"),
-        "tool_use_id": data.get("tool_use_id"), "agent_type": data.get("agent_type")}
+        "repo": str(repo), "agent": None, "interrupted": None, "via": VIA, "session_id": call.session_id,
+        "tool_use_id": call.tool_use_id, "agent_type": call.agent_type}
+    if call.harness != "claude-code":
+        entry["harness"] = call.harness
     spool_attempt(EVENT, project, entry)
     _log(f"{EVENT}: queued {found.check} {res.status} (exit {res.exit_code}) for piece {piece} at {state.sha[:12]}")
 
@@ -432,8 +447,8 @@ def block_message(piece: str, sha: str, repo: Path, missing: list[str], passed: 
     return msg
 
 
-HANDLERS = {"bash-result": bash_result, "task-completed": task_completed}
-
-
-def main(event: str) -> int:
-    return HANDLERS[event]()
+def main(event: str, harness: str | None = None) -> int:
+    """harness: `--harness` from the manifest's command. The completion gate is Claude Code's alone (TaskCompleted)."""
+    if event == "bash-result":
+        return bash_result(harness or "claude-code")
+    return task_completed()

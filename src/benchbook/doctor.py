@@ -13,6 +13,7 @@ import shlex
 import shutil
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -290,6 +291,56 @@ def check_hook_log(root: Path) -> Check:
     return Check("hook failures", False, detail, f"read {log}, fix the cause, then run: benchbook hook replay")
 
 
+def _observed_since(path: Path, since: float) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            row = json.loads(line)
+            ts = datetime.strptime(str(row["ts"]), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+        except (ValueError, KeyError, TypeError):
+            continue
+        if isinstance(row, dict) and ts >= since:
+            out.append(row)
+    return out
+
+
+def check_harness_input() -> Check | None:
+    """For this shell's database: declared check runs another harness's hook observed in the last 24 hours whose
+    input was not shaped as that harness documents (harnesses.py), i.e. as the stored fixtures are. The line names
+    the harness version where the input carries one (Cursor's cursor_version) next to the fixtures' version. None
+    when no such harness observed anything."""
+    from .check_hooks import OBSERVED
+    from .harnesses import CLAUDE_CODE, FIXTURE_VERSIONS
+    from .hooks import _spool_dir
+
+    path = _spool_dir() / OBSERVED
+    rows = [r for r in _observed_since(path, time.time() - RECENT_SECONDS)
+            if r.get("harness") not in (None, CLAUDE_CODE)]
+    if not rows:
+        return None
+    seen: dict[str, list[int]] = {}  # "harness version": [runs, runs with an unexpected input]
+    for r in rows:
+        key = f"{r['harness']} {r.get('harness_version') or '(no version in its input)'}"
+        n = seen.setdefault(key, [0, 0])
+        n[0] += 1
+        n[1] += r.get("input_shape") == "unexpected"
+    bad = {k: v for k, v in seen.items() if v[1]}
+    if not bad:
+        return Check("harness hook input", True,
+                     "; ".join(f"{k}: {v[0]} check run(s) read" for k, v in sorted(seen.items())) + f" ({path})")
+    fixtures = ", ".join(f"{h} {v}" for h, v in FIXTURE_VERSIONS.items())
+    detail = ("; ".join(f"{k}: {v[1]} of {v[0]} check run(s) sent a hook input benchbook cannot read"
+                        for k, v in sorted(bad.items()))
+              + f" (the stored fixtures are of {fixtures}; see the reason in {path})")
+    return Check("harness hook input", False, detail,
+                 "run the checks through `benchbook check run NAME` (it reads no hook input) until a benchbook "
+                 "release reads this version: uv tool upgrade benchbook")
+
+
 def _installed_plugin_paths() -> list[tuple[str, Path]]:
     """(plugin id, install path) of every installed copy of the plugin, under its current id or the pre-rename one."""
     installed = _read_json(claude_dir() / "plugins" / "installed_plugins.json")
@@ -366,6 +417,7 @@ def claude_code_checks(root: Path) -> list[Check]:
     else:
         checks.append(Check("claude code", True, f"{claude_dir()} not found; connection checks skipped"))
     checks += _guarded("hook failures", check_hook_log, root.resolve())
+    checks += _guarded("harness hook input", check_harness_input)  # Codex, Cursor, Gemini (docs/harnesses.md)
     return checks
 
 

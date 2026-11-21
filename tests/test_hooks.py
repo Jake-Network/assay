@@ -504,20 +504,38 @@ def test_malformed_legacy_entry_does_not_stop_replay(repo: Path, worker: Ledger,
     assert hooks.replay_now(spool).ok  # no text to capture, and no AttributeError
 
 
-def test_bash_hook_for_a_command_that_is_not_a_check_finishes_within_50ms(tmp_path: Path) -> None:
+# a shell call that is not a declared check, as each harness's shell-result hook receives it (docs/harnesses.md)
+_NOT_A_CHECK = "git status --short && ls -la src"
+NOT_A_CHECK_INPUTS: dict[str, dict] = {
+    "claude-code": {"session_id": "s", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                    "tool_input": {"command": _NOT_A_CHECK, "description": "look around"},
+                    "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "isImage": False},
+                    "tool_use_id": "toolu_1", "duration_ms": 12},
+    "codex": {"session_id": "thr_1", "hook_event_name": "PostToolUse", "turn_id": "t", "tool_name": "Bash",
+              "tool_use_id": "call_1", "tool_input": {"command": _NOT_A_CHECK}, "tool_response": "M src/x.py\n"},
+    "cursor": {"conversation_id": "c", "hook_event_name": "postToolUse", "cursor_version": "1.7.2",
+               "tool_name": "Shell", "tool_input": {"command": _NOT_A_CHECK}, "tool_use_id": "abc",
+               "tool_output": json.dumps({"exitCode": 0, "stdout": ""}), "duration": 12},
+    "gemini": {"session_id": "g", "hook_event_name": "AfterTool", "timestamp": "2026-11-21T09:00:00.000Z",
+               "tool_name": "run_shell_command", "tool_input": {"command": _NOT_A_CHECK},
+               "tool_response": {"llmContent": "Output: (empty)\nProcess Group PGID: 1", "returnDisplay": ""}},
+}
+
+
+@pytest.mark.parametrize("harness", sorted(NOT_A_CHECK_INPUTS))
+def test_bash_hook_for_a_command_that_is_not_a_check_finishes_within_50ms(harness: str, tmp_path: Path) -> None:
     """Acceptance (PR 2-P0b): the Bash hook runs after every Bash call; for one that is not a declared check it reads
     config.toml and leaves within 50 ms, writing nothing. Timed in a fresh interpreter from the console script's
-    entry point to its exit (imports included; the interpreter's own start-up is not benchbook's to spend)."""
+    entry point to its exit (imports included; the interpreter's own start-up is not benchbook's to spend).
+    PR 2-P1d: the same for each harness's shell-result event (`--harness` in its manifest)."""
     (tmp_path / ".benchbook").mkdir()
     (tmp_path / ".benchbook" / "config.toml").write_text(
         'project = "p"\n\n[checks.unit]\ncmd = "uv run pytest tests -q --junitxml={junit}"\njunit = true\n\n'
         '[checks.lint]\ncmd = "uv run ruff check src"\n')
-    data = {"session_id": "s", "cwd": str(tmp_path), "hook_event_name": "PostToolUse", "tool_name": "Bash",
-            "tool_input": {"command": "git status --short && ls -la src", "description": "look around"},
-            "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "isImage": False},
-            "tool_use_id": "toolu_1", "duration_ms": 12}
+    data = {**NOT_A_CHECK_INPUTS[harness], "cwd": str(tmp_path)}
+    argv = ["benchbook", "hook", "bash-result"] + ([] if harness == "claude-code" else ["--harness", harness])
     code = ("import io, sys, time\n"
-            "sys.argv = ['benchbook', 'hook', 'bash-result']\n"
+            f"sys.argv = {argv!r}\n"
             "sys.stdin = io.StringIO(" + repr(json.dumps(data)) + ")\n"
             "t = time.perf_counter()\n"
             "from benchbook.entry import main\n"
@@ -529,6 +547,8 @@ def test_bash_hook_for_a_command_that_is_not_a_check_finishes_within_50ms(tmp_pa
         p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path, env=env,
                            timeout=60)
         assert p.returncode == 0 and p.stderr == "", p.stderr
-        times.append(float(p.stdout))
-    assert min(times) < 0.05, f"bash-result took {min(times) * 1000:.1f} ms"
+        *answer, elapsed = p.stdout.splitlines()  # the hook's own stdout, then the time printed above
+        assert answer == ([] if harness in ("claude-code", "codex") else ["{}"]), p.stdout
+        times.append(float(elapsed))
+    assert min(times) < 0.05, f"bash-result ({harness}) took {min(times) * 1000:.1f} ms"
     assert not (tmp_path / "state").exists()
