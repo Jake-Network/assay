@@ -53,6 +53,21 @@ message totals reconcile with the final Claude usage. Otherwise it includes only
 run. A failed run, timeout, or missing evaluator log, final report or usage stops the harness and leaves its raw
 artifacts for inspection.
 
+Each run saves its Claude Code session under a session ID chosen in advance and copies the lead's and the
+subagents' transcripts into `<run>/transcripts/`; `command.json` names the originals. `metrics.json` has a
+`usage_check` per run that reconciles per-message usage with the final totals (the stream carries each message's
+output count from the start of its response, so only the transcripts reconcile all four token classes). C runs also
+keep `hook-spool/` (the hook entries still queued when Claude exited) and `ledger.jsonl` (`benchbook export` of the
+run's project). Then:
+
+```bash
+uv run python -m bench.analyze_cost bench/out/<run>   # writes bench/out/<run>/cost-breakdown.md
+```
+
+It splits each agent's prompt growth by what entered the context (benchbook tools, evaluation Bash, file reads and
+writes, subagent reports), classifies repeated evaluations, and states for each cost hypothesis of the spec (§10)
+the numbers that support or contradict it. `--compare <earlier>/metrics.json` adds the earlier batch's means.
+
 Fill the README table from a complete comparison. The release gate in §1 requires C to have zero lost results,
 a lower duplicate ratio and a lower peak lead context than A. Report whether C meets the best-per-token target.
 

@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,9 @@ REPORT_SCHEMA = {
     },
 }
 TOKEN_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+# The same four classes as the final result event names them per model (result.modelUsage), in TOKEN_KEYS order.
+MODEL_USAGE_KEYS = ("inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens", "outputTokens")
+SYNTHETIC_MODEL = "<synthetic>"
 
 
 class BenchRunError(RuntimeError):
@@ -95,6 +99,7 @@ class PreparedRun:
     env: dict[str, str]
     init: list[str] | None
     project_id: str | None
+    session_id: str
 
     def command_env(self) -> dict[str, str]:
         names = ("BENCH_ROOT", "BENCH_EVALS", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
@@ -122,9 +127,14 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
         env.pop(inherited, None)
     prompt = LEAD[mode].format(task=TASK, rounds=args.rounds, workers=args.workers, evals=args.evals) + REPORT
     tools = "Agent,Bash(python tools/evaluate.py:*),Read,Write,Glob"
+    # Sessions are saved: a stream message carries the output count from the start of its response (the input classes
+    # are final), and only the saved transcripts have the final output counts and the subagents' own files. The ID is
+    # chosen here because the transcript folder is named after the working directory by an undocumented rule; the ID
+    # finds it without guessing.
+    session_id = str(uuid4())
     cmd = [
         "claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--forward-subagent-text",
-        "--no-session-persistence", "--setting-sources", "", "--model", args.model, "--max-turns", str(args.max_turns),
+        "--session-id", session_id, "--setting-sources", "", "--model", args.model, "--max-turns", str(args.max_turns),
         "--max-budget-usd", str(args.max_budget_usd), "--tools", "Agent,Bash,Read,Write,Glob",
         "--json-schema", json.dumps(REPORT_SCHEMA),
     ]
@@ -143,7 +153,7 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
     if mode == "B":
         (work / "results").mkdir()
     cmd.extend(["--allowedTools", tools])
-    return PreparedRun(work, cmd, env, init, project_id)
+    return PreparedRun(work, cmd, env, init, project_id, session_id)
 
 
 def _capture_stream(stdout: BinaryIO, stream: BinaryIO, timestamps: BinaryIO) -> None:
@@ -198,11 +208,101 @@ def _flush_hooks(prepared: PreparedRun) -> None:
             raise BenchRunError("hook receipts are still queued after replay")
 
 
+def claude_config_dir(env: Mapping[str, str]) -> Path:
+    """Where Claude Code keeps its sessions: $CLAUDE_CONFIG_DIR, or ~/.claude."""
+    return Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def collect_transcripts(config_dir: Path, session_id: str, out: Path) -> dict[str, Any]:
+    """Find the session's saved transcripts and copy them next to the stream.
+
+    Claude Code writes <config>/projects/<folder named after the cwd>/<session id>.jsonl for the lead and, beside
+    it, <session id>/subagents/agent-<agent id>.jsonl for each subagent, with an agent-<agent id>.meta.json that
+    names the Agent tool call (toolUseId) and the agent type. The copy is what the analysis reads: the retention
+    sweep deletes the originals after cleanupPeriodDays. A missing transcript is reported, not raised; the stream is
+    still a complete record of the run, only without final per-message output counts."""
+    found: dict[str, Any] = {"config_dir": str(config_dir), "lead": None, "subagents": [], "copy": None}
+    try:
+        leads = sorted((config_dir / "projects").glob(f"*/{session_id}.jsonl"))
+        if len(leads) != 1:
+            found["error"] = f"expected one transcript named {session_id}.jsonl under projects/*/, found {len(leads)}"
+            return found
+        lead = leads[0]
+        agents = sorted((lead.parent / session_id / "subagents").glob("agent-*.jsonl"))
+        dest = out / "transcripts"
+        (dest / "subagents").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(lead, dest / "lead.jsonl")
+        for agent in agents:
+            shutil.copy2(agent, dest / "subagents" / agent.name)
+            meta = agent.with_suffix(".meta.json")
+            if meta.is_file():
+                shutil.copy2(meta, dest / "subagents" / meta.name)
+        found.update(lead=str(lead), subagents=[str(agent) for agent in agents], copy="transcripts")
+    except OSError as exc:
+        found["error"] = f"{type(exc).__name__}: {exc}"
+    return found
+
+
+def snapshot_hook_spool(state_home: Path, out: Path) -> int:
+    """Copy the hook entries that are still on disk (queued, dead or quarantined) into hook-spool/ and return how
+    many. The replay that follows deletes each entry it records, and an entry is the only copy of what Claude Code
+    handed the hook. Entries the background processor already recorded are gone by now; their trace is the line in
+    state/benchbook/hook.log and the claim in the ledger export."""
+    root = state_home / "benchbook" / "spool"
+    copied = 0
+    for path in sorted(root.rglob("*")) if root.is_dir() else ():
+        if path.is_file() and path.suffix in (".json", ".invalid"):
+            target = out / "hook-spool" / path.relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            copied += 1
+    return copied
+
+
+def export_ledger(out: Path, env: Mapping[str, str], cwd: Path) -> int:
+    """Write `benchbook export` of the run's project (BENCHBOOK_PROJECT in env) to ledger.jsonl; returns the record
+    count. Nothing in the harness deletes the project, so its records also stay in the database the run used, but
+    that database belongs to one machine and the export travels with the run directory."""
+    target = out / "ledger.jsonl"
+    with target.open("wb") as stdout:
+        subprocess.run([sys.executable, "-m", "benchbook", "export"], cwd=cwd, env=dict(env), stdout=stdout,
+                       check=True, timeout=120)
+    return sum(1 for line in target.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def keep_ledger_evidence(kept: dict[str, Any], out: Path, env: Mapping[str, str], cwd: Path,
+                         flush: Callable[[], None]) -> None:
+    """Configuration C's persistent record, kept in the run directory and described in `kept` as it is written: what
+    the hooks still held, then (after `flush` replayed it) the whole project. The export runs even when the replay
+    fails, because that is the run whose records need looking at. The hook state itself needs no copy:
+    XDG_STATE_HOME is <run>/state."""
+    snapshotted = snapshot_hook_spool(Path(env["XDG_STATE_HOME"]), out)
+    kept.update(hook_state="state/benchbook", hook_spool_snapshot="hook-spool" if snapshotted else None,
+                hook_entries_snapshotted=snapshotted)
+    try:
+        flush()
+    finally:
+        kept.update(export="ledger.jsonl", records=export_ledger(out, env, cwd))
+
+
 def run_real(mode: str, out: Path, run: int, args: Any) -> RunMetrics | None:
     prepared = prepare(mode, out, args)
-    meta = {"cmd": prepared.cmd, "cwd": str(prepared.work), "env": prepared.command_env(),
-            "init": prepared.init, "project_id": prepared.project_id, "max_budget_usd": args.max_budget_usd}
-    (out / "command.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    config_dir = claude_config_dir(prepared.env)
+    meta: dict[str, Any] = {
+        "cmd": prepared.cmd, "cwd": str(prepared.work), "env": prepared.command_env(),
+        "init": prepared.init, "project_id": prepared.project_id, "max_budget_usd": args.max_budget_usd,
+        "session_id": prepared.session_id,
+        # Filled in after the run. Until then: where the transcripts will appear.
+        "transcripts": {"config_dir": str(config_dir), "lead": None, "subagents": [], "copy": None,
+                        "expected": {"lead": f"{config_dir}/projects/*/{prepared.session_id}.jsonl",
+                                     "subagents": f"{config_dir}/projects/*/{prepared.session_id}/subagents/"
+                                                  "agent-*.jsonl"}},
+    }
+
+    def write_meta() -> None:
+        (out / "command.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    write_meta()
     if not args.execute:
         commands = [f"cd {shlex.quote(str(prepared.work))}"]
         commands.append("export " + shlex.join([f"{k}={v}" for k, v in prepared.command_env().items()]))
@@ -215,9 +315,20 @@ def run_real(mode: str, out: Path, run: int, args: Any) -> RunMetrics | None:
     try:
         if prepared.init:
             subprocess.run(prepared.init, cwd=prepared.work, env=prepared.env, check=True, timeout=120)
-        _capture(prepared, out, args.wall_clock)
+        try:
+            _capture(prepared, out, args.wall_clock)
+        finally:
+            # A run that failed keeps its transcripts too: they show what the subagents were doing when it stopped.
+            meta["transcripts"] = collect_transcripts(config_dir, prepared.session_id, out)
+            write_meta()
+            if error := meta["transcripts"].get("error"):
+                print(f"[{mode} run {run}] no session transcripts: {error}", file=sys.stderr)
         if prepared.project_id:
-            _flush_hooks(prepared)
+            meta["ledger"] = {}
+            try:
+                keep_ledger_evidence(meta["ledger"], out, prepared.env, prepared.work, lambda: _flush_hooks(prepared))
+            finally:
+                write_meta()
         return parse(mode, out, run, prepared.project_id, args.max_budget_usd)
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         raise BenchRunError(str(exc)) from exc
@@ -245,6 +356,133 @@ def _read_stream(out: Path) -> list[tuple[int, dict[str, Any]]]:
     if any(not isinstance(event, dict) for _, event in events):
         raise BenchRunError("malformed Claude stream event")
     return events
+
+
+def stream_messages(events: Iterable[tuple[int, dict[str, Any]]]) -> Iterator[tuple[bool, dict[str, Any]]]:
+    """(is the lead's, API message) for every assistant event of the stream."""
+    for _, event in events:
+        if event.get("type") == "assistant" and isinstance(event.get("message"), dict):
+            yield not event.get("parent_tool_use_id"), event["message"]
+
+
+def transcript_messages(out: Path) -> Iterator[tuple[bool, dict[str, Any]]] | None:
+    """The same pairs from the copied session transcripts, or None when the run has none."""
+    root = out / "transcripts"
+    if not (root / "lead.jsonl").is_file():
+        return None
+
+    def rows() -> Iterator[tuple[bool, dict[str, Any]]]:
+        for path in (root / "lead.jsonl", *sorted((root / "subagents").glob("agent-*.jsonl"))):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue  # transcripts are appended asynchronously; a torn last line carries no usage
+                if isinstance(row, dict) and row.get("type") == "assistant" and isinstance(row.get("message"), dict):
+                    yield path.name == "lead.jsonl" and not row.get("isSidechain"), row["message"]
+
+    return rows()
+
+
+def _class_counts(raw: Any, keys: tuple[str, ...] = TOKEN_KEYS) -> list[int] | None:
+    if not isinstance(raw, dict):
+        return None
+    counts = [raw.get(key, 0) for key in keys]
+    return None if any(type(n) is not int or n < 0 for n in counts) else counts
+
+
+def _column_sums(rows: Iterable[list[int]]) -> list[int]:
+    sums = [0] * len(TOKEN_KEYS)
+    for row in rows:
+        sums = [a + b for a, b in zip(sums, row, strict=True)]
+    return sums
+
+
+def tally_usage(messages: Iterable[tuple[bool, dict[str, Any]]]) -> dict[str, Any]:
+    """Token classes per scope and per model with every API response counted once.
+
+    One response arrives as several records (one per content block) that all repeat its message ID and usage, so the
+    key is the message ID and a repeat never adds. Where records of one ID disagree, the larger count per class
+    wins: an early record has the output count from the start of the response, a late one the final count.
+    Claude Code's own placeholder messages (model "<synthetic>": an interrupted tool call, an API error) made no API
+    call and are left out."""
+    per_message: dict[str, tuple[bool, str, list[int]]] = {}
+    unusable = 0
+    for is_lead, message in messages:
+        if message.get("model") == SYNTHETIC_MODEL:
+            continue
+        msg_id = message.get("id")
+        counts = _class_counts(message.get("usage")) if _usage(message.get("usage")) is not None else None
+        if counts is None or not isinstance(msg_id, str):
+            unusable += 1
+            continue
+        model = str(message.get("model"))
+        if msg_id in per_message:
+            is_lead, model, seen = per_message[msg_id]
+            counts = [max(a, b) for a, b in zip(seen, counts, strict=True)]
+        per_message[msg_id] = is_lead, model, counts
+    models: dict[str, list[int]] = {}
+    for _, model, counts in per_message.values():
+        models[model] = _column_sums([models.get(model, [0] * len(TOKEN_KEYS)), counts])
+    return {"messages": len(per_message), "unusable_records": unusable,
+            "lead_messages": sum(is_lead for is_lead, _, _ in per_message.values()),
+            "lead": _column_sums(counts for is_lead, _, counts in per_message.values() if is_lead),
+            "session": _column_sums(counts for _, _, counts in per_message.values()), "models": models}
+
+
+def _named(counts: list[int] | None) -> dict[str, int] | None:
+    return None if counts is None else {**dict(zip(TOKEN_KEYS, counts, strict=True)), "total": sum(counts)}
+
+
+def _delta(got: list[int], want: list[int] | None) -> list[int] | None:
+    return None if want is None else [a - b for a, b in zip(got, want, strict=True)]
+
+
+def usage_check(out: Path, events: list[tuple[int, dict[str, Any]]] | None = None) -> dict[str, Any]:
+    """Reconcile per-message usage with the totals of the final result event.
+
+    The result event reports two totals: `usage` covers the lead's own API calls and `modelUsage` covers the whole
+    session per model, subagents included (checked on the first benchmark's streams: the stream's lead messages add
+    up to `usage` and all its messages to `modelUsage` in the three input classes). Each source of per-message usage
+    (the stream, and the saved transcripts when the run has them) is compared with both, class by class, and per
+    model. `reconciled` is true when one source matches every class of both totals. `prompt_side` says whether the
+    three input classes match for the lead and for every model the source has messages of, which is what the
+    per-turn context analysis needs; a model in `modelUsage` without any message (a side call of Claude Code's that
+    no transcript shows) is listed under `models_without_messages` instead of failing it."""
+    events = _read_stream(out) if events is None else events
+    final = next((event for _, event in reversed(events) if event.get("type") == "result"), {})
+    lead_total = _class_counts(final.get("usage")) if _usage(final.get("usage")) is not None else None
+    per_model = final.get("modelUsage")
+    model_totals = ({str(name): _class_counts(row, MODEL_USAGE_KEYS) for name, row in per_model.items()}
+                    if isinstance(per_model, dict) else {})
+    usable = {name: counts for name, counts in model_totals.items() if counts is not None}
+    session_total = _column_sums(usable.values()) if usable and len(usable) == len(model_totals) else None
+
+    def compare(tally: dict[str, Any]) -> dict[str, Any]:
+        difference = {"lead": _delta(tally["lead"], lead_total), "session": _delta(tally["session"], session_total)}
+        models = {name: _delta(counts, usable.get(name)) for name, counts in tally["models"].items()}
+        matches: dict[str, bool | None] = {scope: None if diff is None else not any(diff)
+                                           for scope, diff in difference.items()}
+        prompt = [diff[:3] for diff in (difference["lead"], *models.values()) if diff is not None]
+        unmatched_model = any(name not in usable for name in models) and bool(usable)
+        matches["prompt_side"] = None if not prompt else not unmatched_model and not any(map(any, prompt))
+        return {"messages": tally["messages"], "lead_messages": tally["lead_messages"],
+                "unusable_records": tally["unusable_records"],
+                "lead": _named(tally["lead"]), "session": _named(tally["session"]),
+                "difference": {scope: _named(diff) for scope, diff in difference.items()},
+                "models": {name: _named(diff) for name, diff in models.items()},
+                "models_without_messages": {name: _named(usable[name]) for name in sorted(usable.keys()
+                                                                                          - models.keys())},
+                "matches": matches}
+
+    sources: dict[str, dict[str, Any] | None] = {"stream": compare(tally_usage(stream_messages(events)))}
+    saved = transcript_messages(out)
+    sources["transcripts"] = compare(tally_usage(saved)) if saved is not None else None
+    source = next((name for name in ("transcripts", "stream")
+                   if (found := sources[name]) and found["matches"]["lead"] and found["matches"]["session"]), None)
+    return {"final": {"lead": _named(lead_total), "session": _named(session_total),
+                      "models": {name: _named(counts) for name, counts in model_totals.items()}},
+            "sources": sources, "reconciled": source is not None, "source": source}
 
 
 def _number(value: Any) -> bool:
@@ -415,4 +653,4 @@ def parse(mode: str, out: Path, run: int, project_id: str | None, budget_usd: fl
     final_best = max((e["value"] for e in evals if e["value"] is not None), default=None)
     ctx, curve, curve_source = _observed_curve(events, evals, usage[1], final_best)
     return RunMetrics(mode, run, len(evals), duplicate_ratio(evals), lost, ctx, usage[1], final_best, curve,
-                      cost_usd=cost, curve_source=curve_source)
+                      cost_usd=cost, curve_source=curve_source, usage_check=usage_check(out, events))

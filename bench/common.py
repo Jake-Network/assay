@@ -77,6 +77,9 @@ class RunMetrics:
     curve: list[tuple[int, float]]
     cost_usd: float | None = None
     curve_source: str = "simulated"
+    # Per-message usage against the final totals (bench.real.usage_check). tokens_total above is the final result
+    # event's own `usage`, which covers the lead's API calls; the whole session's total is in here.
+    usage_check: dict[str, Any] | None = None
 
 
 def load_evals(path: Path) -> list[dict[str, Any]]:

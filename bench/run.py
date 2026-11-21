@@ -4,6 +4,7 @@
     python -m bench.run --model sonnet             # prints the real `claude -p` commands
     python -m bench.run --model sonnet --execute   # runs them (costs money; see MANUAL_QA.md)
     python -m bench.report bench/out/<run>         # (re)build report.md
+    python -m bench.analyze_cost bench/out/<run>   # where the tokens went: cost-breakdown.md
 """
 from __future__ import annotations
 

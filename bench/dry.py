@@ -14,11 +14,18 @@ B files     workers append each result to a JSON file; the lead reads the whole 
             (nothing is lost, the lead context grows). Same 10-config hint as A.
 C benchbook     workers use the real benchbook SDK: brief, check_tried before every evaluation, record after it;
             the lead reads status + brief. Results that are never reported are still in the ledger.
+
+Every run also leaves what a real run leaves (bench/dry_trace.py writes a stream and session transcripts as the
+simulation goes) and is put through the same instrumentation as a real run: transcript collection, the usage
+reconciliation in metrics.json and, for C, the hook replay and the ledger export. `python -m bench.analyze_cost`
+therefore runs on a dry run directory.
 """
 from __future__ import annotations
 
 import json
+import os
 import random
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -26,7 +33,9 @@ from typing import Any
 from benchbook.dedup import canonical_json
 from benchbook.tokens import estimate_tokens
 
+from . import real
 from .common import CODE_REF, SPACE, EvalLog, RunMetrics, best_curve, duplicate_ratio, load_evals
+from .dry_trace import MCP, Agent, Trace
 
 STEP_TOKENS = 400  # fixed cost of one worker evaluation turn (identical in A, B, C)
 PROMPT_BASE = 250
@@ -54,8 +63,11 @@ class Sim:
         self.lead_ctx_max = 0
         self.known: dict[str, dict[str, Any]] = {}  # results the lead can still report
         self.hint: list[str] = []
+        self.trace = Trace(out, mode)
+        self.pid: str | None = None
         self.log = EvalLog(out / "evals.jsonl")
         self.worker_n = 0
+        self.stopped: list[tuple[Agent, str]] = []  # C: the workers whose SubagentStop the plugin hook would see
         self.lg = None
         if mode == "C":
             from benchbook import Ledger
@@ -84,8 +96,10 @@ class Sim:
         focuses = [self.rng.choice(SPACE["init"]) for _ in range(self.a.workers)]
         if self.mode == "C":
             assert self.lg is not None
-            self.lg.create_tasks([{"title": f"explore {f}", "tags": [f],
-                                              "spec": {"config_space": dict(SPACE, init=[f])}} for f in focuses])
+            tasks = [{"title": f"explore {f}", "tags": [f], "spec": {"config_space": dict(SPACE, init=[f])}}
+                     for f in focuses]
+            created = self.lg.create_tasks(tasks)
+            self.trace.tool(self.trace.lead, MCP + "create_tasks", {"agent": "lead", "tasks": tasks}, created)
             self.lead_reads(60 * len(focuses))
         for f in focuses:
             if self.over():
@@ -99,10 +113,16 @@ class Sim:
         if self.mode == "C":
             from benchbook import Ledger
 
+            me = self.trace.spawn(name, f"Your benchbook agent name is {name}. Take a task and carry it out.")
             w = Ledger.open(project=self.pid, agent=name)
             task = w.next_task()
-            self.spend(PROMPT_BASE + estimate_tokens(w.brief(task.id if task else None, 1500)))
+            self.trace.tool(me, MCP + "next_task", {"agent": name}, {"task": task.id if task else None})
+            brief = w.brief(task.id if task else None, 1500)
+            self.trace.tool(me, MCP + "brief", {"agent": name, "task_id": task.id if task else None}, brief)
+            self.spend(PROMPT_BASE + estimate_tokens(brief))
         else:
+            me = self.trace.spawn(name, f"Explore init={focus} with {self.a.evals} evaluations. Already tried:\n"
+                                  + "\n".join(self.hint))
             self.spend(PROMPT_BASE + estimate_tokens("\n".join(self.hint)))
             w, task = None, None
         avoid = set(self.hint)
@@ -113,6 +133,8 @@ class Sim:
             for _try in range(8):
                 if self.mode == "C":
                     t = w.check_tried(cfg, CODE_REF)  # type: ignore[union-attr]
+                    self.trace.tool(me, MCP + "check_tried", {"agent": name, "config": cfg, "code_ref": CODE_REF},
+                                    {"tried": bool(t.exact), "replicates": len(t.exact)})
                     self.spend(60)
                     if not any(e.seed == seed for e in t.exact):
                         break
@@ -120,29 +142,47 @@ class Sim:
                     break
                 cfg = sample(self.rng, focus)
             e = self.log.evaluate(name, cfg, seed, self.tokens)
+            receipt = {k: e[k] for k in ("eval_id", "config", "code_ref", "seed", "run_status", "value", "notes")}
+            self.trace.tool(me, "Bash", {"command": f"python tools/evaluate.py --config '{json.dumps(cfg)}' "
+                                                    f"--seed {seed} --agent {name}"}, receipt)
             self.spend(STEP_TOKENS)
             mine.append(e)
             if self.mode == "B":
                 (self.out / "results" / f"{name}-{e['i']}.json").write_text(json.dumps(e))
+                self.trace.tool(me, "Write", {"file_path": f"results/{name}-{e['i']}.json",
+                                              "content": json.dumps(receipt)}, "File created successfully")
             if self.mode == "C":
-                w.record_experiment(cfg, {"sum_radii": e["value"]} if e["value"] is not None else {},  # type: ignore[union-attr]
-                                    run_status=e["run_status"], seed=seed, code_ref=CODE_REF, notes=e["notes"],
-                                    task_id=task.id if task else None)
+                metrics = {"sum_radii": e["value"]} if e["value"] is not None else {}
+                recorded = w.record_experiment(cfg, metrics, run_status=e["run_status"],  # type: ignore[union-attr]
+                                               seed=seed, code_ref=CODE_REF, notes=e["notes"],
+                                               task_id=task.id if task else None)
+                self.trace.tool(me, MCP + "record_experiment",
+                                {"agent": name, "config": cfg, "metrics": metrics, "seed": seed, "code_ref": CODE_REF,
+                                 "run_status": e["run_status"]}, {"id": recorded.id})
                 self.spend(40)
         # final message to the lead
         if self.mode == "A":
             msg = "Results:\n" + "\n".join(line(e) for e in mine)
             self.spend(estimate_tokens(msg))
-            if self.rng.random() >= self.a.drop_rate:
+            delivered = self.rng.random() >= self.a.drop_rate
+            self.trace.report(me, msg, delivered)
+            if delivered:
                 self.lead_reads(estimate_tokens(msg))
                 for e in mine:
                     self.known[str(e["i"])] = e
         elif self.mode == "B":
-            self.lead_reads(estimate_tokens(f"{name}: wrote {len(mine)} result files"))
+            msg = f"{name}: wrote {len(mine)} result files"
+            self.trace.report(me, msg)
+            self.lead_reads(estimate_tokens(msg))
         else:
             if task is not None:
                 w.complete_task(task.id, "done", f"{len(mine)} evaluations")  # type: ignore[union-attr]
-            self.lead_reads(estimate_tokens(f"{name}: done, {len(mine)} experiments recorded; ids e:xxxxxxxx ..."))
+                self.trace.tool(me, MCP + "complete_task", {"agent": name, "task_id": task.id, "outcome": "done"},
+                                {"ok": True})
+            msg = f"{name}: done, {len(mine)} experiments recorded; ids e:xxxxxxxx ..."
+            self.trace.report(me, msg)
+            self.stopped.append((me, msg))
+            self.lead_reads(estimate_tokens(msg))
 
     def lead_review(self) -> None:
         if self.mode == "A":
@@ -155,14 +195,20 @@ class Sim:
         elif self.mode == "B":
             files = sorted((self.out / "results").glob("*.json"))
             text = "\n".join(f.read_text() for f in files)
+            self.trace.tool(self.trace.lead, "Glob", {"pattern": "results/*.json"}, "\n".join(f.name for f in files))
+            for f in files:
+                self.trace.tool(self.trace.lead, "Read", {"file_path": f"results/{f.name}"}, f.read_text())
             self.lead_reads(estimate_tokens(text))
             rows = [json.loads(f.read_text()) for f in files]
             self.known = {str(e["i"]): e for e in rows}
             self.hint = [canonical_json(e["config"]) for e in rows[-10:]]
         else:
             assert self.lg is not None
-            self.lead_reads(estimate_tokens(json.dumps(self.lg.status(), default=str)))
-            self.lead_reads(estimate_tokens(self.lg.brief(None, 2000)))
+            status, brief = json.dumps(self.lg.status(), default=str), self.lg.brief(None, 2000)
+            self.trace.tool(self.trace.lead, MCP + "status", {"agent": "lead"}, status)
+            self.trace.tool(self.trace.lead, MCP + "brief", {"agent": "lead", "budget_tokens": 2000}, brief)
+            self.lead_reads(estimate_tokens(status))
+            self.lead_reads(estimate_tokens(brief))
             self.lead_ctx = min(self.lead_ctx, 6000)  # the lead re-reads the bounded brief instead of history
 
     def finish(self) -> RunMetrics:
@@ -176,8 +222,42 @@ class Sim:
         else:
             lost = sum(1 for e in evals if str(e["i"]) not in self.known)
         curve = best_curve(evals)
-        return RunMetrics(self.mode, self.run, len(evals), duplicate_ratio(evals), max(lost, 0), self.lead_ctx_max,
-                          self.tokens, curve[-1][1] if curve else None, curve)
+        metrics = RunMetrics(self.mode, self.run, len(evals), duplicate_ratio(evals), max(lost, 0), self.lead_ctx_max,
+                             self.tokens, curve[-1][1] if curve else None, curve)
+        metrics.usage_check = self.instrument()
+        return metrics
+
+    def instrument(self) -> dict[str, Any]:
+        """The post-run steps of bench.real.run_real, on what the simulation left behind."""
+        self.trace.close(f"dry run: {self.log.n} evaluations")
+        meta: dict[str, Any] = {"dry": True, "cwd": str(self.out / "work"), "project_id": self.pid,
+                                "session_id": self.trace.session_id}
+        meta["transcripts"] = real.collect_transcripts(self.trace.config_dir, self.trace.session_id, self.out)
+        if self.pid:
+            env = {**os.environ, "BENCHBOOK_PROJECT": self.pid, "XDG_STATE_HOME": str(self.out / "state")}
+            prepared = real.PreparedRun(self.out, [], env, None, self.pid, self.trace.session_id)
+            self.queue_hook_entries()
+            meta["ledger"] = {}
+            real.keep_ledger_evidence(meta["ledger"], self.out, env, self.out, lambda: real._flush_hooks(prepared))
+        (self.out / "command.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return real.usage_check(self.out)
+
+    def queue_hook_entries(self) -> None:
+        """Leave each worker's SubagentStop in the hook spool, in the form `benchbook hook subagent-stop` writes
+        it, without starting the hook's background processor: the harness's own replay then has entries to
+        snapshot, record and export, which is the path a real C run takes when a processor was still behind."""
+        from benchbook import hooks
+
+        # The spool is keyed by the database target, which this process shares with the replay; only the state
+        # directory is the run's own.
+        spool = self.out / "state" / "benchbook" / "spool" / hooks._spool_dir().name
+        spool.mkdir(parents=True, exist_ok=True)
+        for worker, text in self.stopped:
+            data = {"hook_event_name": "SubagentStop", "session_id": self.trace.session_id,
+                    "agent_id": worker.agent_id, "agent_type": "benchbook:benchbook-worker",
+                    "last_assistant_message": text}
+            hooks._write_spool(spool, {"event": "subagent-stop", "project": self.pid, "data": data,
+                                       "spooled_at": time.time(), "accepted": True})
 
 
 def run_dry(mode: str, out: Path, run: int, args: Any) -> RunMetrics:

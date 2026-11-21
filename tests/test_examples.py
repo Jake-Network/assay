@@ -103,3 +103,5 @@ def test_bench_dry(tmp_path: Path) -> None:
     m = json.loads((tmp_path / "b" / "metrics.json").read_text())
     c = [r for r in m["runs"] if r["config"] == "C"][0]
     assert c["lost_results"] == 0 and c["duplicate_ratio"] == 0
+    # The cost instrumentation's reconciliation of per-message usage lands in metrics.json for every run.
+    assert all(r["usage_check"]["reconciled"] for r in m["runs"])
