@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased: release readiness (assay 개선.md)
+## Unreleased: release readiness
 
 - Build identity: the package version comes from git (`0.1.devN+g<commit>` between tags, `0.1.0` on `v0.1.0`);
   `assay --version`; `assay doctor` prints the build, the database schema revision and this build's newest one.
