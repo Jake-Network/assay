@@ -66,7 +66,7 @@ res.run_status, res.exit_code, res.duration_ms, res.log_tail, res.reason, res.me
 - `tee=True` also writes the output to this process's stdout while the command runs: the same bytes in the same
   order as `cmd 2>&1`. The command sees a pipe, not a terminal, so stderr arrives on stdout. Output from a
   background process that the command left running is copied for 2 more seconds, then dropped.
-- `duration_ms` is wall clock. `log_tail` is the last 30 lines of the output (at most 1500 characters); the whole
-  output is in `log_path`.
+- `duration_ms` is wall clock. `log_tail` is the end of the output: its last 30 lines, cut to their last 1500
+  characters. The whole output is in `log_path`.
 - Ctrl-C raises `KeyboardInterrupt`, SIGTERM and SIGHUP raise `Interrupted` (when called from the main thread),
   both after the group was killed. Catch them to record the run from `log_path`, then re-raise.

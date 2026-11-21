@@ -99,6 +99,18 @@ def test_a_named_metric_must_be_in_the_summary(tmp_path: Path) -> None:
     assert run_command(cmd, tmp_path, log, 60).metrics == {"score": 2.5, "steps": 10}  # parsed either way
 
 
+def test_log_tail_keeps_the_end_of_long_output(tmp_path: Path) -> None:
+    """Thirty long lines are more than the tail holds; the last line is what a failure signature is made from."""
+    lines = [f"FAILED tests/test_media.py::test_case_{i} - AssertionError: {'x' * 80}" for i in range(40)]
+    text = "\n".join([*lines, "E   ValueError: the real reason", "=== 40 failed in 1.23s ==="])
+    assert runner.tail("a\rb\nc", lines=2) == "b\nc" and runner.tail("short") == "short"
+    kept = runner.tail(text)
+    assert len(kept) == 1500 and kept.endswith("E   ValueError: the real reason\n=== 40 failed in 1.23s ===")
+    cmd = _py(tmp_path, "long.py", f"import sys\nprint({text!r})\nsys.exit(1)\n")
+    res = run_command(cmd, tmp_path, tmp_path / "run.log", 60)
+    assert res.exit_code == 1 and res.log_tail == kept
+
+
 def test_result_carries_the_duration(tmp_path: Path) -> None:
     res = run_command(_py(tmp_path, "slow.py", "import time\ntime.sleep(0.4)\n"), tmp_path, tmp_path / "run.log", 60)
     assert res.run_status == "ok" and 400 <= res.duration_ms < 60_000

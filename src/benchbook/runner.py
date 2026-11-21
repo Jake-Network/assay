@@ -81,7 +81,9 @@ def _child_dies_with_parent() -> Callable[[], None] | None:
 
 
 def tail(text: str, lines: int = 30, chars: int = 1500) -> str:
-    return "\n".join(text.replace("\r", "\n").splitlines()[-lines:])[:chars]
+    """The last `lines` lines, cut to their last `chars` characters. Long lines cost the start, never the end:
+    the final line is the one that names the failure."""
+    return "\n".join(text.replace("\r", "\n").splitlines()[-lines:])[-chars:]
 
 
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
