@@ -14,7 +14,8 @@
     "model": "claude-sonnet-5-5",
     "max_turns": 80,
     "wall_clock": 60,
-    "execute": true
+    "execute": true,
+    "note": "A and B: batch of 2026-11-21 (9 runs; its C runs loaded the account's claude.ai connectors and are kept only in bench/out). C: three runs of the same day with ENABLE_CLAUDEAI_MCP_SERVERS=false, same code plus that one change to bench/real.py."
   },
   "runs": [
     {
@@ -915,78 +916,78 @@
       "config": "C",
       "run": 1,
       "evaluations": 60,
-      "duplicate_ratio": 0.2,
+      "duplicate_ratio": 0.11666666666666667,
       "lost_results": 0,
-      "lead_context_max": 91931,
-      "tokens_total": 1238316,
-      "final_best": 2.6359773947,
+      "lead_context_max": 31428,
+      "tokens_total": 270289,
+      "final_best": 2.6359317682,
       "curve": [
         [
-          1238316,
-          2.6359773947
+          270289,
+          2.6359317682
         ]
       ],
-      "cost_usd": 1.6116935,
+      "cost_usd": 1.1609296000000002,
       "curve_source": "final aggregate only",
       "usage_check": {
         "final": {
           "lead": {
-            "input_tokens": 30,
-            "cache_creation_input_tokens": 91929,
-            "cache_read_input_tokens": 1135983,
-            "output_tokens": 10374,
-            "total": 1238316
+            "input_tokens": 22,
+            "cache_creation_input_tokens": 31426,
+            "cache_read_input_tokens": 230231,
+            "output_tokens": 8610,
+            "total": 270289
           },
           "session": {
-            "input_tokens": 232,
-            "cache_creation_input_tokens": 237024,
-            "cache_read_input_tokens": 2365060,
-            "output_tokens": 64427,
-            "total": 2666743
+            "input_tokens": 208,
+            "cache_creation_input_tokens": 150803,
+            "cache_read_input_tokens": 1159771,
+            "output_tokens": 62039,
+            "total": 1372821
           },
           "models": {
             "claude-sonnet-5-5": {
-              "input_tokens": 232,
-              "cache_creation_input_tokens": 237024,
-              "cache_read_input_tokens": 2365060,
-              "output_tokens": 64427,
-              "total": 2666743
+              "input_tokens": 208,
+              "cache_creation_input_tokens": 150803,
+              "cache_read_input_tokens": 1159771,
+              "output_tokens": 62039,
+              "total": 1372821
             }
           }
         },
         "sources": {
           "stream": {
-            "messages": 116,
-            "lead_messages": 15,
+            "messages": 104,
+            "lead_messages": 11,
             "unusable_records": 0,
             "lead": {
-              "input_tokens": 30,
-              "cache_creation_input_tokens": 91929,
-              "cache_read_input_tokens": 1135983,
-              "output_tokens": 323,
-              "total": 1228265
+              "input_tokens": 22,
+              "cache_creation_input_tokens": 31426,
+              "cache_read_input_tokens": 230231,
+              "output_tokens": 333,
+              "total": 262012
             },
             "session": {
-              "input_tokens": 232,
-              "cache_creation_input_tokens": 237024,
-              "cache_read_input_tokens": 2365060,
-              "output_tokens": 6163,
-              "total": 2608479
+              "input_tokens": 208,
+              "cache_creation_input_tokens": 150803,
+              "cache_read_input_tokens": 1159771,
+              "output_tokens": 5560,
+              "total": 1316342
             },
             "difference": {
               "lead": {
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -10051,
-                "total": -10051
+                "output_tokens": -8277,
+                "total": -8277
               },
               "session": {
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -58264,
-                "total": -58264
+                "output_tokens": -56479,
+                "total": -56479
               }
             },
             "models": {
@@ -994,8 +995,8 @@
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -58264,
-                "total": -58264
+                "output_tokens": -56479,
+                "total": -56479
               }
             },
             "models_without_messages": {},
@@ -1006,22 +1007,22 @@
             }
           },
           "transcripts": {
-            "messages": 116,
-            "lead_messages": 15,
+            "messages": 104,
+            "lead_messages": 11,
             "unusable_records": 0,
             "lead": {
-              "input_tokens": 30,
-              "cache_creation_input_tokens": 91929,
-              "cache_read_input_tokens": 1135983,
-              "output_tokens": 10374,
-              "total": 1238316
+              "input_tokens": 22,
+              "cache_creation_input_tokens": 31426,
+              "cache_read_input_tokens": 230231,
+              "output_tokens": 8610,
+              "total": 270289
             },
             "session": {
-              "input_tokens": 232,
-              "cache_creation_input_tokens": 237024,
-              "cache_read_input_tokens": 2365060,
-              "output_tokens": 64427,
-              "total": 2666743
+              "input_tokens": 208,
+              "cache_creation_input_tokens": 150803,
+              "cache_read_input_tokens": 1159771,
+              "output_tokens": 62039,
+              "total": 1372821
             },
             "difference": {
               "lead": {
@@ -1063,79 +1064,79 @@
     {
       "config": "C",
       "run": 2,
-      "evaluations": 59,
-      "duplicate_ratio": 0.288135593220339,
+      "evaluations": 60,
+      "duplicate_ratio": 0.31666666666666665,
       "lost_results": 0,
-      "lead_context_max": 99091,
-      "tokens_total": 2061225,
+      "lead_context_max": 32474,
+      "tokens_total": 277232,
       "final_best": 2.6359317682,
       "curve": [
         [
-          2061225,
+          277232,
           2.6359317682
         ]
       ],
-      "cost_usd": 1.4625442999999996,
+      "cost_usd": 1.1029684000000013,
       "curve_source": "final aggregate only",
       "usage_check": {
         "final": {
           "lead": {
-            "input_tokens": 46,
-            "cache_creation_input_tokens": 38024,
-            "cache_read_input_tokens": 2008889,
-            "output_tokens": 14266,
-            "total": 2061225
+            "input_tokens": 22,
+            "cache_creation_input_tokens": 22686,
+            "cache_read_input_tokens": 245328,
+            "output_tokens": 9196,
+            "total": 277232
           },
           "session": {
-            "input_tokens": 250,
-            "cache_creation_input_tokens": 167867,
-            "cache_read_input_tokens": 3249908,
-            "output_tokens": 66035,
-            "total": 3484060
+            "input_tokens": 232,
+            "cache_creation_input_tokens": 125048,
+            "cache_read_input_tokens": 1340754,
+            "output_tokens": 62178,
+            "total": 1528212
           },
           "models": {
             "claude-sonnet-5-5": {
-              "input_tokens": 250,
-              "cache_creation_input_tokens": 167867,
-              "cache_read_input_tokens": 3249908,
-              "output_tokens": 66035,
-              "total": 3484060
+              "input_tokens": 232,
+              "cache_creation_input_tokens": 125048,
+              "cache_read_input_tokens": 1340754,
+              "output_tokens": 62178,
+              "total": 1528212
             }
           }
         },
         "sources": {
           "stream": {
-            "messages": 125,
-            "lead_messages": 23,
+            "messages": 116,
+            "lead_messages": 11,
             "unusable_records": 0,
             "lead": {
-              "input_tokens": 46,
-              "cache_creation_input_tokens": 38024,
-              "cache_read_input_tokens": 2008889,
-              "output_tokens": 551,
-              "total": 2047510
+              "input_tokens": 22,
+              "cache_creation_input_tokens": 22686,
+              "cache_read_input_tokens": 245328,
+              "output_tokens": 286,
+              "total": 268322
             },
             "session": {
-              "input_tokens": 250,
-              "cache_creation_input_tokens": 167867,
-              "cache_read_input_tokens": 3249908,
-              "output_tokens": 6362,
-              "total": 3424387
+              "input_tokens": 232,
+              "cache_creation_input_tokens": 125048,
+              "cache_read_input_tokens": 1340754,
+              "output_tokens": 5793,
+              "total": 1471827
             },
             "difference": {
               "lead": {
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -13715,
-                "total": -13715
+                "output_tokens": -8910,
+                "total": -8910
               },
               "session": {
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -59673,
-                "total": -59673
+                "output_tokens": -56385,
+                "total": -56385
               }
             },
             "models": {
@@ -1143,8 +1144,8 @@
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -59673,
-                "total": -59673
+                "output_tokens": -56385,
+                "total": -56385
               }
             },
             "models_without_messages": {},
@@ -1155,22 +1156,22 @@
             }
           },
           "transcripts": {
-            "messages": 125,
-            "lead_messages": 23,
+            "messages": 116,
+            "lead_messages": 11,
             "unusable_records": 0,
             "lead": {
-              "input_tokens": 46,
-              "cache_creation_input_tokens": 38024,
-              "cache_read_input_tokens": 2008889,
-              "output_tokens": 14266,
-              "total": 2061225
+              "input_tokens": 22,
+              "cache_creation_input_tokens": 22686,
+              "cache_read_input_tokens": 245328,
+              "output_tokens": 9196,
+              "total": 277232
             },
             "session": {
-              "input_tokens": 250,
-              "cache_creation_input_tokens": 167867,
-              "cache_read_input_tokens": 3249908,
-              "output_tokens": 66035,
-              "total": 3484060
+              "input_tokens": 232,
+              "cache_creation_input_tokens": 125048,
+              "cache_read_input_tokens": 1340754,
+              "output_tokens": 62178,
+              "total": 1528212
             },
             "difference": {
               "lead": {
@@ -1212,79 +1213,79 @@
     {
       "config": "C",
       "run": 3,
-      "evaluations": 57,
-      "duplicate_ratio": 0.22807017543859648,
+      "evaluations": 58,
+      "duplicate_ratio": 0.2413793103448276,
       "lost_results": 0,
-      "lead_context_max": 96310,
-      "tokens_total": 1459249,
+      "lead_context_max": 35271,
+      "tokens_total": 430792,
       "final_best": 2.6359317682,
       "curve": [
         [
-          1459249,
+          430792,
           2.6359317682
         ]
       ],
-      "cost_usd": 1.3919082999999997,
+      "cost_usd": 1.1314638,
       "curve_source": "final aggregate only",
       "usage_check": {
         "final": {
           "lead": {
-            "input_tokens": 34,
-            "cache_creation_input_tokens": 35243,
-            "cache_read_input_tokens": 1412333,
-            "output_tokens": 11639,
-            "total": 1459249
+            "input_tokens": 32,
+            "cache_creation_input_tokens": 25483,
+            "cache_read_input_tokens": 394755,
+            "output_tokens": 10522,
+            "total": 430792
           },
           "session": {
-            "input_tokens": 302,
-            "cache_creation_input_tokens": 163395,
-            "cache_read_input_tokens": 3142623,
-            "output_tokens": 61569,
-            "total": 3367889
+            "input_tokens": 230,
+            "cache_creation_input_tokens": 126802,
+            "cache_read_input_tokens": 1406743,
+            "output_tokens": 63510,
+            "total": 1597285
           },
           "models": {
             "claude-sonnet-5-5": {
-              "input_tokens": 302,
-              "cache_creation_input_tokens": 163395,
-              "cache_read_input_tokens": 3142623,
-              "output_tokens": 61569,
-              "total": 3367889
+              "input_tokens": 230,
+              "cache_creation_input_tokens": 126802,
+              "cache_read_input_tokens": 1406743,
+              "output_tokens": 63510,
+              "total": 1597285
             }
           }
         },
         "sources": {
           "stream": {
-            "messages": 151,
-            "lead_messages": 17,
+            "messages": 115,
+            "lead_messages": 16,
             "unusable_records": 0,
             "lead": {
-              "input_tokens": 34,
-              "cache_creation_input_tokens": 35243,
-              "cache_read_input_tokens": 1412333,
-              "output_tokens": 425,
-              "total": 1448035
+              "input_tokens": 32,
+              "cache_creation_input_tokens": 25483,
+              "cache_read_input_tokens": 394755,
+              "output_tokens": 415,
+              "total": 420685
             },
             "session": {
-              "input_tokens": 302,
-              "cache_creation_input_tokens": 163395,
-              "cache_read_input_tokens": 3142623,
-              "output_tokens": 6558,
-              "total": 3312878
+              "input_tokens": 230,
+              "cache_creation_input_tokens": 126802,
+              "cache_read_input_tokens": 1406743,
+              "output_tokens": 6142,
+              "total": 1539917
             },
             "difference": {
               "lead": {
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -11214,
-                "total": -11214
+                "output_tokens": -10107,
+                "total": -10107
               },
               "session": {
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -55011,
-                "total": -55011
+                "output_tokens": -57368,
+                "total": -57368
               }
             },
             "models": {
@@ -1292,8 +1293,8 @@
                 "input_tokens": 0,
                 "cache_creation_input_tokens": 0,
                 "cache_read_input_tokens": 0,
-                "output_tokens": -55011,
-                "total": -55011
+                "output_tokens": -57368,
+                "total": -57368
               }
             },
             "models_without_messages": {},
@@ -1304,22 +1305,22 @@
             }
           },
           "transcripts": {
-            "messages": 151,
-            "lead_messages": 17,
+            "messages": 115,
+            "lead_messages": 16,
             "unusable_records": 0,
             "lead": {
-              "input_tokens": 34,
-              "cache_creation_input_tokens": 35243,
-              "cache_read_input_tokens": 1412333,
-              "output_tokens": 11639,
-              "total": 1459249
+              "input_tokens": 32,
+              "cache_creation_input_tokens": 25483,
+              "cache_read_input_tokens": 394755,
+              "output_tokens": 10522,
+              "total": 430792
             },
             "session": {
-              "input_tokens": 302,
-              "cache_creation_input_tokens": 163395,
-              "cache_read_input_tokens": 3142623,
-              "output_tokens": 61569,
-              "total": 3367889
+              "input_tokens": 230,
+              "cache_creation_input_tokens": 126802,
+              "cache_read_input_tokens": 1406743,
+              "output_tokens": 63510,
+              "total": 1597285
             },
             "difference": {
               "lead": {

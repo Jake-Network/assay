@@ -4,7 +4,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | A baseline (text to lead) | 3 | 60 ± 0 | 0.2944 ± 0.15 | 0 ± 0 | 3.05e+04 ± 1.3e+03 | 9.407e+04 ± 4e+03 | 0.6346 ± 0.015 | 2.636 ± 0 | 0.02806 ± 0.0012 |
 | B files | 3 | 58.33 ± 2.9 | 0.1611 ± 0.054 | 0.3333 ± 0.58 | 3.558e+04 ± 3.1e+03 | 1.905e+05 ± 1.5e+04 | 0.9603 ± 0.04 | 2.636 ± 3e-05 | 0.01389 ± 0.0011 |
-| C benchbook | 3 | 58.67 ± 1.5 | 0.2387 ± 0.045 | 0 ± 0 | 9.578e+04 ± 3.6e+03 | 1.586e+06 ± 4.3e+05 | 1.489 ± 0.11 | 2.636 ± 2.6e-05 | 0.001738 ± 0.00043 |
+| C benchbook | 3 | 59.33 ± 1.2 | 0.2249 ± 0.1 | 0 ± 0 | 3.306e+04 ± 2e+03 | 3.261e+05 ± 9.1e+04 | 1.132 ± 0.029 | 2.636 ± 0 | 0.00846 ± 0.002 |
 
 Values are mean ± sample standard deviation over runs.
 
@@ -41,6 +41,7 @@ Values are mean ± sample standard deviation over runs.
   "model": "claude-sonnet-5-5",
   "max_turns": 80,
   "wall_clock": 60,
-  "execute": true
+  "execute": true,
+  "note": "A and B: batch of 2026-11-21 (9 runs; its C runs loaded the account's claude.ai connectors and are kept only in bench/out). C: three runs of the same day with ENABLE_CLAUDEAI_MCP_SERVERS=false, same code plus that one change to bench/real.py."
 }
 ```
