@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -106,13 +107,25 @@ def _fit_header(lines: list[tuple[str, str, str]], limit: int, best_line: str) -
 
 
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *,
-                  now: datetime | None = None, log: bool = True, partition: str | None = None) -> str:
+                  now: datetime | None = None, log: bool = True, partition: str | None = None,
+                  tags: Sequence[str] | None = None) -> str:
+    """tags narrow a pack brief that reads them (the code pack's: per module tag); a brief that does not read them
+    refuses them rather than ignore them."""
     if lg.pack.brief_compiler:
         import importlib
+        import inspect
 
         mod, _, fn = lg.pack.brief_compiler.partition(":")
         compiler = getattr(importlib.import_module(mod), fn)
-        return compiler(lg, task_id, budget_tokens, now=now, log=log, partition=partition)  # type: ignore[no-any-return]
+        extra: dict[str, Any] = {}
+        if tags:
+            if "tags" not in inspect.signature(compiler).parameters:
+                raise ValidationFailed([f"tags: the {lg.pack.name} pack's brief does not read tags"])
+            extra["tags"] = list(tags)
+        return compiler(lg, task_id, budget_tokens, now=now, log=log, partition=partition,  # type: ignore[no-any-return]
+                        **extra)
+    if tags:
+        raise ValidationFailed([f"tags: the {lg.pack.name} pack's brief does not read tags (the code pack's does)"])
     limit = int(budget_tokens) * 105 // 100
     if limit < 1:
         raise ValidationFailed(["budget_tokens: must be positive"])

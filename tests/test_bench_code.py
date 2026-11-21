@@ -282,8 +282,11 @@ def test_dry_run_end_to_end_pins_the_three_numbers(tmp_path: Path, db_url: str) 
     # one project for the batch, in the database it was given; the completions are the implementer's
     project = json.loads((out / "batch.json").read_text())["project_id"]
     lg = Ledger.open(project=project, agent="reader", database_url=db_url)
-    claims = lg.sql_internal("SELECT author, kind FROM benchbook.claims WHERE project_id = %s", (project,))
-    assert sorted((c["author"], c["kind"]) for c in claims) == [("implementer", "completion")] * 3
+    claims = lg.sql_internal("SELECT author, kind, tags FROM benchbook.claims WHERE project_id = %s", (project,))
+    assert sorted((c["author"], c["kind"]) for c in claims if c["kind"] == "completion") == \
+        [("implementer", "completion")] * 3
+    # the refuted completion's failing re-run left its discarded-approach claim (failures.py), and nothing else did
+    assert [c["tags"] for c in claims if c["kind"] != "completion"] == [["discarded", "piece:toy__calc-2"]]
     assert json.loads((out / "preflight.json").read_text())["toy__calc-2"]["ok"] is True
 
 

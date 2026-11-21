@@ -1,6 +1,7 @@
 """The `benchbook` console script. `benchbook hook <event>` goes straight to the hook adapter without loading the CLI
 framework: Claude Code runs it at every subagent stop and Bash call, so its start-up time is paid on each one.
-`benchbook check run NAME [--piece P]` takes the same short cut: its start-up is added to every check it wraps.
+`benchbook check run NAME [--piece P] [--approach A]` takes the same short cut: its start-up is added to every check it
+wraps.
 
 `assay`, the command's name before the rename, is the same script with a one-line notice (legacy_main)."""
 from __future__ import annotations

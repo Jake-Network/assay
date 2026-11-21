@@ -167,16 +167,20 @@ notes      "check verify: base origin/main 0123..., merge-base 4567...; checks f
 ```
 
 A check's status is `ok`, `fail`, `timeout` or `not_run` (after an interruption). The failure signature is
-`check:first failing test:exception type` from JUnit, `check:timeout`, or `check:exit N:<hash>` where the hash is
-of the last output line with digits zeroed. `guard_files` keeps the first 100 paths; `guard_touched` counts all.
+`check:part` per failing check, where the part names the failing JUnit test, the TypeScript errors, or the exit code
+and a hash of the last error line ([Failure signatures](#failure-signatures)). `guard_files` keeps the first 100
+paths; `guard_touched` counts all.
 
 The completion claim: statement `<piece> is complete at <sha12>`, tags `piece:<piece>` and `commit:<sha>`,
 payload `{"piece", "commit", "reported_checks"}` and, with `--report-file`, `"report": {"sha256", "bytes"}`.
 `reported_checks` lists the declared check names the report mentions (a mention, not a claimed result).
 
-**Never stored:** the diff, the check output, the report's text. Only the commit, the guarded paths it changed, the
-failure signature and a hash of the last output line. The output is shown to whoever runs the command and deleted
-with the worktree.
+**Never stored:** the diff, the check output, the report's text. Only the commit, the guarded paths it changed and
+the failure signature (with its hash of the last error line). The output is shown to whoever runs the command and
+deleted with the worktree.
+
+A failing verification also prints the earlier attempt of the piece that failed the same way, if there is one, and
+leaves a discarded-approach claim ([Discarded approaches](#discarded-approaches)).
 
 ## Verified completion
 
@@ -317,6 +321,194 @@ FROM done d LEFT JOIN touched t USING (id)
 benchbook sql "$(cat false-completion.sql)"
 ```
 
+## Failure signatures
+
+A failed check is signed so that the same failure gives the same short string in every run, and a different failure
+a different one (`src/benchbook/signature.py`, the one place a signature is made). Per failing check, from the most
+specific source the run has:
+
+| source | part | example |
+| --- | --- | --- |
+| JUnit XML (`junit = true`) | the first failing test id in sorted order and its exception type; with several, how many more and a hash of the whole set | `tests.media.test_upload::test_reupload:AssertionError`, `tests.a::test_x:KeyError +2 more #3fa2b1c0` |
+| TypeScript compiler output (`error TS2322` lines, plain or `--pretty`) | the first (code, file) pair in sorted order, the same way | `tsc TS2322 src/media/upload.ts` |
+| anything else | the exit code and the sha256 (16 hex) of the normalised last error line | `exit 1:9c1d5e0a7b3f2d14` |
+| a timeout | | `timeout` |
+
+The attempt's `failure_signature` joins the failing checks' parts in run order: `unit:exit 1:9c1d...; types:tsc
+TS2322 src/a.ts`. Two attempts *fail the same way on a check* when they share one such `check:part` element.
+
+**The last error line** is searched in the last 200 non-empty lines of the output, from the end: the last line with
+an error word, an exception or rule name (`ValueError`, `E501`, `TS2304`) or a test runner's failure bullet (`●`,
+`✕`); else the last line with a `file:line` location; else the last line. Lines that are the same whichever test
+failed are skipped: wrapper lines (`make: ***`, `npm ERR!`, yarn and pnpm's exit lines, cargo's `error: test
+failed`, go's `FAIL\tpkg\t0.01s` and `exit status 1`), result counts (`1 failed, 13 passed in 2.31s`, `Found 2
+errors in 2 files`, `Tests: 1 failed, 22 total`) and bare section headers (`FAILURES`, `Traceback (most recent call
+last):`).
+
+**Normalisation** replaces what changes between runs of one failure: the checkout's own path, timestamps and clock
+times, temporary paths (`/tmp/...`, `/var/folders/...`, Windows `...\Temp\...`), uuids, memory addresses, hex ids
+of 7 or more characters, durations, and then every free-standing number (line numbers, counts, ports, pids). Numbers
+inside a word stay (`E501`, `TS2322`, `x86_64`, `test_case_3`), and the words stay, so two failures with different
+messages stay apart. `tests/test_signature.py` pins both directions on realistic pytest, go, Python traceback, jest,
+mypy, make/cc and npm outputs.
+
+What it cannot tell apart: two failures whose last error line differs only in numbers (`expected 200, got 503` and
+`got 404`), or whose last error line is the same generic message (cargo's ``assertion `left == right` failed`` for
+two different tests). Declare `junit = true` with a JUnit reporter (pytest `--junitxml`, jest-junit,
+go-junit-report, cargo nextest) where that matters. Without JUnit, pytest's parametrised ids also lose their numbers.
+
+**Where the output is read.** `check run` and `check verify` read the end of the check's log (up to 2 MB) before
+deleting it; the Bash hook reads the tool result's error text, which Claude Code may have shortened, so a TypeScript
+failure with many errors can sign differently there. A run recorded before this signature existed keeps its old,
+rougher signature (digits zeroed in the very last line) and does not match new ones.
+
+**Never stored:** the output, and the line the hash was taken from. Only the signature: test ids and exception types,
+TypeScript error codes and file paths, an exit code and a hash.
+
+### Seen before
+
+When a check fails with a signature that an earlier attempt of the same piece already has, the run says so. A match
+is a notice; nothing is refused and the exit code is the check's.
+
+```
+benchbook: fails fail (exit 3, 0.0s), piece media at 1a2b3c4d5e6f; queued for the ledger (...)
+benchbook: seen before: piece media failed the same way in e:91c0a2f1 (impl-a, 2h ago, approach hash-before-put);
+3 earlier attempt(s) with this failure, approaches: hash-before-put, retry-loop. A notice: nothing was refused.
+```
+
+- *What matches:* valid, finished attempts of the same piece (`config.piece`) whose `failure_signature` shares a
+  `check:part` element with this run's, from any session, agent or machine that records into the same ledger:
+  `check run`, the Bash hook and `check verify` alike. Runs with uncommitted changes count, marked as such.
+  Invalidated attempts do not.
+- *`check run`* asks only after a failure, never after a pass, so a passing run costs what it did. The lookup
+  opens one plain connection (connect timeout 2 s, statement timeout 1.5 s) in a thread the run waits on for at most
+  2 seconds, then prints nothing; any error prints nothing. It runs before the run is queued, so it never finds the
+  run itself. It does not start the embedded server: with no `BENCHBOOK_DATABASE_URL` and no running embedded
+  server it says nothing. Measured on the test machine (best of 5, a check that prints two lines and exits 3,
+  13 ms on its own): a passing `check run` 64 ms over the bare command (no change); a failing one 211 ms over it
+  with the ledger up and a match (280 ms with the embedded server running), 187 ms with the database refusing
+  connections, and 2.1 s when the database host does not answer at all (the 2 s bound).
+- *`check verify`* looks up before it records and prints the same line under the table; `--json` has
+  `seen_before` (attempt ids) and `seen_before_approaches`.
+
+## Discarded approaches
+
+A finished attempt of a commit that failed leaves an observation claim meaning "this approach was tried on this piece
+and failed this way". The convention (the PR summary counts these):
+
+```
+kind       observation
+statement  "Approach hash-before-put on piece media-upload failed: unit:tests.media...:AssertionError"
+           ("An attempt without a named approach on piece ... failed: ..." when none was named)
+tags       discarded
+           piece:<piece>
+           approach:<name>    when the attempt names its approach
+           mod:<name>         each mod: tag of the piece's most recent task (benchbook piece start --tags mod:x)
+payload    {"piece", "signature", "approach", "first_attempt", "commit"}
+evidence   the attempt, linked supports
+author     the attempt's recorder: the verifier, or the agent of check run / the Bash hook (hook by default, the
+           token's agent under BENCHBOOK_TOKEN)
+```
+
+**One claim per (piece, signature, approach).** The key is `sha256("benchbook:discarded\0" + piece + "\0" +
+signature + "\0" + approach)` (approach "" when none), stored as the claim's `statement_hash`, so it does not change
+between releases and does not include the author. A later failure with the same key, from anyone, links its attempt
+`supports` to the existing claim instead of creating another; `n_support` in `v_claim_status` counts the attempts
+(invalidated ones drop out). `payload.first_attempt` and the `mod:` tags are those of the first.
+
+**Which attempts.** Finished attempts (`run_status = "ok"`) with a failing or timed-out check, recorded by `check
+run`, the Bash hook or `check verify`. A run with uncommitted changes (`worktree_dirty`) is no attempt of its commit
+and leaves no claim (its failure still shows up as "seen before"); an interrupted run has no signature.
+
+**Where the approach comes from.** `config.approach` of the attempt: `benchbook check run <check> --approach NAME`,
+or `BENCHBOOK_APPROACH` in the implementer's environment (1-100 characters without spaces; it becomes a tag).
+The pack's `dedup_ignore` holds `approach`, so naming an approach never makes a run new. The Bash hook and `check
+verify` record no approach.
+
+**When the piece is verified later** the claim stays as it is: a discarded approach records that this approach
+failed this way, and a verified commit (likely another approach) does not undo that. A lead who finds the failure was
+the environment's, not the approach's, invalidates the attempt (it then stops counting and the claim leaves the brief
+when no valid attempt supports it), or refutes the claim.
+
+```bash
+benchbook search --all-tags discarded,piece:media-upload      # one piece's discarded approaches
+```
+
+## The brief
+
+In a code project `benchbook brief` (MCP `benchbook_brief`) is the code pack's
+(`benchbook.packs.code.brief:compile_brief`, `brief_compiler` in pack.toml). Narrowed to a module:
+
+```bash
+benchbook brief --tags mod:media                     # comma separated; --budget N (default 2000 tokens)
+benchbook brief --tags mod:media,file:src/app/modules/media/
+```
+
+It shows, in this order:
+
+1. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
+   signature, first attempt and number of failed attempts; most recently failed first.
+2. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
+   tag or by `file:` prefix; most reported first.
+3. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
+4. **Last verified commit per piece**: the newest `verified` completion of each piece in scope.
+
+**Scope.** A tag matches records that carry it exactly (`mod:media`, `piece:x`). A `file:<prefix>` tag matches by
+prefix: the `file:` tags of findings and the paths pieces occupy. A piece is in scope when one of its tasks (`piece
+start`, any status) carries a matching tag or occupies a matching path; discarded approaches and verified commits
+are found through their piece (and a discarded approach also through its own `mod:` tags). Findings are matched by
+their own tags only, as in the [query](#reading-open-findings). A piece never started with `piece start` has no
+task, so it is found only without `--tags`. Without `--tags` the brief covers the whole project. With several tags
+the sections hold the union.
+
+**Budget.** At most 8 items per section (pack.toml `[brief]`), each line cut to a fixed length; then items are
+dropped from the last section upwards until the brief fits `--budget` (with the same 5% slack as the default brief),
+and each section says how many it left out (`(+3 more: benchbook piece list)`). Header and footer always stay; a
+budget too small for them is an error. Each brief is logged in `brief_log` as before.
+
+`--pack` is not an option: the project's pack already chooses the compiler. Other packs refuse `--tags` rather than
+ignore it; their briefs are unchanged.
+
+## Reads that changed a plan
+
+The spec's unit for "a read that changed a plan" is a claim id cited by a plan document. Two things are recorded:
+the claims themselves (with their ids, tags and times) and `brief_log` (one row per brief compiled: project, agent,
+task, tokens and time; not what it showed). The count, for one plan document:
+
+```bash
+ids=$(grep -oE '\bc:[0-9a-f]{8}\b' plan.md | sort -u | sed "s/.*/('&')/" | paste -sd, -)
+benchbook sql "WITH cited(ref) AS (VALUES $ids) ..."     # the statement below, with $ids in VALUES
+```
+
+```sql
+WITH cited(ref) AS (VALUES ('c:1a2b3c4d'), ('c:5e6f7a8b')),
+found AS (
+  SELECT c.ref, s.id, s.kind, s.tags, s.status, s.created_at
+  FROM cited c LEFT JOIN v_claim_status s ON left(s.id::text, 8) = substr(c.ref, 3)
+)
+SELECT count(DISTINCT ref) AS cited,
+       count(DISTINCT id) AS in_ledger,
+       count(DISTINCT id) FILTER (WHERE 'discarded' = ANY(tags)) AS discarded_approaches,
+       count(DISTINCT id) FILTER (WHERE 'out-of-scope' = ANY(tags)) AS findings,
+       count(DISTINCT id) FILTER (WHERE kind = 'completion' AND status = 'verified') AS verified_commits,
+       count(DISTINCT id) FILTER (WHERE ('discarded' = ANY(tags) OR 'out-of-scope' = ANY(tags)
+                                         OR (kind = 'completion' AND status = 'verified'))
+                                        AND created_at < '<plan written>') AS reads_that_changed_the_plan
+FROM found
+```
+
+`<plan written>` is when the plan was written (its commit time, `git log -1 --format=%cI -- plan.md`). The last
+column counts the cited claims of the kinds the brief shows that existed before the plan. Summed over the plans of a
+delegate run it is the number the spec's stop rule reads (five delegate runs with none: drop signatures and the
+brief, keep verification).
+
+What it can tell: that a plan names a discarded approach, an open finding or a verified commit by its id, and that
+the claim was in the ledger before the plan was written. What it cannot: that the id came from a brief rather than
+`benchbook search`, `get` or a PR summary (`brief_log` says a brief was compiled, not what it contained, and
+`benchbook sql` cannot read it: `Ledger.sql_internal` can); that the citation changed the plan rather than confirmed
+it; a read that changed a plan without its id being written down; a plan kept outside files. It counts an upper
+bound on citations that came from the brief, and a lower bound on reads that mattered.
+
 ## Out-of-scope findings
 
 An implementer often notices problems outside its piece: a bug in a neighbouring module, a flaky test, a missing
@@ -451,7 +643,7 @@ Verification above is the lead's. The implementer's own runs of the declared che
 asking it to do anything more than run a check. The lead writes the piece's completion condition as
 
 ```bash
-benchbook check run <name> [--piece P]
+benchbook check run <name> [--piece P] [--approach A]
 ```
 
 - It runs `[checks.<name>]` as the current checkout declares it (the config.toml found from the working directory,
@@ -490,8 +682,11 @@ notes      "check run: pytest-media in /path/to/checkout; guard against origin/m
   missing `guard_touched` is not `false`.
 - The author is `--agent` or `BENCHBOOK_AGENT`; without either, `hook` (harness role), or under `BENCHBOOK_TOKEN`
   the token's agent. The processor inherits the environment of the process that started it.
-- The failure signature is check verify's rough one (`check:exit N:<hash>`, or the first failing JUnit test with
-  `junit = true`).
+- The failure signature is made as for check verify ([Failure signatures](#failure-signatures)), from the whole
+  log. After a failure, a second stderr line names an earlier attempt of the piece that failed the same way
+  ([Seen before](#seen-before)); a failed run of a clean checkout leaves a [discarded
+  approach](#discarded-approaches). `--approach` (or `BENCHBOOK_APPROACH`) names what the run tries; it is
+  recorded as `config.approach`.
 
 ## Record coverage
 

@@ -218,16 +218,12 @@ def match(command: str, cwd: Path, load: Any = config.load) -> Match | None:
 
 
 def rough_signature(text: str) -> str | None:
-    """The hook's signature input: a hash of the last non-empty line of the Bash error text, normalised as
-    checks.last_line_hash does (whitespace collapsed, digits zeroed). checks.failure_signature turns it and the
-    exit code into the attempt's signature at replay. A later signature module replaces this."""
-    import hashlib
+    """The hook's signature input, from the Bash error text alone (signature.detail): the TypeScript errors when
+    there are any, else a hash of the normalised last error line. checks.failure_signature turns it and the exit
+    code into the attempt's signature at replay."""
+    from .signature import detail
 
-    lines = [x for x in text.replace("\r", "\n").splitlines() if x.strip()]
-    if not lines:
-        return None
-    norm = re.sub(r"\d+", "0", " ".join(lines[-1].split()))
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+    return detail(text)
 
 
 @dataclass

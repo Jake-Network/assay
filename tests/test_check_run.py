@@ -269,14 +269,17 @@ def test_the_wrapper_adds_at_most_300ms(repo: Path, tmp_path: Path, lg: Ledger) 
 # ------------------------------------------------------------------------------------------- pieces of the parser
 
 @pytest.mark.parametrize(("args", "expected"), [
-    (["unit"], ("unit", None)),
-    (["unit", "--piece", "p"], ("unit", "p")),
-    (["--piece=p", "unit"], ("unit", "p")),
+    (["unit"], ("unit", None, None)),
+    (["unit", "--piece", "p"], ("unit", "p", None)),
+    (["--piece=p", "unit"], ("unit", "p", None)),
+    (["unit", "--approach", "a", "--piece=p"], ("unit", "p", "a")),
+    (["--approach=hash-first", "unit"], ("unit", None, "hash-first")),
     (["unit", "--help"], None),
     (["unit", "other"], None),
+    (["unit", "--other=x"], None),
     ([], None),
 ])
-def test_fast_path_arguments(args: list[str], expected: tuple[str, str | None] | None) -> None:
+def test_fast_path_arguments(args: list[str], expected: tuple[str, str | None, str | None] | None) -> None:
     assert check_run.parse_fast_args(args) == expected
 
 
@@ -302,3 +305,112 @@ def test_an_attempt_without_guard_columns_says_why(tmp_path: Path) -> None:
     assert m["checks"] == {"unit": "not_run"} and m["worktree_dirty"] is True and m["via"] == "check-run"
     assert run.run_status == "error" and run.config() == {"piece": "media", "checks": ["unit"]}
     assert "guard not computed: " in run.notes() and "interrupted (SIGTERM)" in run.notes()
+
+
+# ------------------------------------------------------------------------------------------- seen before (2-P0c)
+
+def test_a_failure_seen_before_names_the_first_attempt(repo: Path, tmp_path: Path, lg: Ledger) -> None:
+    """Acceptance (spec §6, §8): in another session, the same piece and the same failure signature: the second run's
+    output names the first attempt's id and its approach. It is a notice: the exit code stays the check's."""
+    first = run(repo, cli_env(tmp_path / "s1", BENCHBOOK_APPROACH="hash-before-put"), "check", "run", "fails")
+    assert first.returncode == 3 and b"seen before" not in first.stderr
+    [one] = wait_attempts(lg, 1)
+    assert one["config"]["approach"] == "hash-before-put"
+    second = run(repo, cli_env(tmp_path / "s2"), "check", "run", "fails", "--approach", "retry-loop")
+    assert second.returncode == 3
+    err = second.stderr.decode()
+    assert f"benchbook: seen before: piece media failed the same way in e:{str(one['id'])[:8]} (" in err
+    assert "approach hash-before-put" in err and "nothing was refused" in err
+    assert err.index("queued for the ledger") < err.index("seen before")  # after the receipt line
+    rows = wait_attempts(lg, 2)
+    assert rows[1]["config"]["approach"] == "retry-loop"
+    assert rows[1]["metrics"]["failure_signature"] == one["metrics"]["failure_signature"]
+    third = run(repo, cli_env(tmp_path / "s3"), "check", "run", "fails")
+    assert "2 earlier attempt(s) with this failure, approaches: hash-before-put, retry-loop" in third.stderr.decode()
+    # another failure of the piece, or the same failure of another piece, was not seen before
+    other = run(repo, cli_env(tmp_path / "s4"), "check", "run", "slow")
+    assert other.returncode == 124 and b"seen before" not in other.stderr
+    elsewhere = run(repo, cli_env(tmp_path / "s5", BENCHBOOK_PIECE="upload"), "check", "run", "fails")
+    assert elsewhere.returncode == 3 and b"seen before" not in elsewhere.stderr
+
+
+def test_only_a_failure_asks_the_ledger(repo: Path, tmp_path: Path, lg: Ledger, monkeypatch: pytest.MonkeyPatch,
+                                        capfd: pytest.CaptureFixture[str]) -> None:
+    """A passing run never looks anything up (its time is the 300 ms budget above); a failing one asks once, with
+    the signature the attempt will carry."""
+    from benchbook import failures
+
+    asked: list[tuple[str, str, str | None]] = []
+    monkeypatch.setattr(failures, "quick_notice", lambda p, piece, sig, *a: asked.append((p, piece, sig)) or None)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    for k in ("BENCHBOOK_PIECE", "BENCHBOOK_AGENT", "BENCHBOOK_TOKEN", "BENCHBOOK_APPROACH"):
+        monkeypatch.delenv(k, raising=False)
+    assert check_run.run("quick", cwd=repo) == 0 and asked == []
+    assert check_run.run("fails", cwd=repo) == 3
+    [(project, piece, sig)] = asked
+    assert (project, piece) == (lg.project_id, "media") and sig is not None and sig.startswith("fails:exit 3:")
+    rows = wait_attempts(lg, 2)
+    assert [r["metrics"]["failure_signature"] for r in rows] == [None, sig]
+    capfd.readouterr()
+
+
+def test_the_lookup_is_bounded_and_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ledger that does not answer costs at most the timeout and prints nothing; an error prints nothing."""
+    from benchbook import failures
+
+    def slow(*a: Any) -> list[failures.Prior]:
+        time.sleep(5)
+        return []
+
+    monkeypatch.setattr(failures, "_quick_priors", slow)
+    t = time.monotonic()
+    assert failures.quick_notice("p", "media", "unit:exit 1:" + "0" * 16, timeout=0.3) is None
+    assert time.monotonic() - t < 1.5
+
+    def broken(*a: Any) -> list[failures.Prior]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(failures, "_quick_priors", broken)
+    assert failures.quick_notice("p", "media", "unit:exit 1:" + "0" * 16) is None
+    assert failures.quick_notice("p", "media", None) is None
+
+
+def test_a_down_database_adds_no_notice_and_little_time(repo: Path, tmp_path: Path) -> None:
+    down = "postgresql://benchbook@127.0.0.1:9/none?connect_timeout=1"
+    t = time.monotonic()
+    p = run(repo, cli_env(tmp_path, BENCHBOOK_DATABASE_URL=down), "check", "run", "fails")
+    assert p.returncode == 3 and b"seen before" not in p.stderr and b"queued for the ledger" in p.stderr
+    assert time.monotonic() - t < 10
+
+
+def test_an_approach_that_cannot_be_a_tag_is_refused(repo: Path, tmp_path: Path, lg: Ledger) -> None:
+    p = run(repo, cli_env(tmp_path), "check", "run", "quick", "--approach", "two words")
+    assert p.returncode == check_run.NOT_RUN and b"approach 'two words'" in p.stderr
+    assert attempts(lg) == []
+
+
+# ------------------------------------------------------------------------------------------- discarded approaches
+
+def test_a_failed_run_leaves_a_discarded_approach(repo: Path, tmp_path: Path, lg: Ledger) -> None:
+    """The convention the PR summary counts: kind observation, tags discarded, piece:<piece> and approach:<name>,
+    the attempt linked supports. A dirty or passing run leaves none."""
+    run(repo, cli_env(tmp_path / "a", BENCHBOOK_APPROACH="hash-before-put"), "check", "run", "fails")
+    run(repo, cli_env(tmp_path / "b"), "check", "run", "quick")
+    rows = wait_attempts(lg, 2)
+    claims = lg.sql_internal("SELECT c.*, s.status, s.n_support FROM benchbook.claims c JOIN benchbook.v_claim_status s"
+                             " ON s.id = c.id WHERE c.project_id = %s", (lg.project_id,))
+    [c] = claims
+    failed = next(r for r in rows if r["metrics"]["checks_passed"] == 0)
+    assert c["kind"] == "observation" and c["tags"] == ["discarded", "piece:media", "approach:hash-before-put"]
+    assert c["status"] == "proposed" and c["n_support"] == 1 and c["author"] == "hook"
+    assert c["payload"] == {"piece": "media", "signature": failed["metrics"]["failure_signature"],
+                            "approach": "hash-before-put", "first_attempt": str(failed["id"]),
+                            "commit": failed["code_ref"]}
+    [link] = lg.sql_internal("SELECT * FROM benchbook.links WHERE dst_id = %s", (c["id"],))
+    assert (link["src_id"], link["relation"]) == (failed["id"], "supports")
+    assert "SECRET-OUTPUT" not in json.dumps(claims, default=str)
+    (repo / "scratch.txt").write_text("untracked\n")
+    run(repo, cli_env(tmp_path / "c", BENCHBOOK_APPROACH="other"), "check", "run", "fails")
+    wait_attempts(lg, 3)
+    time.sleep(0.5)
+    assert len(lg.sql_internal("SELECT 1 AS x FROM benchbook.claims WHERE project_id = %s", (lg.project_id,))) == 1

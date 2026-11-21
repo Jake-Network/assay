@@ -14,8 +14,10 @@ worktree, and record the report and the re-run as a pair (spec §8, measurement 
    implementer's own above all) disagree with it, nothing when a guarded path or [checks] changed: a person decides.
 6. Report one row per check; the CLI exits 0 only when every check passed.
 
-The diff and the check output are never stored: the commit, the guarded paths it changed, the failure signature and
-a hash of the last output line are. Nothing here imports the database layer at module level; the ledger is passed in."""
+The diff and the check output are never stored: the commit, the guarded paths it changed and the failure signature
+(signature.py) are. A failed attempt also leaves a discarded-approach claim, and verify names earlier attempts of the
+piece that failed the same way (failures.py). Nothing here imports the database layer at module level; the ledger is
+passed in."""
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +30,6 @@ import subprocess
 import tempfile
 import time
 import tomllib
-import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from . import config as localcfg
+from . import failures, signature
 from .config import CheckSpec, parse_checks, parse_guard
 from .errors import BenchbookError, InvalidTransition
 from .globs import matching
@@ -52,7 +54,7 @@ DEFAULT_BASE = "origin/main"
 DEFAULT_GUARD_PATHS = ("tests/**", "**/conftest.py", ".benchbook/config.toml")
 MAX_GUARD_FILES = 100  # stored in metrics; guard_touched is computed from all of them
 MAX_REPORT_BYTES = 10_000_000
-MAX_JUNIT_BYTES = 50_000_000
+MAX_FAILED_SHOWN = 50  # failing test ids kept on a result for the table; the signature is made from all of them
 PIECE = re.compile(r"\S{1,100}")
 STATUSES = ("ok", "fail", "timeout", "not_run")
 
@@ -64,8 +66,11 @@ class CheckResult:
     exit_code: int | None = None
     duration_ms: int = 0
     failed_tests: list[tuple[str, str | None]] = field(default_factory=list)  # (test id, exception type), JUnit
-    last_line_hash: str | None = None  # of the normalised last output line; the line itself is not kept
+    # signature.detail of the output: the hash of the normalised last error line, or the TypeScript errors. The line
+    # itself is not kept. (The name is from before tsc parts; the spool entries use it too.)
+    last_line_hash: str | None = None
     tail: str = ""  # the end of the output, shown to whoever runs verify and never recorded
+    signature: str | None = None  # this check's part of the signature, made where the output was (signature.py)
 
 
 @dataclass
@@ -107,6 +112,7 @@ class Verification:
     results: list[CheckResult]
     duration_ms: int = 0
     interrupted: str | None = None  # the signal's name when the run stopped before the last check
+    approach: str | None = None  # config.approach: what the implementer says it tried (failures.py)
 
     @property
     def passed(self) -> int:
@@ -126,7 +132,10 @@ class Verification:
         return "ok" if self.interrupted is None else "error"
 
     def config(self) -> dict[str, Any]:
-        return {"piece": self.piece, "checks": [r.name for r in self.results]}
+        c: dict[str, Any] = {"piece": self.piece, "checks": [r.name for r in self.results]}
+        if self.approach:
+            c["approach"] = self.approach  # in the pack's dedup_ignore: naming an approach does not make a run new
+        return c
 
     def metrics(self) -> dict[str, Any]:
         return {
@@ -175,6 +184,10 @@ class Recorded:
     duplicate_of: UUID | None = None  # an earlier verification of the same piece, checks and commit
     notice: str | None = None
     outcome: Outcome | None = None
+    seen_before: list[failures.Prior] = field(default_factory=list)  # earlier attempts that failed the same way
+    discarded_id: UUID | None = None  # the discarded-approach claim this failed attempt is evidence for
+    discarded_new: bool = False
+    discarded_error: str | None = None  # why that claim could not be written (the attempt is recorded)
 
 
 # ---------------------------------------------------------------------------------------------------- git
@@ -312,72 +325,31 @@ def _remove_worktree(repo: Path, wt: Path) -> None:
 def _run_one(spec: CheckSpec, wt: Path, out: Path) -> CheckResult:
     junit = out / f"{spec.name}.junit.xml"
     cmd = spec.cmd.replace("{junit}", shlex.quote(str(junit)))
-    r = run_command(cmd, wt, out / f"{spec.name}.log", spec.timeout, metric=None, tee=False)
+    log = out / f"{spec.name}.log"
+    r = run_command(cmd, wt, log, spec.timeout, metric=None, tee=False)
     status = {"ok": "ok", "timeout": "timeout"}.get(r.run_status, "fail")
-    failed = failed_tests(junit) if spec.junit and status != "ok" and junit.is_file() else []
-    return CheckResult(spec.name, status, r.exit_code, r.duration_ms, failed, last_line_hash(r.log_tail), r.log_tail)
+    failed = signature.junit_failures(junit) if spec.junit and status != "ok" and junit.is_file() else []
+    detail = signature.detail(signature.read_log(log), wt) if status != "ok" else None
+    return CheckResult(spec.name, status, r.exit_code, r.duration_ms, failed[:MAX_FAILED_SHOWN], detail, r.log_tail,
+                       signature.check_part(status, r.exit_code, failed, detail))
 
 
-def failed_tests(path: Path, limit: int = 50) -> list[tuple[str, str | None]]:
-    """(test id, exception type) of each failing or erroring testcase in a JUnit XML file. pytest gives no type
-    attribute; its failure text ends with "file.py:12: AssertionError"."""
-    try:
-        if path.stat().st_size > MAX_JUNIT_BYTES:
-            return []
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError):
-        return []
-    out: list[tuple[str, str | None]] = []
-    for case in root.iter("testcase"):
-        bad = case.find("failure")
-        if bad is None:
-            bad = case.find("error")
-        if bad is None:
-            continue
-        name, cls = case.get("name") or "?", case.get("classname")
-        out.append((f"{cls}::{name}" if cls else name, bad.get("type") or _exception_type(bad)))
-        if len(out) >= limit:
-            break
-    return out
-
-
-_TRAILING_TYPE = re.compile(r":\s*([A-Za-z_][\w.]*)\s*$")
-_LEADING_TYPE = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception|Failure|Exit))\b")
-
-
-def _exception_type(el: ET.Element) -> str | None:
-    lines = [x for x in (el.text or "").splitlines() if x.strip()]
-    if lines and (m := _TRAILING_TYPE.search(lines[-1])):
-        return m.group(1)
-    if m := _LEADING_TYPE.match(el.get("message") or ""):
-        return m.group(1)
-    return None
+def failed_tests(path: Path, limit: int = MAX_FAILED_SHOWN) -> list[tuple[str, str | None]]:
+    """(test id, exception type) of the failing or erroring testcases of a JUnit XML file, sorted by test id."""
+    return signature.junit_failures(path)[:limit]
 
 
 def last_line_hash(text: str) -> str | None:
-    """sha256 (16 hex) of the last non-empty output line, with whitespace collapsed and digits zeroed so that a
-    duration or a count in it does not make every run look new."""
-    lines = [x for x in text.replace("\r", "\n").splitlines() if x.strip()]
-    if not lines:
-        return None
-    norm = re.sub(r"\d+", "0", " ".join(lines[-1].split()))
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+    """The hash of the normalised last error line of an output (signature.line_hash)."""
+    return signature.line_hash(text)
 
 
 def failure_signature(results: Sequence[CheckResult]) -> str | None:
-    """The one place a failure signature is made (a later signature module replaces this rough version). Per
-    failing check, in run order: `check:first failing test:exception type` from JUnit, `check:timeout`, or
-    `check:exit N:hash of the last output line`."""
-    parts = []
-    for r in results:
-        if r.status == "fail" and r.failed_tests:
-            test, kind = r.failed_tests[0]
-            parts.append(f"{r.name}:{test}:{kind or 'failed'}")
-        elif r.status == "fail":
-            parts.append(f"{r.name}:exit {r.exit_code}:{r.last_line_hash or '-'}")
-        elif r.status == "timeout":
-            parts.append(f"{r.name}:timeout")
-    return "; ".join(parts)[:1000] or None
+    """The attempt's signature (signature.py): `check:part` per failing check, in run order. A result made where
+    the output was carries its part; one rebuilt from a spool entry is signed from its status, exit code, failing
+    tests and output detail."""
+    return signature.combine((r.name, r.signature or signature.check_part(r.status, r.exit_code, r.failed_tests,
+                                                                          r.last_line_hash)) for r in results)
 
 
 # ---------------------------------------------------------------------------------------------------- the command
@@ -428,6 +400,8 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     t0 = time.monotonic()
     results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names])
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted))
+    sig = failure_signature(results) if interrupted is None else None
+    seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
     if interrupted is not None:
         try:
             _record(lg, v, reported_by, report)
@@ -435,6 +409,7 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
             interrupted.add_note(f"the interrupted attempt was not recorded: {e}")
         raise interrupted
     rec = _record(lg, v, reported_by, report)
+    rec.seen_before = seen
     rec.outcome = _decide(lg, v, rec)
     return v, rec
 
@@ -472,7 +447,24 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
         if v.run_status == "ok":
             rec.relation = "supports" if v.all_passed else "refutes"
             lg.link(r.id, rec.relation, claim.id)
+    _discard(lg, v, rec)
     return rec
+
+
+def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:
+    """A finished attempt of the commit that failed leaves its discarded-approach claim (failures.py). A run with
+    uncommitted changes is no attempt of its commit and leaves none; an interrupted one has no signature. The
+    attempt is already recorded, so a failure here is reported, never raised: raising would make the spool record
+    the attempt again."""
+    sig = failure_signature(v.results)
+    if v.run_status != "ok" or sig is None or getattr(v, "dirty", False):
+        return
+    try:
+        c = failures.record_discarded(lg, rec.experiment_id, v.piece, sig, v.approach, v.commit)
+    except Exception as e:  # noqa: BLE001 - see the docstring
+        rec.discarded_error = f"{type(e).__name__}: {str(e).strip()[:200]}"
+        return
+    rec.discarded_id, rec.discarded_new = c.id, c.duplicate_of is None
 
 
 def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:

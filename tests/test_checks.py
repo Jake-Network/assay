@@ -484,3 +484,34 @@ def test_code_pack() -> None:
                                      "settings": {"partition_key": "piece", "worker_intents": True}}
     assert {"experiment.config", "experiment.metrics", "claim.completion"} <= set(pack.validators)
     assert load_pack("core").project_defaults == {}
+
+
+# ------------------------------------------------------------------------------------------- seen before (2-P0c)
+
+def test_verify_names_an_earlier_attempt_that_failed_the_same_way(repo: Path, vtmp: Path, verifier: Ledger) -> None:
+    """check verify shows the same notice as check run, and its failed re-runs leave the same discarded-approach
+    claim: one per piece, signature and approach, the second re-run added as evidence."""
+    from benchbook.check_cli import render, summary
+
+    a = piece(repo, "bad", {"impl.txt": "almost\n"})
+    v1, r1 = checks.verify(verifier, "media", a, repo=repo, reported_by="impl")
+    assert r1.seen_before == [] and "seen before" not in render(v1, r1)
+    assert r1.discarded_id is not None and r1.discarded_new
+    b = piece(repo, "bad2", {"impl.txt": "nearly\n"})  # another commit, the same failing test
+    v2, r2 = checks.verify(verifier, "media", b, repo=repo, reported_by="impl")
+    assert [p.id for p in r2.seen_before] == [r1.experiment_id]
+    text = render(v2, r2)
+    assert f"seen before: piece media failed the same way in e:{str(r1.experiment_id)[:8]} (verifier@test" in text
+    assert summary(v2, r2)["seen_before"] == [f"e:{str(r1.experiment_id)[:8]}"]
+    assert r2.discarded_id == r1.discarded_id and not r2.discarded_new
+    [c] = verifier.sql_internal("SELECT c.tags, c.payload, s.n_support FROM benchbook.claims c JOIN"
+                                " benchbook.v_claim_status s ON s.id = c.id WHERE c.id = %s", (r1.discarded_id,))
+    assert c["tags"] == ["discarded", "piece:media"] and c["n_support"] == 2
+    assert c["payload"]["signature"] == "unit:tests.test_impl::test_fixed:AssertionError"
+    # another piece failing the same test was not seen before on this one
+    v3, r3 = checks.verify(verifier, "upload", b, repo=repo)
+    assert r3.seen_before == [] and r3.discarded_id != r1.discarded_id
+    # a passing re-run leaves no discarded approach and no notice
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v4, r4 = checks.verify(verifier, "media", good, repo=repo, reported_by="impl")
+    assert v4.all_passed and r4.seen_before == [] and r4.discarded_id is None

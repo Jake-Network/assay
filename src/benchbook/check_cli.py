@@ -91,10 +91,14 @@ def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
         "needs_person": out.person if out else False,
         "evidence": [short("experiment", e) for e in out.evidence] if out else [],
         "decisions": [short("decision", d) for d in out.decision_ids] if out else [],
+        "seen_before": [short("experiment", p.id) for p in rec.seen_before],
+        "seen_before_approaches": list(dict.fromkeys(p.approach for p in rec.seen_before if p.approach)),
+        "discarded": short("claim", rec.discarded_id) if rec.discarded_id else None,
     }
 
 
 def render(v: Verification, rec: Recorded) -> str:
+    from .failures import notice
     from .ids import short
 
     width = max(len("check"), *(len(r.name) for r in v.results))
@@ -123,6 +127,13 @@ def render(v: Verification, rec: Recorded) -> str:
         rel = (f" {rec.relation or 'recorded beside'} {short('claim', rec.claim_id)} "
                f"(completion reported by {rec.reported_by})")
     lines.append(f"recorded {short('experiment', rec.experiment_id)} as {rec.verifier}{rel}")
+    if seen := notice(rec.seen_before, v.piece):
+        lines.append(seen)
+    if rec.discarded_id is not None:
+        lines.append(f"discarded approach: {short('claim', rec.discarded_id)}"
+                     + ("" if rec.discarded_new else " (this failure was recorded there before; the run is added)"))
+    elif rec.discarded_error:
+        lines.append(f"discarded approach not recorded: {rec.discarded_error}")
     if rec.outcome is not None:
         lines.append(f"decision: {rec.outcome.reason}")
         if rec.outcome.guard_files:

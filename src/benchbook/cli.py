@@ -181,11 +181,15 @@ def status() -> None:
 
 @app.command()
 def brief(task: Annotated[str | None, typer.Option("--task")] = None,
-          budget: Annotated[int | None, typer.Option("--budget")] = None) -> None:
+          budget: Annotated[int | None, typer.Option("--budget")] = None,
+          tags: Annotated[str | None, typer.Option(
+              help="code pack: only these module tags, e.g. mod:media (comma separated; file:<prefix> by path)")]
+          = None) -> None:
     """Print the context brief (markdown) for this agent."""
     from .config import load
 
-    b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget)
+    b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
+                       tags=csv(tags) or None)
     emit({"brief": b}, b.rstrip("\n"))
 
 

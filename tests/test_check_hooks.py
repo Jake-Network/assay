@@ -125,9 +125,10 @@ def test_outcome_of_success_and_failure(tmp_path: Path) -> None:
     bad_data = fixture("post_tool_use_failure_bash.json", tmp_path)
     bad = check_hooks.outcome(bad_data)
     assert (bad.status, bad.exit_code) == ("fail", 1)
-    # the rough signature: a hash of the normalised last line, the same one check verify computes
-    assert bad.line_hash == last_line_hash("1 failed, 1 passed in 9.99s") == check_hooks.rough_signature(
-        bad_data["error"])
+    # the signature's detail: a hash of the normalised last error line (the result count after it is skipped), the
+    # same one check verify computes
+    assert bad.line_hash == last_line_hash("FAILED tests/test_impl.py::test_fixed - AssertionError: took 9.99s") \
+        == check_hooks.rough_signature(bad_data["error"])
     assert check_hooks.outcome({**bad_data, "is_interrupt": True}).status is None
     assert check_hooks.outcome({**bad_data, "error": "spawn /bin/sh ENOENT"}).status is None
     timed = check_hooks.outcome({**bad_data, "error": "Exit code 143\nCommand timed out after 2m 0s"})
@@ -156,7 +157,8 @@ def test_declared_check_runs_are_recorded_by_the_hook(gate_repo: Path, tmp_path:
                              "failure_signature": None, "guard_touched": False, "guard_files": [],
                              "checks_changed": False, "via": "bash-hook", "worktree_dirty": False}
     assert bad["metrics"]["checks"] == {"quick": "fail"}
-    assert bad["metrics"]["failure_signature"] == f"quick:exit 1:{last_line_hash('1 failed, 1 passed in 0.42s')}"
+    line = "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
+    assert bad["metrics"]["failure_signature"] == f"quick:exit 1:{last_line_hash(line)}"
     assert "SECRET-OUTPUT" not in json.dumps(rows, default=str)
     assert {o["kind"] for o in observed(tmp_path)} == {"direct"} and len(observed(tmp_path)) == 2
 

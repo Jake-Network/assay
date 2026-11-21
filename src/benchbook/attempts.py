@@ -78,8 +78,9 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
     dead/)."""
     name, status, sha = str(data["check"]), STATUSES[str(data["status"])], str(data["sha"])
     failed = [(str(t[0]), None if t[1] is None else str(t[1])) for t in data.get("failed_tests") or []]
+    part = data.get("signature")  # check run signs where the output was; the Bash hook leaves it to check_part
     result = CheckResult(name, status, data.get("exit_code"), int(data.get("duration_ms") or 0), failed,
-                         data.get("last_line_hash"))
+                         data.get("last_line_hash"), signature=part if isinstance(part, str) and part else None)
     found = _integrity(Path(str(data["repo"])), sha)
     if isinstance(found, str):
         base, integ, note = Base("", "", "", "", {}, [], False), Integrity([], False), found
@@ -90,8 +91,9 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
         ids = {k: data.get(k) for k in ("harness", "session_id", "tool_use_id", "agent_type") if data.get(k)}
         if ids:
             source += " (" + ", ".join(f"{k} {v}" for k, v in ids.items()) + ")"
+    approach = str(data["approach"]) if data.get("approach") else None
     return LocalRun(str(data["piece"]), sha, base, integ, [result], result.duration_ms, data.get("interrupted"),
-                    via=str(data.get("via") or ("bash-hook" if event == "bash-result" else "check-run")),
+                    approach, via=str(data.get("via") or ("bash-hook" if event == "bash-result" else "check-run")),
                     dirty=bool(data.get("dirty")), changed=int(data.get("changed") or 0), integrity_note=note,
                     source_note=source)
 
@@ -111,7 +113,12 @@ def record_spooled(event: str, data: dict[str, Any], project: str) -> str:
         raise BenchbookError(f"check attempts need the code pack (benchbook init --pack code); {project} uses "
                              f"{lg.pack.name}")
     rec = checks._record(lg, run, None, None)
-    return f"recorded:{short('experiment', rec.experiment_id)}"
+    out = f"recorded:{short('experiment', rec.experiment_id)}"
+    if rec.discarded_id is not None:
+        out += f" discarded:{short('claim', rec.discarded_id)}{'' if rec.discarded_new else ' (seen before)'}"
+    elif rec.discarded_error:
+        out += f" (discarded-approach claim not recorded: {rec.discarded_error})"
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- the gate

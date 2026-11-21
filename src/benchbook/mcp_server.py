@@ -117,10 +117,12 @@ def build(project: str | None = None, toolset: str = "all", legacy_names: bool |
 
     # ---------------------------------------------------------------- worker set
     @tool
-    async def benchbook_brief(agent: str, task_id: str | None = None, budget_tokens: int = 2000) -> str:
+    async def benchbook_brief(agent: str, task_id: str | None = None, budget_tokens: int = 2000,
+                              tags: list[str] | None = None) -> str:
         """Call right after taking a task, and again after a long step: returns what you need to know now
-        (goal, current best, verified claims, what was already tried, open questions) as markdown with ids."""
-        return named(await _run(lambda: srv.lg(agent).brief(task_id, budget_tokens)))
+        (goal, current best, verified claims, what was already tried, open questions) as markdown with ids.
+        tags (code projects): only these modules, e.g. ["mod:media"]."""
+        return named(await _run(lambda: srv.lg(agent).brief(task_id, budget_tokens, tags=tags)))
 
     @tool
     async def benchbook_next_task(agent: str, tags: list[str] | None = None,

@@ -10,6 +10,10 @@ down or slow therefore cannot delay the command, change its exit code or lose th
 and `benchbook hook replay` records it later. The processor records the attempt in check verify's shape
 (attempts.record_spooled, through checks._record).
 
+After a failure, and only then, the run is signed (signature.py) and one short, bounded lookup asks the ledger whether
+an earlier attempt of the same piece failed the same way (failures.quick_notice); the answer is one more stderr line,
+or nothing when the ledger does not answer in time. A passing run never touches the database.
+
 This module is on the fast path (entry.py runs it without the CLI framework) and must not import the database layer,
 typer or the checks module at import time: the time it adds to a check is bounded (300 ms, tests/test_check_run.py).
 """
@@ -34,6 +38,8 @@ VIA = "check-run"  # metrics.via of the attempt it becomes
 NOT_RUN = 2  # exit code when the check did not start (unknown check, no project, no piece): nothing is recorded
 TIMEOUT_EXIT = 124  # as exp run and timeout(1)
 PIECE = re.compile(r"\S{1,100}")  # checks.PIECE; repeated so this module stays light
+APPROACH = PIECE  # failures.APPROACH: it becomes the tag approach:<name>
+MAX_FAILED_SPOOLED = 50  # failing test ids queued with the run (for the receipt); the signature uses all of them
 GIT_TIMEOUT = 10
 
 
@@ -180,10 +186,11 @@ class Plan:
     piece_from: str
     repo: Path
     agent: str | None
+    approach: str | None = None
 
 
 def plan(name: str, piece: str | None = None, *, project: str | None = None, agent: str | None = None,
-         cwd: Path | None = None) -> Plan:
+         cwd: Path | None = None, approach: str | None = None) -> Plan:
     """Everything decided before the check starts. NotRun when it cannot be recorded."""
     from .errors import BenchbookError
 
@@ -209,7 +216,11 @@ def plan(name: str, piece: str | None = None, *, project: str | None = None, age
         raise NotRun("no piece: HEAD is detached; pass --piece NAME or set BENCHBOOK_PIECE")
     if not PIECE.fullmatch(chosen):
         raise NotRun(f"piece {chosen!r} (from {source}): 1-100 characters without spaces")
-    return Plan(name, spec.cmd, spec.junit, spec.timeout, project, chosen, source, repo, agent or env("AGENT"))
+    approach = approach or env("APPROACH") or None
+    if approach is not None and not APPROACH.fullmatch(approach):
+        raise NotRun(f"approach {approach!r} (--approach or BENCHBOOK_APPROACH): 1-100 characters without spaces")
+    return Plan(name, spec.cmd, spec.junit, spec.timeout, project, chosen, source, repo, agent or env("AGENT"),
+                approach)
 
 
 def exit_code(exit: int | None, status: str, signum: int | None) -> int:
@@ -220,12 +231,12 @@ def exit_code(exit: int | None, status: str, signum: int | None) -> int:
     return 128 - exit if exit < 0 else exit  # a shell killed by signal N: -N from Popen, 128+N from a shell
 
 
-def run(name: str, piece: str | None = None, *, project: str | None = None, agent: str | None = None,
-        cwd: Path | None = None) -> int:
+def run(name: str, piece: str | None = None, approach: str | None = None, *, project: str | None = None,
+        agent: str | None = None, cwd: Path | None = None) -> int:
     """The command. Returns the exit code to exit with: the check's own, 124 after its timeout, 128+N after signal N,
     or NOT_RUN (2) when it did not start."""
     try:
-        p = plan(name, piece, project=project, agent=agent, cwd=cwd)
+        p = plan(name, piece, project=project, agent=agent, cwd=cwd, approach=approach)
     except NotRun as e:
         print(f"benchbook: check {name} not run: {e}", file=sys.stderr)
         return NOT_RUN
@@ -241,33 +252,38 @@ def run(name: str, piece: str | None = None, *, project: str | None = None, agen
         try:
             res = run_command(cmd, p.repo, tmp / "out.log", p.timeout, metric=None, tee=True)
             status = {"ok": "ok", "timeout": "timeout"}.get(res.run_status, "fail")
-            exit, duration, tail = res.exit_code, res.duration_ms, res.log_tail
+            exit, duration = res.exit_code, res.duration_ms
         except (KeyboardInterrupt, Interrupted) as e:
             signum = e.signum if isinstance(e, Interrupted) else int(signal.SIGINT)
             status, exit, duration = "interrupted", None, int((time.monotonic() - t0) * 1000)
-            tail = _read_tail(tmp / "out.log")
         state = finish_git_state(git)
         failed = _failed_tests(junit) if p.junit and status == "fail" and junit.is_file() else []
+        sig = _sign(status, exit, failed, tmp / "out.log", p.repo) if status != "ok" else None
     finally:
         _remove(tmp)
     code = exit_code(exit, status, signum)
-    _receipt(p, status, exit, duration, failed, state, signum, tail)
+    _receipt(p, status, exit, duration, failed, state, signum, sig)
     return code
 
 
-def _read_tail(log: Path) -> str:
-    from .runner import tail
-
-    try:
-        return tail(log.read_bytes().decode("utf-8", errors="replace"))
-    except OSError:
-        return ""
-
-
 def _failed_tests(junit: Path) -> list[tuple[str, str | None]]:
-    from .checks import failed_tests
+    from .signature import junit_failures
 
-    return failed_tests(junit)
+    return junit_failures(junit)
+
+
+@dataclass
+class Signed:
+    detail: str | None  # signature.detail of the output (spool key last_line_hash)
+    part: str | None  # this check's part of the attempt's signature; None when it did not fail (interrupted)
+
+
+def _sign(status: str, exit: int | None, failed: list[tuple[str, str | None]], log: Path, repo: Path) -> Signed:
+    """The failure's signature, from the whole log (up to signature.MAX_LOG_BYTES of its end), not only the tail."""
+    from . import signature
+
+    detail = signature.detail(signature.read_log(log), repo) if status in ("fail", "interrupted") else None
+    return Signed(detail, signature.check_part(status, exit, failed, detail))
 
 
 def _remove(tmp: Path) -> None:
@@ -276,15 +292,11 @@ def _remove(tmp: Path) -> None:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _line_hash(text: str) -> str | None:
-    from .checks import last_line_hash
-
-    return last_line_hash(text)
-
-
 def _receipt(p: Plan, status: str, exit: int | None, duration: int, failed: list[tuple[str, str | None]],
-             state: GitState | None, signum: int | None, tail: str) -> None:
-    """Queue the result and say so on stderr. The command's output has already been written to stdout."""
+             state: GitState | None, signum: int | None, sig: Signed | None) -> None:
+    """Queue the result and say so on stderr. The command's output has already been written to stdout. After a
+    failure, a second line names an earlier attempt of the piece that failed the same way, when the ledger
+    answers in time (failures.quick_notice); the lookup runs before the run is queued, so it never finds itself."""
     if sys.stdout is not None:
         try:
             sys.stdout.flush()
@@ -305,36 +317,47 @@ def _receipt(p: Plan, status: str, exit: int | None, duration: int, failed: list
         at += f" with {len(state.changed)} uncommitted path(s), so not a run of that commit"
     data: dict[str, Any] = {
         "piece": p.piece, "piece_from": p.piece_from, "check": p.name, "status": status, "exit_code": exit,
-        "duration_ms": duration, "failed_tests": [list(t) for t in failed],
-        "last_line_hash": _line_hash(tail) if status in ("fail", "interrupted") else None,
+        "duration_ms": duration, "failed_tests": [list(t) for t in failed[:MAX_FAILED_SPOOLED]],
+        "last_line_hash": sig.detail if sig else None, "signature": sig.part if sig else None,
         "sha": state.sha, "dirty": state.dirty, "changed": len(state.changed), "repo": str(p.repo),
         "agent": p.agent, "interrupted": signal.Signals(signum).name if signum else None, "via": VIA}
+    if p.approach:
+        data["approach"] = p.approach
+    seen = None
+    if sig is not None and sig.part is not None:
+        from .failures import quick_notice
+        from .signature import combine
+
+        seen = quick_notice(p.project, p.piece, combine([(p.name, sig.part)]))
     try:
         spool = spool_attempt(EVENT, p.project, data)
     except Exception as e:  # noqa: BLE001 - the check ran; its exit code must survive a broken spool
         print(f"{head}, {at}; NOT recorded: the result could not be queued ({type(e).__name__}: {e})", file=sys.stderr)
-        return
-    print(f"{head}, {at}; queued for the ledger ({spool})", file=sys.stderr)
+    else:
+        print(f"{head}, {at}; queued for the ledger ({spool})", file=sys.stderr)
+    if seen:
+        print(f"benchbook: {seen}", file=sys.stderr)
 
 
-def parse_fast_args(args: list[str]) -> tuple[str, str | None] | None:
-    """`check run NAME [--piece P]` for entry.py's fast path; None for anything else (--help, other options, global
-    options), which goes through the CLI and ends in the same run()."""
+def parse_fast_args(args: list[str]) -> tuple[str, str | None, str | None] | None:
+    """`check run NAME [--piece P] [--approach A]` for entry.py's fast path: (name, piece, approach). None for
+    anything else (--help, other options, global options), which goes through the CLI and ends in the same run()."""
     name: str | None = None
-    piece: str | None = None
+    opts: dict[str, str | None] = {"--piece": None, "--approach": None}
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--piece" and i + 1 < len(args):
-            piece = args[i + 1]
+        if a in opts and i + 1 < len(args):
+            opts[a] = args[i + 1]
             i += 2
             continue
-        if a.startswith("--piece="):
-            piece = a[len("--piece="):]
+        flag, eq, value = a.partition("=")
+        if eq and flag in opts:
+            opts[flag] = value
         elif a.startswith("-") or name is not None:
             return None
         else:
             name = a
         i += 1
-    return (name, piece) if name else None
+    return (name, opts["--piece"], opts["--approach"]) if name else None
 
