@@ -71,3 +71,44 @@ res.run_status, res.exit_code, res.duration_ms, res.log_tail, res.reason, res.me
   characters. The whole output is in `log_path`.
 - Ctrl-C raises `KeyboardInterrupt`, SIGTERM and SIGHUP raise `Interrupted` (when called from the main thread),
   both after the group was killed. Catch them to record the run from `log_path`, then re-raise.
+
+## Check, run and record in one command
+
+`benchbook exp run` puts the ledger around this runner. An agent with a shell types one command per attempt instead
+of `exp tried`, the evaluation and `exp record` (three tool calls, each a turn that re-reads the context):
+
+```bash
+benchbook exp run --config '{"lr": 3e-4}' --seed 0 --code-ref v3 -- python eval.py
+```
+
+- **Before running** it calls `check_tried` (which also validates the config, so a bad one never runs). When this
+  config, code_ref and seed already ran, a pack with `dedup_mode = "refuse"` stops there: it prints the earlier run
+  (id, author, outcome, value) and exits 2, the code `exp record` uses for a refused duplicate. An earlier ok run,
+  invalidated or not, always stops it, because the ledger would refuse the record. A run that only failed is run
+  again with `--retry-failed`, which is what the ledger allows. A `"notify"` pack runs it and reports the earlier
+  id (stderr before the run, `duplicate_of` and `notice` after). Other seeds of the same config are replicates:
+  they run, with a note on stderr naming the earlier runs.
+- **The command** is everything after `--`. One argument is a shell command line as written; several are quoted and
+  joined. It runs through `run_command(..., tee=True)` in the current directory with `--timeout` (default 600 s),
+  so its output appears as it runs, unchanged. `BENCHBOOK_EXP_CONFIG` (the config as JSON) and
+  `BENCHBOOK_EXP_SEED` are set in its environment, so it can read the config instead of repeating it.
+- **Metrics** come from the output in the formats the examples already print: `key: number` lines
+  (`parse_summary`) and a JSON object on the last line, as `examples/circle-packing/evaluator.py` prints it. Its
+  numbers are metrics (or those of a `"metrics"` object), `"run_status"` and `"invalid"` (a reason) can mark the
+  attempt invalid or failed, `"notes"` goes to notes, and `"value"` stands for the primary metric when the object
+  does not name it (the receipt of `bench/tools/evaluate.py`).
+- **Every run that starts is recorded**: exit code 0 is `ok` (unless the output says otherwise, or a metric the pack
+  requires with `ok_metrics_required` is missing: `error`), any other exit code `error`, the timeout `timeout`, and
+  Ctrl-C, SIGTERM or SIGHUP `error` with `interrupted (SIGTERM)` in notes. A failure's notes end with the tail of
+  its output. `trace_ref` holds `cmd` and `exit_code` (merged with `--trace-ref`), `duration_ms` the wall clock.
+  The other options are those of `exp record`: `--code-ref`, `--notes`, `--task` (default: the one task you hold a
+  lease on), `--artifacts`, `--tokens`, `--cost-usd`; the agent is `--agent` or `BENCHBOOK_AGENT`.
+- **Output**: after the command's own output, one line on stdout that starts with `benchbook: `, for example
+  `benchbook: recorded e:1a2b3c4d improved sum_radii=2.63  ★ new best (ok, 1.2s)`, or `benchbook: not run:
+  duplicate of e:...`. With `--json` that last line is one JSON object (`ok`, `ran`, `id`, `outcome`,
+  `run_status`, `exit_code`, `metrics`, `duplicate_of`, ...). Notes go to stderr. The capture hook reads this
+  line as a write receipt, like the output of `exp record`.
+- **Exit code**: the command's own; 124 after the timeout; 128+N after signal N (130 for Ctrl-C), after the run is
+  recorded; 2 when a duplicate was not run, or was run but not recorded because another agent recorded the same
+  run meanwhile; 1 for usage errors. When the run cannot be recorded (the database is unreachable) it exits 1 and
+  keeps the output log, whose path the error names. Unlike `benchbook ar run` there is no local queue.

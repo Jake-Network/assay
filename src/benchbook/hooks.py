@@ -53,7 +53,7 @@ CITABLE = {"e": "experiments", "c": "claims"}
 # the agent variable with the old prefix; a worker that cited its own record there must still count as having cited.
 WRITE_TOOLS = {"benchbook_record_experiment": "e", "benchbook_propose_claim": "c",
                "assay_record_experiment": "e", "assay_propose_claim": "c"}
-CLI_WRITES = {("exp", "record"): "e", ("claim", "add"): "c"}
+CLI_WRITES = {("exp", "record"): "e", ("exp", "run"): "e", ("claim", "add"): "c"}
 COMMANDS = (config.NAME, config.LEGACY_NAME)
 AGENT_ASSIGNMENTS = (config.ENV_PREFIX + "AGENT=", config.LEGACY_ENV_PREFIX + "AGENT=")
 # the worker subagent of the plugin, under its current name and the one it had before the rename
@@ -412,7 +412,7 @@ def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
     try:
         result = json.loads(text)
     except ValueError:
-        result = None
+        result = None if is_mcp else _exp_run_receipt(text)
     if isinstance(result, dict):
         ref = result.get("id")
         dup = result.get("duplicate_of")
@@ -425,6 +425,25 @@ def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
         ref = text if not is_mcp else None
     if isinstance(ref, str) and ref.startswith(prefix + ":") and SHORT_ID_RE.fullmatch(ref):
         return ref
+    return None
+
+
+def _exp_run_receipt(text: str) -> dict[str, Any] | None:
+    """`benchbook exp run` prints its receipt after the command's own output (and Claude Code may append stderr):
+    the last line that starts with "benchbook: ", or with --json the last JSON line that has "ran"."""
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if m := re.match(r"benchbook: recorded (e:[0-9a-f]{8}) ", line):
+            return {"id": m[1]}
+        if line.startswith("benchbook: "):
+            return {"ok": False}  # not run, or not recorded
+        if line.startswith("{"):
+            try:
+                result = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(result, dict) and "ran" in result:
+                return result
     return None
 
 

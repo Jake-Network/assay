@@ -347,6 +347,15 @@ def exp_tried(config: Annotated[str, typer.Option(help="JSON or @file")],
     emit(data, txt)
 
 
+def _register_exp_run() -> None:  # check, run and record in one command; it lives in exp_run.py
+    from .exp_run import exp_run
+
+    exp_app.command("run")(exp_run)
+
+
+_register_exp_run()
+
+
 # ------------------------------------------------------------------ claims, links, decisions
 
 @claim_app.command("add")
