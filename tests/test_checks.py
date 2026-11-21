@@ -378,7 +378,8 @@ def test_aggregation_query_in_docs(tmp_path: Path, vtmp: Path, db_url: str, code
         checks.verify(verifier, f"piece-{name}", shas[name], repo=r, reported_by=f"impl-{name}")
     checks.verify(verifier, "piece-a", shas["a"], repo=r, reported_by="impl-a")  # re-verified: same completion
     checks.verify(verifier, "piece-e", shas["e"], repo=r)
-    [query] = re.findall(r"```sql\n(.*?)```", DOC.read_text(), re.S)
+    numbers = DOC.read_text().split("## The numbers", 1)[1].split("\n## ", 1)[0]  # other sections have SQL too
+    [query] = re.findall(r"```sql\n(.*?)```", numbers, re.S)
     lead = Ledger.open(project=code_project, agent="lead", database_url=db_url)
     assert lead.sql(query)["rows"] == [{"completions": 4, "rerun": 4, "false_completions": 2,
                                          "false_completion_rate": 0.5, "touched_guard": 2, "changed_checks": 1}]

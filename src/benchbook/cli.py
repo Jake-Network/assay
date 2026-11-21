@@ -14,6 +14,7 @@ from .agent_cli import agent_app
 from .check_cli import check_app
 from .config import env
 from .errors import BenchbookError, Conflict, ValidationFailed
+from .finding_cli import finding_app
 from .ids import short
 from .piece_cli import piece_app
 
@@ -34,6 +35,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(agent_app, name="agent")
 app.add_typer(check_app, name="check")
 app.add_typer(piece_app, name="piece")
+app.add_typer(finding_app, name="finding")
 
 STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 

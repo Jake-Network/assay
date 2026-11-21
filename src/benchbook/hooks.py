@@ -169,13 +169,16 @@ def main(event: str) -> ReplaySummary | None:
             # before reading config, spooling or importing anything heavier.
             return None
         cwd = Path(data.get("cwd") or os.getcwd())
-        project = config.load(cwd).project
+        cfg = config.load(cwd)
+        project = cfg.project
         _log_notices()  # after load: BENCHBOOK_PROJECT is read there
         if project:
             # The capture decision is made here, under the environment Claude Code ran the hook with. A later
             # `benchbook hook replay` from a shell with another BENCHBOOK_HOOK_AGENTS must not undo it.
-            _write_spool(spool, {"event": event, "project": project, "data": data, "spooled_at": time.time(),
-                                 "accepted": True})
+            entry = {"event": event, "project": project, "data": data, "spooled_at": time.time(), "accepted": True}
+            if cfg.out_of_scope_heading:  # read with the project, so a replay looks for the section this run had
+                entry["out_of_scope_heading"] = cfg.out_of_scope_heading
+            _write_spool(spool, entry)
         else:
             log(f"{event}: not captured: no benchbook project for {cwd} (no .benchbook/config.toml there or above, and "
                 f"BENCHBOOK_PROJECT unset; agent_type={data.get('agent_type')!r})")
@@ -509,9 +512,12 @@ def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: dateti
 
 
 def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project: str | None = None,
-            fired_at: float | None = None, accepted: bool = False) -> str:
+            fired_at: float | None = None, accepted: bool = False, out_of_scope_heading: str | None = None) -> str:
     """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'. accepted: the hook entry point already decided
-    to capture this event (spool entries record it), so the current BENCHBOOK_HOOK_AGENTS is not consulted again."""
+    to capture this event (spool entries record it), so the current BENCHBOOK_HOOK_AGENTS is not consulted again.
+    out_of_scope_heading: [report] out_of_scope_heading as the hook read it; without a project the config of the
+    working directory supplies both. In a code-pack project its findings are recorded whether or not the report
+    cites its own records (findings.py); the return value stays about the report itself."""
     if not accepted and not is_worker(_agent_type(data), require_type=False):
         return f"skipped:not-a-worker ({_agent_type(data)})"
     text = extract_text(data).replace("\x00", "").strip()  # Postgres text cannot hold NUL
@@ -526,7 +532,8 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
             and data["tool_response"].get("status") == "async_launched":
         return "skipped:async-launch"
     if project is None:
-        project = config.load(Path(data.get("cwd") or cwd or os.getcwd())).project
+        cfg = config.load(Path(data.get("cwd") or cwd or os.getcwd()))
+        project, out_of_scope_heading = cfg.project, out_of_scope_heading or cfg.out_of_scope_heading
     if not project:
         log(f"{event}: not captured: no benchbook project for {data.get('cwd') or cwd or os.getcwd()}")
         return "skipped:no-project"
@@ -535,18 +542,56 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
 
     lg = Ledger.open(project=project, agent=default_agent("hook"), role="harness")
     when = datetime.fromtimestamp(fired_at, UTC) if fired_at else datetime.now(UTC)
-    if _cites_own_record(lg, text, data, when):
-        return "cited"
-    head = " ".join(text.split())[:STATEMENT_HEAD]
     source = {"session_id": data.get("session_id"), "event": data.get("hook_event_name") or event,
               "agent_id": data.get("agent_id"), "agent_type": data.get("agent_type"),
               "tool_name": data.get("tool_name")}
+    if out_of_scope_heading and lg.pack.name == "code":
+        _capture_findings(lg, event, text, out_of_scope_heading, data, when,
+                          {k: v for k, v in source.items() if v})
+    if _cites_own_record(lg, text, data, when):
+        return "cited"
+    head = " ".join(text.split())[:STATEMENT_HEAD]
     # The display excerpt can match independently written reports. The digest covers the entire text.
     digest = hashlib.sha256(CAPTURE_DOMAIN + text.encode()).hexdigest()
     r = lg._propose_claim("note", "[auto-captured] " + head,
                           payload={"text": text[:PAYLOAD_TEXT], "source": {k: v for k, v in source.items() if v}},
                           tags=["auto-captured"], _dedup_hash=digest)
     return f"captured:c:{str(r.id)[:8]}"
+
+
+def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[str, Any], fired_at: datetime,
+                      source: dict[str, Any]) -> None:
+    """The out-of-scope section of the report as finding claims (findings.py). The claims are written by whoever
+    the hook writes as (the token's agent under a token); source names the subagent that reported them."""
+    from . import findings
+
+    if not findings.parse(text, heading):
+        return  # no section, or nothing in it: no transcript read, no writes
+    cwd = data.get("cwd")
+    r = findings.capture(lg, text, heading, source=source, piece=_run_piece(lg, data, fired_at),
+                         root=str(cwd) if cwd else None)
+    log(f"{event}: out-of-scope findings: {r.findings} ({r.new} new) {' '.join(r.claims)}")
+
+
+def _run_piece(lg: Any, data: dict[str, Any], fired_at: datetime) -> str | None:
+    """The piece this run worked on, when the ledger knows it: config.piece of the attempts this subagent recorded
+    (write receipts in its own transcript), if they name exactly one piece."""
+    from .errors import BenchbookError
+
+    _, receipts = _run_receipts(data, fired_at)
+    ids = []
+    for ref in receipts:
+        if ref.startswith("e:"):
+            try:
+                ids.append(lg.resolve(ref, ["experiment"])[1])
+            except BenchbookError:
+                continue
+    if not ids:
+        return None
+    rows = lg.sql_internal("SELECT DISTINCT config ->> 'piece' AS piece FROM benchbook.experiments"
+                           " WHERE project_id = %s AND id = ANY(%s) AND config ->> 'piece' IS NOT NULL",
+                           (lg.project_id, ids))
+    return str(rows[0]["piece"]) if len(rows) == 1 else None
 
 
 # ---------------------------------------------------------------------- the spool
@@ -609,8 +654,10 @@ def process_file(path: Path) -> str:
             return f"retry:{reason}"
         return f"dead:{reason}"
     try:
+        heading = spooled.get("out_of_scope_heading")
         result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
-                         fired_at=spooled.get("spooled_at"), accepted=accepted)
+                         fired_at=spooled.get("spooled_at"), accepted=accepted,
+                         out_of_scope_heading=heading if isinstance(heading, str) else None)
         log(f"{event}: {result}")
         path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001

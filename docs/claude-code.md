@@ -98,6 +98,9 @@ agent type (older Claude Code versions) is not captured either; `BENCHBOOK_HOOK_
 worker types too, set `BENCHBOOK_HOOK_AGENTS=benchbook-worker,implementer` in your shell and in the `env` of Claude Code's
 `settings.json`. This works the same for the plugin and the manual install.
 
+In a code-pack project, `[report] out_of_scope_heading` in `.benchbook/config.toml` makes the same processor record each
+item of that section of the report as an out-of-scope finding claim (docs/code.md, "Out-of-scope findings").
+
 The hook uses the project selected by `.benchbook/config.toml` or `BENCHBOOK_PROJECT`; when it finds neither (for example a
 worktree without a committed `.benchbook/`) it writes a "no benchbook project" line to the log. It writes the report to a
 local spool and exits 0 while a detached process handles the database write; only one processor drains a spool at a

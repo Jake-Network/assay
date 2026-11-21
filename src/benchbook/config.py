@@ -156,6 +156,8 @@ class LocalConfig:
     checks: dict[str, CheckSpec] = field(default_factory=dict)  # [checks.<name>], in file order
     guard_paths: list[str] = field(default_factory=list)  # [guard] paths: globs a completion should not touch
     guard_base: str | None = None  # [guard] base: the ref a piece branched from (check verify --base)
+    # [report] out_of_scope_heading: the heading of the out-of-scope section in an implementer's final report
+    out_of_scope_heading: str | None = None
 
 
 def _config_in(d: Path) -> Path | None:
@@ -210,6 +212,7 @@ def load(start: Path | None = None) -> LocalConfig:
         cfg.legacy = p.parent.name == LEGACY_CONFIG_DIR.name
         cfg.checks = parse_checks(data.get("checks"), str(p))
         cfg.guard_paths, cfg.guard_base = parse_guard(data.get("guard"), str(p))
+        cfg.out_of_scope_heading = parse_report(data.get("report"), str(p))
     if project := env("PROJECT"):
         cfg.project = project
     return cfg
@@ -279,3 +282,28 @@ def parse_guard(table: Any, where: str = "config.toml") -> tuple[list[str], str 
     if base is not None and (not isinstance(base, str) or not base.strip()):
         raise BenchbookError(f"{where}: [guard] base must be a git ref such as \"origin/main\"")
     return list(paths), base
+
+
+_REPORT_KEYS = {"out_of_scope_heading"}
+HEADING_MAX = 100
+
+
+def parse_report(table: Any, where: str = "config.toml") -> str | None:
+    """[report] out_of_scope_heading: the section of an implementer's final report whose list items the hook
+    records as out-of-scope findings (docs/code.md). Strict like [checks]: a misspelt key would silently turn the
+    capture off."""
+    from .errors import BenchbookError
+
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        raise BenchbookError(f"{where}: [report] must be a table")
+    if unknown := sorted(set(table) - _REPORT_KEYS):
+        raise BenchbookError(f"{where}: [report]: unknown key {', '.join(unknown)} (known: out_of_scope_heading)")
+    heading = table.get("out_of_scope_heading")
+    if heading is None:
+        return None
+    if not isinstance(heading, str) or not heading.strip() or len(heading) > HEADING_MAX or "\n" in heading:
+        raise BenchbookError(f"{where}: [report] out_of_scope_heading must be one line of text "
+                             f"(1-{HEADING_MAX} characters), such as \"범위 밖\" or \"Out of scope\"")
+    return heading.strip()
