@@ -4,6 +4,10 @@ Postgres schema `benchbook` (migrations: Alembic revisions that run plain SQL fi
 `src/benchbook/db/alembic/sql/`). Knowledge tables are append-only; triggers reject UPDATE and DELETE for every
 role, superusers included.
 
+A ledger made before the rename (schema `assay`, revision 0007 at most) is renamed to `benchbook` in one transaction
+before Alembic runs; there is no revision number for that step. See
+[multi-machine.md](multi-machine.md#a-ledger-made-before-the-rename).
+
 ## Tables
 
 | table | what | mutable |

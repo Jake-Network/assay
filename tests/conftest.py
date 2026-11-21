@@ -12,6 +12,22 @@ import pytest
 
 from benchbook import Ledger
 from benchbook.db import conn as dbconn
+from benchbook.db import migrate as dbmigrate
+
+from .legacy_db import add_marker_project, build_legacy
+
+# Set to 1 to build the session database the way the pre-rename releases did (old schema and role names, one row of
+# data) and let migrate() rename it, so every test, the invariants and their triggers included, runs on an upgraded
+# database. tests/test_db.py runs the invariant suite this way.
+LEGACY_SWITCH = "BENCHBOOK_TEST_LEGACY_DB"
+
+
+def _through_the_rename(url: str) -> None:
+    if os.environ.get(LEGACY_SWITCH):
+        build_legacy(url)
+        add_marker_project(url)
+        before, _ = dbmigrate.migrate(url)
+        assert before == dbmigrate.LEGACY_HEAD
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -38,6 +54,7 @@ def db_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     if base := os.environ.get("BENCHBOOK_TEST_DATABASE_URL"):
         name = f"benchbook_test_{uuid.uuid4().hex[:8]}"
         url = dbconn.ensure_database(base, name)
+        _through_the_rename(url)
         yield url
         with psycopg.connect(base, autocommit=True) as c:
             c.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
@@ -47,6 +64,7 @@ def db_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     pgdata = Path(tmp_path_factory.mktemp("pg")) / "data"
     server = get_server(pgdata, cleanup_mode=None, postgres_version=dbconn.EMBEDDED_PG_VERSION)
     url = dbconn.ensure_database(server.get_uri(), "benchbook_test")
+    _through_the_rename(url)
     os.environ["BENCHBOOK_DATABASE_URL"] = url
     yield url
     for pool in Ledger._pools.values():

@@ -134,6 +134,29 @@ Not prevented:
   and can disrupt others: hold locks, fill tables, send spurious notifications, or change the shared login's
   password or session defaults (per-machine logins limit the last).
 
+## A ledger made before the rename
+
+A database made before the project was renamed (schema `assay`, reader schema `assay_q`, role `assay_reader`) is
+renamed in place by the first `benchbook migrate`, or by the first benchbook process that connects. It is one
+transaction under the migration lock, so it either completes or changes nothing: the schemas and the role get the new
+names, every function is created again from the migration files, the reader views filter on `benchbook.project`, and
+stored `search_path` settings that name the old schemas are rewritten. Then the migrations newer than the database run
+as usual. Rows are not rewritten: experiments recorded before keep their `assay://blob/...` artifact URIs. Until
+then `benchbook doctor` reports `pre-rename schema assay at 0007`.
+
+- Upgrade every machine together. A pre-rename binary that connects after the rename finds no `assay` schema and
+  builds an empty one next to the ledger; benchbook then refuses to guess between the two and prints which one to drop.
+- Roles belong to the whole server. Renaming `assay_reader` needs a superuser or `CREATEROLE`; when the ledger's
+  owner may not do it (a managed Postgres), migrate changes nothing and prints the exact statements for an
+  administrator, then `benchbook migrate` runs again. Other databases on the same server that used `assay_reader`
+  keep their grants under the new name and are renamed when benchbook first connects to them.
+- Postgres clears an MD5 password when it renames a role. benchbook sets it again from `BENCHBOOK_READER_PASSWORD`
+  when that is set and otherwise says to run `ALTER ROLE benchbook_reader PASSWORD '...'`. SCRAM passwords (the
+  default since Postgres 14) are kept.
+- If the server has `benchbook_reader` already (a new benchbook database was made there first), the renamed ledger
+  grants its views to that role and revokes them from `assay_reader`. When no database uses `assay_reader` any more,
+  migrate says so and `DROP ROLE assay_reader;` removes it.
+
 ## Security
 
 Without per-agent tokens every machine holds the owner credentials in `BENCHBOOK_DATABASE_URL`; the append-only

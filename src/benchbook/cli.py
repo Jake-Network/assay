@@ -473,10 +473,14 @@ def hook(event: str) -> None:
 def migrate() -> None:
     """Apply schema migrations (Alembic)."""
     from .db.conn import database_url
+    from .db.migrate import LEGACY_SCHEMA, status
     from .db.migrate import migrate as run
 
-    before, after = run(database_url())
-    emit({"ok": True, "from": before, "to": after}, f"schema {before or 'empty'} -> {after}")
+    url = database_url()
+    renamed = {"renamed_from": LEGACY_SCHEMA} if status(url).legacy else {}  # a database from before the rename
+    before, after = run(url)
+    emit({"ok": True, "from": before, "to": after, **renamed},
+         f"schema {before or 'empty'} -> {after}" + (f" (renamed from {LEGACY_SCHEMA})" if renamed else ""))
 
 
 @app.command()
@@ -496,7 +500,7 @@ def doctor() -> None:
 
 def _db_checks() -> list[Any]:
     from .db.conn import data_dir, database_url
-    from .db.migrate import current, head
+    from .db.migrate import LEGACY_SCHEMA, head, status
     from .doctor import Check
 
     checks: list[Check] = []
@@ -520,7 +524,8 @@ def _db_checks() -> list[Any]:
             ver = c.execute("SHOW server_version").fetchone()[0]  # type: ignore[index]
             vec = c.execute("SELECT 1 FROM pg_available_extensions WHERE name='vector'").fetchone()
             rd = c.execute("SELECT 1 FROM pg_roles WHERE rolname='benchbook_reader'").fetchone()
-        cur = current(url)
+        st = status(url)
+        cur = st.revision
     except psycopg.Error as e:
         # An unreachable team database must not hide the remaining checks (and --json must stay JSON).
         first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
@@ -530,7 +535,10 @@ def _db_checks() -> list[Any]:
     checks.append(Check("postgres >= 15", int(ver.split(".")[0]) >= 15, ver))
     checks.append(Check("pgvector (optional)", True, "available" if vec else "not available"))
     checks.append(Check("benchbook_reader role", rd is not None, "present" if rd else "missing", "benchbook migrate"))
-    if cur == head():
+    if st.legacy:  # migrate renames it in place; with both schemas present it says which one to drop
+        checks.append(Check("db schema", False, f"pre-rename schema {LEGACY_SCHEMA} at {st.legacy_revision}"
+                            + (f", next to benchbook at {cur}" if cur else ""), "benchbook migrate"))
+    elif cur == head():
         checks.append(Check("db schema", True, cur))
     elif cur is None or cur < head():
         checks.append(Check("db schema", False, f"{cur or 'empty'} (older than this build)", "benchbook migrate"))
