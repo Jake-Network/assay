@@ -9,6 +9,49 @@
 - New `code` pack and `benchbook init --pack`. `--pack code` defaults to metric `checks_passed` (max),
   partitioned by piece.
 - `.benchbook/config.toml` accepts `[checks.<name>]` (cmd, junit, timeout) and `[guard]` (paths, base).
+- `benchbook check verify` decides when the verifier has lead authority (orchestrator or human): `verified`
+  (oracle rerun) when every check passed, nothing guarded was touched and `[checks]` is unchanged; `inconclusive`
+  when earlier attempts of the piece at that commit disagree, with both ids as evidence; no decision when guarded
+  files or `[checks]` changed, with the files named. Without lead authority it records as before and says so.
+  `--json` adds `decision`, `decision_reason`, `needs_person`, `evidence`, `decisions`.
+- pack.toml `[verify]`: `rule = "replication"` (default, the rule so far; core and ml-research) or `"all_pass"`
+  with `min_runs` / `min_authors` (code pack: 1 and 2). Under `all_pass`, `decide ... verified --oracle rerun` on
+  a completion needs clean passing re-runs by agents other than the implementer and no failed or guard-flagged
+  attempt of that commit; otherwise it is refused, naming the `human` oracle.
+- SDK: `Ledger.check_rerun(claim, evidence)` (dry run of the rerun rule) and `Ledger.completion_attempts(claim)`.
+- Under `BENCHBOOK_TOKEN`, `check verify` uses the token's agent as the verifier and records the completion claim
+  in its own name, with `payload.reported_by`.
+- `benchbook piece start <piece> --paths 'glob'... [--tags mod:x] [--lease S]` declares the paths a piece will
+  change. A piece whose paths overlap a live piece's (same file, a file under its glob, or two globs that can
+  match one path) is refused with the first piece's task id (exit 2). `piece done` releases it, `piece list`
+  shows who holds what, and starting again renews the lease. See docs/code.md, "Path occupancy".
+- SDK: `create_intent` and `update_intent` take `exclusive_paths`, a spec field holding path globs checked for
+  overlap under the intent lock. `benchbook.globs` gains `overlap`, `first_overlap` and `escape`.
+- `init --pack code` also sets `worker_intents = true`.
+- Out-of-scope findings: with `[report] out_of_scope_heading` in `.benchbook/config.toml`, the hook records each
+  item of that section of a code-pack implementer's final report as an `observation` claim tagged `out-of-scope`
+  (plus `piece:`, `mod:`, `file:` when known). A repeated finding adds the new report as evidence instead of a
+  second claim (docs/code.md).
+- `benchbook finding accept <claim> --issue URL --oracle ...` accepts a finding: it links the follow-up issue as a
+  source and decides it `supported`. Reject with `benchbook decide <claim> refuted ...`.
+- `benchbook check run <name> [--piece P]` runs a declared check from the current checkout. The output and exit
+  code are the command's, and the run is recorded through the hook spool as an attempt in check verify's shape
+  plus `via` and `worktree_dirty`. A database outage never changes the exit code; `benchbook hook replay`
+  records the run later.
+- Hooks: `benchbook hook bash-result` (PostToolUse/PostToolUseFailure on Bash) records a declared check run as an
+  attempt, with exit code and last-line hash, never the output. `benchbook hook task-completed` (TaskCompleted)
+  keeps a piece's task open until its HEAD passes every declared check. Plugin 0.1.3; `benchbook doctor` flags
+  older installs.
+- Record coverage: matched runs are logged to `observed.jsonl` in the spool directory; the query is in
+  docs/code.md.
+- Runs from the implementer's checkout (`via`) never count as independent re-runs, and a run with uncommitted
+  changes is no attempt of its commit.
+- `bench/code/`: SWE-bench Verified measurement of the false completion rate: a pre-registration, 40 committed
+  instances (`select.py`), the visible and hidden checks in the harness's Docker image (`swe_check.py`), a
+  resumable implementer + `check verify` runner with `--dry` (`run.py`), and a report whose rate comes from
+  `docs/code.md`'s SQL (`report.py`). Not yet run.
+- `bench`: no arm loads the account's claude.ai connectors any more (`ENABLE_CLAUDEAI_MCP_SERVERS=false`);
+  `command.json` records the MCP servers a session started with.
 
 ## Unreleased: core for the verification ledger
 

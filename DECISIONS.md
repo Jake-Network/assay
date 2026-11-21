@@ -286,3 +286,67 @@ One line per decision the spec left open or that changed during implementation. 
   50-per-partition cap.
 - **Failure signature (1-1, rough until signature.py).** `check:first failing JUnit test:exception type`,
   `check:timeout`, or `check:exit N:<sha256 of the last output line with digits zeroed>`.
+- **The verify rule is the pack's (2-P0a).** `[verify] rule`: `replication` (default, unchanged) or `all_pass`.
+  `min_authors` counts the implementer and must be at least 2; the loader refuses anything that would let an
+  implementer verify alone.
+- **Who the implementer is (2-P0a).** The claim's author and `payload.reported_by`. The author is left out only
+  when a lead, person or harness names a different reporter. The implementer's attempts never count, and it
+  cannot decide `verified` on its own completion by any oracle. In local mode names are self-declared, so this
+  cannot stop one process using two names; tokens on a writer login do.
+- **Integrity flags and failures are sticky per commit (2-P0a).** Any valid finished attempt of the piece at the
+  commit that failed, touched the guard or changed `[checks]` keeps the rerun oracle out, cited or not.
+  Invalidating that attempt is the way back.
+- **Disagreement is inconclusive in either direction; a lone failing re-run decides nothing (2-P0a)**, because
+  `refuted` is final and flakes exist. (The plan named only the implementer's passing record.)
+- **verify writes supported then verified after a dry run (2-P0a)**, keeping the state graph instead of using
+  `force`.
+- **Under a token the verifier records the claim (2-P0a)**, because a token is one agent. The reporter goes in
+  `payload.reported_by`.
+- **A piece is a task (2-P1b, open question 2).** It is an intent tagged `piece` and `piece:<name>`, with spec
+  `{piece, paths, declared}`. There is no new table, status, queue or migration, and `v_inflight` already
+  exposes paths and module tags.
+- **Paths are expanded once, at start (2-P1b).** Tracked files a glob matches are stored escaped; a glob matching
+  none, or more than 200, is stored as the glob. New files beside files a glob matched are not occupied.
+- **The overlap test is exact (2-P1b).** It returns a witness path both patterns match. An unreadable stored
+  pattern counts as overlapping. It runs inside the intent advisory lock, so of concurrent starts one wins.
+- **Lifetime (2-P1b).** The lease is 7200 s. Restarting by the same agent renews it in the same task (`--paths`
+  replaces the paths). `piece done` by the holder marks the task done or failed; by a lead it cancels another
+  agent's piece. Expiry frees the paths. `check verify` does not release.
+- **Findings use existing claim kinds and statuses (2-P1c).** A finding is an `observation` tagged
+  `out-of-scope`; accepted is `supported` with the issue as a cited source, rejected is `refuted`. The report is
+  the evidence, as a source keyed by its digest, so `n_support` counts the reports. Open means `proposed` or
+  `inconclusive`.
+- **The finding dedup key is file + normalised sentence (2-P1c)**, under the fixed domain
+  `benchbook:out-of-scope\0`, without the author. Reports from different subagents or tokens merge, and the
+  stored hash never changes between releases.
+- **Findings are parsed in the background processor, not the hook process (2-P1c).** The heading is stored with
+  the queued report so a replay reads the run's setting, and the hook process gains no work or imports. No
+  `mod:` tag is inferred from a path; it appears only when the item writes it.
+- **`finding accept` exists only because no CLI could create a source (2-P1c).** Rejecting needs no new command.
+- **check run records through the spool, never inline (2-P0b).** The wrapper's 300 ms budget leaves no room for
+  the ledger imports, and a database outage must not touch the exit code. The gate counts passing runs still
+  waiting in the spool.
+- **Implementer runs are marked (2-P0b).** `metrics.via` (`check-run`, `bash-hook`) marks a run in the
+  implementer's own checkout, never an independent re-run, whoever recorded it (the hook records as `hook`); the
+  all_pass rule skips such runs when counting independent passes and still lets their failures block.
+  `worktree_dirty` marks a run that did not test `code_ref`: it is no attempt of that commit, and the gate
+  ignores it.
+- **Hook matching is word equality (2-P0b),** after dropping quotes, leading assignments and redirections, with
+  one leading `cd DIR &&` and optional `{junit}`, from the repo root. Pipelines and lists are observed but not
+  recorded; `check run` calls are observed and recorded once, by the wrapper.
+- **The gate fails open (2-P0b)** on no project, no checks, no piece (including the base branch), no commit, a
+  project outside the code pack, or any error.
+- **Open question 1 (2-P0b).** Per the Claude Code hooks documentation, SubagentStop can block (exit 2 or
+  `decision: "block"`). Not measured; the plugin gates on TaskCompleted only.
+- **The SWE-bench task set comes from the harness's copy of Verified (1-2).** swebench 5 evaluates from
+  `SWE-bench/SWE-bench_Verified` (image, eval_script, log_parser), so selection reads that copy and checks
+  princeton-nlp's ids, labels and base commits against it.
+- **Visible check = the hidden eval script without the test patch, on the PASS_TO_PASS tests that exist before it
+  (1-2).** It is fixed per instance in `instances.json`; a preflight confirms it, and failures are replaced from
+  same-repo reserves.
+- **A harness error is not a false completion (1-2).** `swe_check` exits 3, the attempt is invalidated, and the
+  batch stops until the harness is fixed. "Reported done" that cannot be verified (missing commit, history that
+  does not descend from the declarations) is listed beside the rate, not inside it.
+- **Benchmark arms exclude account connectors (0-4).** Configuration C needs the plugin's MCP server and so cannot
+  use `--strict-mcp-config`; the connectors of the account running it were loaded with it (8 tools in the first
+  batch, 90 in the rerun). `ENABLE_CLAUDEAI_MCP_SERVERS=false` is set for every arm.
