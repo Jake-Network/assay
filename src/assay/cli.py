@@ -32,6 +32,21 @@ app.add_typer(db_app, name="db")
 STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 
 
+def _print_version(value: bool) -> None:
+    if value:
+        from . import __version__
+
+        print(f"assay {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(version: Annotated[bool, typer.Option("--version", "-V", callback=_print_version, is_eager=True,
+                                                help="Print the installed build (version and commit) and exit.")]
+          = False) -> None:
+    pass
+
+
 # ------------------------------------------------------------------ helpers
 
 def die(msg: str, code: int = 1) -> NoReturn:
@@ -167,10 +182,13 @@ def get(id: str) -> None:
 def search(text: Annotated[str | None, typer.Argument()] = None,
            kind: Annotated[str | None, typer.Option()] = None,
            status: Annotated[str | None, typer.Option()] = None,
-           tags: Annotated[str | None, typer.Option()] = None,
+           tags: Annotated[str | None, typer.Option(help="records with ANY of these tags (comma separated)")] = None,
+           all_tags: Annotated[str | None, typer.Option("--all-tags",
+                                                        help="records with ALL of these tags (comma separated)")]
+           = None,
            limit: Annotated[int, typer.Option()] = 20) -> None:
-    """One-line summaries of claims, experiments and tasks."""
-    rows = ledger(read_only=True).search(text, kind, status, csv(tags), limit)
+    """One-line summaries of claims, experiments and tasks, each ending with its tags."""
+    rows = ledger(read_only=True).search(text, kind, status, csv(tags), limit, all_tags=csv(all_tags))
     emit(rows, "\n".join(f"{r['id']}  {r['line']}" for r in rows) or "(nothing)")
 
 
@@ -452,44 +470,75 @@ def migrate() -> None:
 
 @app.command()
 def doctor() -> None:
-    """Check DB connection, extensions, roles and versions."""
+    """Check the installed build, database, schema and the Claude Code connection (PATH, plugin, env, hook)."""
     import platform
 
-    from .db.conn import data_dir, database_url
-    from .db.migrate import current, head
+    from . import __version__
+    from .doctor import Check, claude_code_checks
 
-    checks: list[tuple[str, bool, str]] = []
-    mode = "url" if os.environ.get("ASSAY_DATABASE_URL") else f"embedded ({data_dir()})"
-    try:
-        url = database_url()
-        checks.append(("connect", True, mode))
-    except Exception as e:  # noqa: BLE001
-        checks.append(("connect", False, f"{mode}: {e}"))
-        return _report(checks)
-    import psycopg
-
-    with psycopg.connect(url) as c:
-        ver = c.execute("SHOW server_version").fetchone()[0]  # type: ignore[index]
-        checks.append(("postgres >= 15", int(ver.split(".")[0]) >= 15, ver))
-        vec = c.execute("SELECT 1 FROM pg_available_extensions WHERE name='vector'").fetchone()
-        checks.append(("pgvector (optional)", True, "available" if vec else "not available"))
-        rd = c.execute("SELECT 1 FROM pg_roles WHERE rolname='assay_reader'").fetchone()
-        checks.append(("assay_reader role", rd is not None, "present" if rd else "run assay migrate"))
-    cur = current(url)
-    checks.append(("schema", cur == head(), f"{cur} (head {head()})"))
-    from . import config as lc
-
-    cfg = lc.load()
-    checks.append(("project config", cfg.project is not None,
-                   f"{cfg.project} ({cfg.path})" if cfg.project else "no .assay/config.toml; run assay init"))
-    checks.append(("python", sys.version_info >= (3, 11), platform.python_version()))
+    checks = [Check("assay build", True, __version__), *_db_checks()]
+    checks.append(Check("python", sys.version_info >= (3, 11), platform.python_version()))
+    checks += claude_code_checks(_repo_root())
     _report(checks)
 
 
-def _report(checks: list[tuple[str, bool, str]]) -> None:
-    ok = all(c[1] for c in checks)
-    emit({"ok": ok, "checks": [{"check": n, "ok": o, "detail": d} for n, o, d in checks]},
-         "\n".join(f"{'ok ' if o else 'FAIL'}  {n:<22} {d}" for n, o, d in checks))
+def _db_checks() -> list[Any]:
+    from .db.conn import data_dir, database_url
+    from .db.migrate import current, head
+    from .doctor import Check
+
+    checks: list[Check] = []
+    try:
+        mode = "url" if os.environ.get("ASSAY_DATABASE_URL") else f"embedded ({data_dir()})"
+    except RuntimeError as e:  # ASSAY_DATA_DIR=~name of a user that does not exist
+        return [Check("connect", False, f"ASSAY_DATA_DIR: {e}", "export ASSAY_DATA_DIR=<an existing directory>"),
+                Check("db schema", False, "unknown (no connection)"), Check("build schema head", True, head())]
+    build_head = Check("build schema head", True, head())
+    try:
+        url = database_url()
+        checks.append(Check("connect", True, mode))
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("connect", False, f"{mode}: {e}", "check ASSAY_DATABASE_URL / ASSAY_DATA_DIR"))
+        return [*checks, Check("db schema", False, "unknown (no connection)"), build_head]
+    import psycopg
+
+    try:
+        with psycopg.connect(url, connect_timeout=10) as c:
+            ver = c.execute("SHOW server_version").fetchone()[0]  # type: ignore[index]
+            vec = c.execute("SELECT 1 FROM pg_available_extensions WHERE name='vector'").fetchone()
+            rd = c.execute("SELECT 1 FROM pg_roles WHERE rolname='assay_reader'").fetchone()
+        cur = current(url)
+    except psycopg.Error as e:
+        # An unreachable team database must not hide the remaining checks (and --json must stay JSON).
+        first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        checks[-1] = Check("connect", False, f"{mode}: {first}", "check ASSAY_DATABASE_URL and that the server is up")
+        return [*checks, Check("db schema", False, "unknown (no connection)"), build_head]
+    checks.append(Check("postgres >= 15", int(ver.split(".")[0]) >= 15, ver))
+    checks.append(Check("pgvector (optional)", True, "available" if vec else "not available"))
+    checks.append(Check("assay_reader role", rd is not None, "present" if rd else "missing", "assay migrate"))
+    if cur == head():
+        checks.append(Check("db schema", True, cur))
+    elif cur is None or cur < head():
+        checks.append(Check("db schema", False, f"{cur or 'empty'} (older than this build)", "assay migrate"))
+    else:
+        checks.append(Check("db schema", False, f"{cur} (newer than this build)",
+                            "upgrade assay: uv tool upgrade assay"))
+    checks.append(build_head)
+    from . import config as lc
+
+    cfg = lc.load()
+    checks.append(Check("project config", cfg.project is not None,
+                        f"{cfg.project} ({cfg.path or 'ASSAY_PROJECT'})" if cfg.project else "no .assay/config.toml",
+                        "assay init"))
+    return checks
+
+
+def _report(checks: list[Any]) -> None:
+    ok = all(c.ok for c in checks)
+    emit({"ok": ok, "checks": [{"check": c.name, "ok": c.ok, "detail": c.detail, "fix": None if c.ok else c.fix}
+                               for c in checks]},
+         "\n".join(f"{'ok  ' if c.ok else 'FAIL'}  {c.name:<22} {c.detail}"
+                   + (f"\n      fix: {c.fix}" if not c.ok and c.fix else "") for c in checks))
     if not ok:
         raise typer.Exit(1)
 

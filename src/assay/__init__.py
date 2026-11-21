@@ -8,8 +8,11 @@ from .errors import AssayError, LeaseLost, NotFound, PermissionDenied, Validatio
 if TYPE_CHECKING:
     from .ledger import Ledger
 
-__version__ = "0.1.0.dev0"
-__all__ = ["Ledger", "AssayError", "ValidationFailed", "NotFound", "PermissionDenied", "LeaseLost"]
+try:
+    from ._version import __version__  # written from git by the build (hatch-vcs)
+except ImportError:  # a source tree that was never built
+    __version__ = "0+unknown"
+__all__ = ["__version__", "Ledger", "AssayError", "ValidationFailed", "NotFound", "PermissionDenied", "LeaseLost"]
 
 
 def __getattr__(name: str) -> Any:

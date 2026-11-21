@@ -11,3 +11,4 @@ build/
 bench/out/
 .assay/
 .idea/
+src/assay/_version.py

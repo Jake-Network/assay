@@ -10,7 +10,7 @@ get compacted away, some never arrive, and two workers happily run the same conf
 agent a shared Postgres ledger instead: workers record each experiment the moment it finishes (failures too),
 check what was already tried before running anything, and hand the lead a 3-sentence summary with record ids.
 The lead reads a budgeted brief built by SQL (best result, verified claims, what not to repeat) instead of
-transcripts.
+transcripts. In the circle-packing benchmark this did not yet lower the lead's peak context (see Benchmark).
 
 ## 60-second start
 
@@ -68,15 +68,24 @@ need one Postgres URL. Details: [docs/autoresearch.md](docs/autoresearch.md).
 
 ## Benchmark
 
-<!-- Filled from bench/report.md after the real runs (MANUAL_QA.md). -->
+<!-- Report: bench/results/2026-11-20-claude-sonnet-5-5/report.md (bench at ae81ddc, claude-sonnet-5-5,
+     Claude Code 2.1.329, 3 runs per arm, USD 5 cap per run). C-3 was re-run once after a usage-limit error. -->
 
-Circle packing (n=26) with the same model, API budget, worker count, and wall-clock limit:
+Circle packing (n=26) with the same model, API budget, worker count, and wall-clock limit (mean ± sd over 3 runs):
 
-| | lost results | duplicate evaluations | lead context (max) | best per token |
+| | lost results | duplicate evaluations | lead context (max) | best per 1k tokens |
 |---|---|---|---|---|
-| A: subagents report as text | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
-| B: subagents write JSON files | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
-| C: assay | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| A: subagents report as text | 0 | 40.6% ± 12.8 | 29.4k ± 0.5k | 0.0287 ± 0.0003 |
+| B: subagents write JSON files | 0 | 14.4% ± 8.6 | 34.0k ± 1.5k | 0.0128 ± 0.0021 |
+| C: assay | 0 | 30.1% ± 3.7 | 39.9k ± 6.1k | 0.0057 ± 0.0009 |
+
+Release gate (MANUAL_QA.md), C against A:
+
+- Lost results 0: **pass** (0 in every C run; A and B also lost nothing at this scale).
+- Duplicate ratio below A: **pass** (30.1% vs 40.6%; B's result files did better at 14.4%).
+- Peak lead context below A: **fail** (39.9k vs 29.4k tokens).
+
+All arms reached the same best (2.636); C used about 5x the tokens of A.
 
 `python -m bench.run --dry` reproduces the pipeline without model calls.
 
@@ -107,8 +116,20 @@ URL has today, and agent names are self-declared: an agent that lies about its n
 "another agent". Treat the guarantees as protection against mistakes, not against a hostile agent, until
 per-agent tokens and a separate writer role land (v0.2). See [Honest limits](docs/concepts.md#honest-limits).
 
+## What it fits
+
+assay pays off when a job meets all three conditions:
+
+- **A number per attempt.** Every attempt yields a metric (`val_bpb`, `sum_radii`).
+- **Re-runnable.** The same config and code can run again with only the seed changed, so a rerun can verify a result.
+- **One space, explored together.** Several workers search the same space at the same time, so reading each
+  other's results removes repeats.
+
 ## What it is not
 
+- Not a tracker for handing out code implementation to subagents. There is no number per attempt and approaches
+  are free text, so duplicate blocking (an exact hash of config and `code_ref`) and rerun verification do not
+  work.
 - Not a memory layer for one agent or user (mem0, Letta).
 - Not an orchestrator: it does not run, schedule or route agents. It sits under Claude Code, Codex or your own
   loop.

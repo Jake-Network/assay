@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased: release readiness
+
+- Build identity: the package version comes from git (`0.1.devN+g<commit>` between tags, `0.1.0` on `v0.1.0`);
+  `assay --version`; `assay doctor` prints the build, the database schema revision and this build's newest one.
+- `assay doctor` checks the Claude Code connection: `assay` on Claude Code's PATH, plugin `assay@assay` installed
+  and enabled, `ASSAY_DATA_DIR`/`ASSAY_PROJECT` in Claude Code settings equal to the shell, recent `hook.log`
+  failures and `dead/` reports. Each failure prints the command that fixes it and the exit code is 1.
+- Search: every line ends with the record's tags; `--all-tags` (CLI), `all_tags` (SDK, MCP `assay_search`)
+  keeps records that have every listed tag (`--tags` keeps those with any).
+- Hook: the plugin's `SubagentStop` hook fires for every subagent and `ASSAY_HOOK_AGENTS` (default
+  `assay-worker`) picks the captured types; other types exit before reading config or spooling (about 150 ms
+  through the console script, which now skips the CLI framework for `assay hook`). Plugin version 0.1.1, so
+  existing installs pick up the new hook with `claude plugin update assay@assay`; `assay doctor` flags an
+  install that still has the old matcher.
+- `assay doctor` also compares `ASSAY_DATABASE_URL` between the shell and Claude Code (by server and database, never
+  printed), reads hook failures per database spool (a replay of another database's spool no longer hides them,
+  and reports queued for over 5 minutes count), and keeps going when one check raises (a bad `~user` path).
+- Hook replay: a malformed entry from an earlier build (`tool_input` not an object) no longer stops the
+  entries after it.
+- README: what assay fits (a number per attempt, re-runnable, one space explored together) and why delegating
+  code implementation is not one of them.
+- Benchmark: subagents run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`); newer Claude Code started
+  them in the background and the lead ended before its workers reported.
+
 ## Unreleased: review fixes (assay-review.md)
 
 - Core (migration 0006): the rerun oracle compares values against a baseline; TRUNCATE and agent re-roling are

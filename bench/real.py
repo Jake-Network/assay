@@ -96,7 +96,7 @@ class PreparedRun:
     project_id: str | None
 
     def command_env(self) -> dict[str, str]:
-        names = ("BENCH_ROOT", "BENCH_EVALS", "CLAUDE_CODE_SUBAGENT_MODEL")
+        names = ("BENCH_ROOT", "BENCH_EVALS", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS")
         overrides = {name: self.env[name] for name in names}
         if self.project_id:
             overrides["ASSAY_PROJECT"] = self.project_id
@@ -113,6 +113,9 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
     shutil.copy(ROOT / "bench" / "tools" / "evaluate.py", work / "tools" / "evaluate.py")
     env = {**os.environ, "BENCH_ROOT": str(ROOT), "BENCH_EVALS": str(out / "evals.jsonl"),
            "CLAUDE_CODE_SUBAGENT_MODEL": args.model,
+           # Newer Claude Code starts subagents in the background by default; the lead then ends its turn before the
+           # workers report and the stream carries one result event per wake-up. Every arm waits for its workers.
+           "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
            "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ.get("PATH", "")))}
     env.pop("ASSAY_PROJECT", None)
     prompt = LEAD[mode].format(task=TASK, rounds=args.rounds, workers=args.workers, evals=args.evals) + REPORT
@@ -372,7 +375,7 @@ def parse(mode: str, out: Path, run: int, project_id: str | None, budget_usd: fl
     events = _read_stream(out)
     results = [(observed, event) for observed, event in events if event.get("type") == "result"]
     if len(results) != 1:
-        raise BenchRunError("missing or multiple final Claude result events")
+        raise BenchRunError(f"expected one final Claude result event, found {len(results)}")
     finished, result = results[0]
     if result.get("subtype") != "success" or result.get("is_error") is not False:
         raise BenchRunError(f"Claude did not finish successfully ({result.get('subtype')})")

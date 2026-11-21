@@ -33,3 +33,28 @@ def test_autoresearch_template_matches_package() -> None:
     assert packaged.read_text() == copy.read_text()
     text = packaged.read_text()
     assert "MIT" in text and "0. assay ar replicate --auto" in text and "NEVER STOP" in text
+
+
+def test_readmes_say_what_assay_fits() -> None:
+    root = Path(__file__).resolve().parent.parent
+    en = (root / "README.md").read_text()
+    ko = (root / "README.ko.md").read_text()
+    assert en.index("## What it fits") < en.index("## What it is not")
+    assert ko.index("## 맞는 일") < ko.index("## 무엇이 아닌가")
+    for words in (["A number per attempt", "Re-runnable", "One space, explored together", "code implementation"],
+                  ["시도마다 숫자 지표", "재실행 가능", "같은 공간의 동시 탐색", "코드 구현"]):
+        text = en if words[0].isascii() else ko
+        assert all(w in text for w in words), words
+
+
+def test_benchmark_tables_are_filled_with_a_gate_verdict() -> None:
+    root = Path(__file__).resolve().parent.parent
+    for name, head, gate in (("README.md", "## Benchmark", "Release gate"),
+                             ("README.ko.md", "## 벤치마크", "출시 게이트")):
+        text = (root / name).read_text()
+        section = text[text.index(head):]
+        section = section[:section.index("\n## ", 1)]
+        assert "_tbd_" not in section and gate in section, name
+        assert "bench/results/" in section and section.count("**") >= 6, name
+        report = re.search(r"(bench/results/\S+/report\.md)", section)
+        assert report and (root / report.group(1)).is_file(), name

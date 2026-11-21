@@ -340,7 +340,7 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
             queued = True
             assert hooks._locked(spool)
             monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
-                {"cwd": str(repo), "last_assistant_message": "Concurrent report."})))
+                {"cwd": str(repo), "agent_type": "assay-worker", "last_assistant_message": "Concurrent report."})))
             hooks.main("subagent-stop")
         return snapshot
 
@@ -371,7 +371,134 @@ def test_missing_project_is_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.delenv("ASSAY_PROJECT", raising=False)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(tmp_path), "last_assistant_message": "x"})))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": str(tmp_path), "agent_type": "assay-worker",
+                                                                     "last_assistant_message": "x"})))
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
     hooks.main("subagent-stop")
     assert "no assay project" in (tmp_path / "state" / "assay" / "hook.log").read_text()
+
+
+def test_other_subagents_exit_before_any_work(repo: Path, worker: Ledger) -> None:
+    """The plugin hook fires for every subagent; a type outside ASSAY_HOOK_AGENTS records and spools nothing and
+    returns quickly through the installed console script."""
+    data = _stop(repo, "Explore results: the config lives in src/.", agent_type="Explore")
+    state = repo / "state"
+    env = {**os.environ, "XDG_STATE_HOME": str(state)}
+    env.pop("ASSAY_HOOK_AGENTS", None)
+    script = str(Path(sys.executable).parent / "assay")
+    times = []
+    for _ in range(3):
+        t = time.monotonic()
+        p = subprocess.run([script, "hook", "subagent-stop"], input=json.dumps(data), text=True,
+                           capture_output=True, cwd=repo, timeout=30, env=env)
+        times.append(time.monotonic() - t)
+        assert p.returncode == 0 and p.stdout == "" and p.stderr == ""
+    assert min(times) < 0.5, f"hook took {min(times):.3f}s"
+    assert not list(state.glob("assay/spool/*/*.json"))
+    assert not (state / "assay" / "hook.log").exists()
+    assert _notes(worker) == []
+
+
+def test_plugin_hook_passes_every_subagent() -> None:
+    root = Path(__file__).resolve().parent.parent / "integrations" / "claude-code"
+    for f in (root / "hooks" / "hooks.json", root / "manual" / "settings.hooks.json"):
+        [stop] = json.loads(f.read_text())["hooks"]["SubagentStop"]
+        assert "matcher" not in stop, f
+
+
+def test_untyped_events_are_not_captured_unless_wildcard(repo: Path, worker: Ledger,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hook fires for every subagent: a new event without an agent type is dropped at the entry point, but an
+    untyped entry already in the spool (written by an earlier build behind the plugin matcher) is still replayed."""
+    import io
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS", raising=False)
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
+    spool = hooks._spool_dir()
+    event = {"cwd": str(repo), "hook_event_name": "SubagentStop", "last_assistant_message": "Untyped report."}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    hooks.main("subagent-stop")
+    assert not list(spool.glob("*.json"))
+    monkeypatch.setenv("ASSAY_HOOK_AGENTS", "*")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    hooks.main("subagent-stop")
+    assert len(list(spool.glob("*.json"))) == 1
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS")
+    assert hooks.replay_now(spool).captured == 1
+    assert _notes(worker)[0]["payload"]["text"] == "Untyped report."
+
+
+def test_hook_help_is_not_read_as_an_event() -> None:
+    script = str(Path(sys.executable).parent / "assay")
+    p = subprocess.run([script, "hook", "--help"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert p.returncode == 0 and "Usage" in p.stdout
+
+
+def test_replay_keeps_the_capture_decision_made_at_enqueue(repo: Path, worker: Ledger,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """A custom worker accepted under ASSAY_HOOK_AGENTS=implementer is still captured when `assay hook replay` runs
+    from a shell with the default setting."""
+    import io
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setenv("ASSAY_HOOK_AGENTS", "assay-worker,implementer")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "implementer",
+         "last_assistant_message": "Implementer finding."})))
+    hooks.main("subagent-stop")
+    spool = hooks._spool_dir()
+    [entry] = spool.glob("*.json")
+    assert json.loads(entry.read_text())["accepted"] is True
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS")
+    s = hooks.replay_now(spool)
+    assert (s.captured, s.skipped) == (1, 0)
+    assert _notes(worker)[0]["payload"]["text"] == "Implementer finding."
+
+
+def test_entry_without_a_recorded_decision_is_kept_for_a_replay_with_its_setting(
+        repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An earlier build queued an implementer report without `accepted`. Replaying under the default setting must not
+    delete it: it waits in dead/ until a replay with the original ASSAY_HOOK_AGENTS captures it."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS", raising=False)
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    entry = {"event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
+             "data": {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "implementer",
+                      "last_assistant_message": "Queued before the upgrade."}}
+    (spool / "old.json").write_text(json.dumps(entry))
+    s = hooks.replay_now(spool)
+    assert (s.captured, s.skipped, s.dead) == (0, 0, 1) and not s.ok
+    assert (spool / "dead" / "old.json").exists() and not _notes(worker)
+    assert "ASSAY_HOOK_AGENTS=" in (hooks._state_dir() / "hook.log").read_text()
+    s = hooks.replay_now(spool)  # a second replay with the wrong setting still keeps it
+    assert s.dead == 1 and (spool / "dead" / "old.json").exists()
+    monkeypatch.setenv("ASSAY_HOOK_AGENTS", "assay-worker,implementer")
+    s = hooks.replay_now(spool)
+    assert (s.captured, s.dead) == (1, 0) and not list(spool.rglob("*.json"))
+    assert _notes(worker)[0]["payload"]["text"] == "Queued before the upgrade."
+
+
+def test_malformed_legacy_entry_does_not_stop_replay(repo: Path, worker: Ledger,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """An earlier build spooled Agent events whatever their tool_input; a string there must not stop the entries
+    after it."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.delenv("ASSAY_HOOK_AGENTS", raising=False)
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    bad = {"event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
+           "data": {"cwd": str(repo), "tool_name": "Agent", "tool_input": "not an object",
+                    "tool_response": "Legacy report."}}
+    (spool / "a-old.json").write_text(json.dumps(bad))
+    os.utime(spool / "a-old.json", (1, 1))  # first in the drain order
+    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id, "accepted": True,
+                               "data": {"cwd": str(repo), "last_assistant_message": "Valid report."}})
+    s = hooks.replay_now(spool)
+    assert s.queued == 0 and not list(spool.glob("*.json"))
+    assert {n["payload"]["text"] for n in _notes(worker)} == {"Legacy report.", "Valid report."}
+    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+                               "data": {"tool_name": "SubagentHandback", "tool_input": ["x"]}})
+    assert hooks.replay_now(spool).ok  # no text to capture, and no AttributeError

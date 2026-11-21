@@ -11,7 +11,27 @@ claude plugin install assay@assay
 Claude Code starts `assay mcp` and `assay hook` from its own PATH. If `command -v assay` finds nothing in a new
 terminal, run `uv tool update-shell` once (it adds `~/.local/bin` to your shell profile), open a new terminal and
 restart Claude Code. Without it the MCP server does not connect and the hook fails with exit 127 at every subagent
-stop. `assay doctor` checks the database and project from the same directory.
+stop. Run `assay doctor` in the project directory: it prints the installed build (`assay --version`), the database
+schema revision and the newest one this build knows, and checks what Claude Code needs. Each failing check prints the
+command that fixes it:
+
+| check | fails when |
+|---|---|
+| `assay on PATH` | `assay` is not on the PATH Claude Code inherits (or the `PATH` in its settings `env`) |
+| `claude code plugin` | `assay@assay` is not installed or not enabled (a manual install with `.mcp.json` passes) |
+| `plugin hooks` | the installed plugin predates 0.1.1 and still runs the hook only for `assay-worker` |
+| `ASSAY_DATABASE_URL`, `ASSAY_DATA_DIR`, `ASSAY_PROJECT` | the shell value selects a different database or project than the `env` in `~/.claude/settings.json`, `.claude/settings.json` or `.claude/settings.local.json` (the URL itself is never printed) |
+| `hook failures` | for this shell's database: `hook.log` has failure lines from the last 24 hours (after the last clean `assay hook replay` of its spool), or its spool holds reports in `dead/` or queued for over 5 minutes |
+
+Claude Code keeps an installed plugin version until you update it. After pulling a new assay, update the plugin as
+well and restart Claude Code:
+
+```bash
+claude plugin marketplace update assay && claude plugin update assay@assay
+```
+
+Bump `version` in `integrations/claude-code/.claude-plugin/plugin.json` whenever a file under
+`integrations/claude-code/` changes; an install of the same version does not pick the change up.
 
 On macOS the embedded database lives in `~/Library/Application Support/assay/pg`. To keep it elsewhere set
 `ASSAY_DATA_DIR`, and set it in Claude Code's `settings.json` `env` too: the CLI, MCP server and hook must see the
@@ -25,7 +45,7 @@ The plugin (`integrations/claude-code/`) contains:
 | `agents/assay-worker.md` | worker subagent: worker tools only (no `assay_decide`, `assay_create_tasks`, `assay_cancel_task`) |
 | `skills/assay/SKILL.md` | rules for any agent using the ledger |
 | `skills/assay-lead/SKILL.md` | the lead loop, `/assay:assay-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` (matcher `^assay:assay-worker$`) and `PostToolUse(SubagentHandback)` -> `assay hook ...` |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `ASSAY_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `assay hook ...` |
 
 For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
 
@@ -66,9 +86,12 @@ the citation cannot establish that the run wrote the record. A `note` claim tagg
 300 characters as its statement and the first 4,000 in `payload.text`. Identical message bodies merge across
 hook events. Reports with a shared opening and different conclusions each get a record.
 
-Other subagents (Explore, general-purpose, ...) are not captured. To capture your own worker types too, set
-`ASSAY_HOOK_AGENTS=assay-worker,implementer` and widen the `SubagentStop` matcher (manual install:
-`"matcher": "assay-worker|implementer"`).
+Other subagents (Explore, general-purpose, ...) are not captured. The hook fires for every subagent and
+`ASSAY_HOOK_AGENTS` (comma separated, default `assay-worker`, with or without a plugin prefix) decides which are
+captured; any other type exits at once without reading the config or touching the database. An event without an
+agent type (older Claude Code versions) is not captured either; `ASSAY_HOOK_AGENTS=*` captures every event. To capture your own
+worker types too, set `ASSAY_HOOK_AGENTS=assay-worker,implementer` in your shell and in the `env` of Claude Code's
+`settings.json`. This works the same for the plugin and the manual install.
 
 The hook uses the project selected by `.assay/config.toml` or `ASSAY_PROJECT`; when it finds neither (for example a
 worktree without a committed `.assay/`) it writes a "no assay project" line to the log. It writes the report to a
@@ -77,7 +100,9 @@ time. The processor retries connection failures for about a minute and keeps tho
 Failures a retry cannot fix (the project does not exist in this database, the schema is newer than this assay) move
 the report to the spool's `dead/` folder. Malformed spool files are quarantined with the `.invalid` suffix.
 After an outage or a fix, `assay hook replay` retries pending and dead reports once in the foreground using
-the same database settings. See `~/.local/state/assay/hook.log` for capture and retry status.
+the same database settings. A report queued by a build before this one does not record which
+`ASSAY_HOOK_AGENTS` accepted it; if the current setting does not cover its agent type, it moves to `dead/` instead of
+being dropped, and `ASSAY_HOOK_AGENTS=<the original list> assay hook replay` captures it. See `~/.local/state/assay/hook.log` for capture and retry status.
 
 Earlier builds placed spool files directly in `~/.local/state/assay/spool/` without recording the database target.
 To recover one, use the environment and project settings from the original session and run

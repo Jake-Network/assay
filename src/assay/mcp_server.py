@@ -216,10 +216,11 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
         @mcp.tool()
         async def assay_search(agent: str, text: str | None = None, kind: str | None = None,
                                status: str | None = None, tags: list[str] | None = None,
-                               limit: int = 20) -> list[dict[str, Any]]:
+                               limit: int = 20, all_tags: list[str] | None = None) -> list[dict[str, Any]]:
             """Call to find records by text, kind (claim|experiment|task|hypothesis|...), status or tags.
-            Returns one line per record with its id."""
-            return await _run(lambda: srv.lg(agent).search(text, kind, status, tags, limit))
+            tags matches records with any of them; all_tags only records with every one of them.
+            Returns one line per record with its id; the line ends with the record's tags."""
+            return await _run(lambda: srv.lg(agent).search(text, kind, status, tags, limit, all_tags=all_tags))
 
     @mcp.resource("assay://schema", name="schema", mime_type="text/markdown",
                   description="The v_* views assay_sql can read, with their columns. Read before assay_sql.")

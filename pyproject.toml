@@ -1,6 +1,6 @@
 [project]
 name = "assay"
-version = "0.1.0.dev0"
+dynamic = ["version"]
 description = "Your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,15 +24,34 @@ dependencies = [
 examples = ["numpy>=1.26", "scipy>=1.12"]
 
 [project.scripts]
-assay = "assay.cli:main"
+assay = "assay.entry:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "hypothesis>=6.100", "ruff>=0.5", "mypy>=1.10", "httpx>=0.27", "numpy>=1.26", "scipy>=1.12",
        "matplotlib>=3.8", "types-jsonschema"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# The version comes from git: 0.1.0 on the v0.1.0 tag, 0.1.devN+g<commit> between tags, so every install can say
+# which commit it was built from (`assay --version`).
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/assay/_version.py"
+
+[tool.uv]
+# rebuild a local install when the commit or tags change, not only when pyproject.toml does
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
+
+[tool.hatch.build.targets.sdist]
+# Only what the repository tracks: hatch reads .gitignore but not .git/info/exclude or the global excludes, so local
+# files (.claude/, working notes) would otherwise ship. tests/test_packaging.py keeps this list in step with git.
+only-include = [".claude-plugin", ".github", ".gitignore", "CHANGELOG.md", "DECISIONS.md", "LICENSE", "MANUAL_QA.md",
+                "README.ko.md", "README.md", "bench", "docker-compose.yml", "docs", "examples", "integrations",
+                "pyproject.toml", "scripts", "src", "tests", "uv.lock"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/assay"]

@@ -12,7 +12,9 @@ Inputs handled:
 - PostToolUse on SubagentHandback: tool_input.message (the report, when handed back through that tool)
 
 Only assay workers are captured: the agent type must be one of ASSAY_HOOK_AGENTS (default `assay-worker`, matched
-with or without a plugin prefix such as `assay:`). A run that handed its report back is captured once, from the
+with or without a plugin prefix such as `assay:`). The plugin's matcher passes every subagent; any other type, and an
+event with no agent type at all, exits before the config is read or anything is spooled (`ASSAY_HOOK_AGENTS=*`
+captures every event). A run that handed its report back is captured once, from the
 handback. Permanent failures (unknown project, schema newer than this assay, data Postgres refuses) move to
 `dead/` in the spool; `assay hook replay` retries them once more and reports what it did.
 """
@@ -132,18 +134,25 @@ def main(event: str) -> ReplaySummary | None:
         spool.mkdir(exist_ok=True, mode=0o700)
         if event == "replay":
             return replay_now(spool)
-        from .config import load
-
         raw = sys.stdin.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise ValueError(f"hook input exceeds {MAX_INPUT} characters")
         data = json.loads(raw or "{}")
         if not isinstance(data, dict):
             raise ValueError("hook input must be a JSON object")
+        if not is_worker(_agent_type(data)):
+            # The plugin hook fires for every subagent; ASSAY_HOOK_AGENTS decides which ones are captured. Leave
+            # before reading config, spooling or importing anything heavier.
+            return None
+        from .config import load
+
         cwd = Path(data.get("cwd") or os.getcwd())
         project = load(cwd).project
         if project:
-            _write_spool(spool, {"event": event, "project": project, "data": data, "spooled_at": time.time()})
+            # The capture decision is made here, under the environment Claude Code ran the hook with. A later
+            # `assay hook replay` from a shell with another ASSAY_HOOK_AGENTS must not undo it.
+            _write_spool(spool, {"event": event, "project": project, "data": data, "spooled_at": time.time(),
+                                 "accepted": True})
         else:
             log(f"{event}: not captured: no assay project for {cwd} (no .assay/config.toml there or above, and "
                 f"ASSAY_PROJECT unset; agent_type={data.get('agent_type')!r})")
@@ -201,8 +210,8 @@ def extract_text(data: dict[str, Any]) -> str:
         return str(data["last_assistant_message"])
     tool = data.get("tool_name")
     if tool == "SubagentHandback":
-        ti = data.get("tool_input") or {}
-        return str(ti.get("message") or "")
+        ti = data.get("tool_input")
+        return str(ti.get("message") or "") if isinstance(ti, dict) else ""
     if tool in ("Agent", "Task"):
         return _flatten(data.get("tool_response"))
     return ""
@@ -233,19 +242,25 @@ def _worker_types() -> set[str]:
 
 def _agent_type(data: dict[str, Any]) -> str | None:
     if data.get("tool_name") in ("Agent", "Task"):
-        t = (data.get("tool_input") or {}).get("subagent_type")
+        ti = data.get("tool_input")
+        t = ti.get("subagent_type") if isinstance(ti, dict) else None
     else:
         t = data.get("agent_type")
     return str(t) if t else None
 
 
-def is_worker(agent_type: str | None) -> bool:
-    """No agent type (the main session, older Claude Code) is let through; a named one must be a worker type,
-    with or without its plugin prefix (`assay:assay-worker`)."""
-    if not agent_type:
-        return True
+def is_worker(agent_type: str | None, *, require_type: bool = True) -> bool:
+    """The agent type must be a worker type, with or without its plugin prefix (`assay:assay-worker`). The hook
+    fires for every subagent, so a new event without a type (older Claude Code, an Agent call without
+    subagent_type) is not captured; ASSAY_HOOK_AGENTS=* captures everything, untyped events included.
+    require_type=False is for entries already in the spool: they passed the filter of the build that wrote them
+    (earlier builds relied on the plugin matcher and spooled untyped events), so replay must not drop them."""
     types = _worker_types()
-    return "*" in types or agent_type in types or agent_type.rsplit(":", 1)[-1] in types
+    if "*" in types:
+        return True
+    if not agent_type:
+        return not require_type
+    return agent_type in types or agent_type.rsplit(":", 1)[-1] in types
 
 
 def _is_handback(data: dict[str, Any]) -> bool:
@@ -443,11 +458,12 @@ def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: dateti
 
 
 def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project: str | None = None,
-            fired_at: float | None = None) -> str:
-    """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'."""
+            fired_at: float | None = None, accepted: bool = False) -> str:
+    """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'. accepted: the hook entry point already decided
+    to capture this event (spool entries record it), so the current ASSAY_HOOK_AGENTS is not consulted again."""
     from .config import load
 
-    if not is_worker(_agent_type(data)):
+    if not accepted and not is_worker(_agent_type(data), require_type=False):
         return f"skipped:not-a-worker ({_agent_type(data)})"
     text = extract_text(data).replace("\x00", "").strip()  # Postgres text cannot hold NUL
     if _is_handback(data):
@@ -519,19 +535,32 @@ def process_file(path: Path) -> str:
         event = spooled["event"]
         if not isinstance(data, dict) or not isinstance(event, str):
             raise ValueError("invalid hook spool entry")
+        accepted = spooled.get("accepted") is True
+        agent_type = _agent_type(data)
     except OSError as e:
         log(f"cannot read hook spool {path} (queued to retry): " + traceback.format_exc())
         return f"retry:{type(e).__name__}: {e}"
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
         try:
             path.rename(path.with_suffix(".invalid"))
         except OSError:
             return f"retry:could not quarantine invalid spool entry ({e})"
         log(f"invalid hook spool {path} (quarantined): " + traceback.format_exc())
         return f"dead:invalid spool entry ({e})"
+    if not accepted and not is_worker(agent_type, require_type=False):
+        # Queued by a build that did not record its decision: the ASSAY_HOOK_AGENTS that accepted it may differ
+        # from the current one. Keep it rather than drop it, so a replay with the original setting captures it.
+        reason = (f"agent type {agent_type!r} is not in the current ASSAY_HOOK_AGENTS and the entry predates "
+                  "the recorded capture decision; to capture it run: ASSAY_HOOK_AGENTS=<the setting it was queued "
+                  "under> assay hook replay")
+        try:
+            _bury(path, reason)
+        except OSError:
+            return f"retry:{reason}"
+        return f"dead:{reason}"
     try:
         result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
-                         fired_at=spooled.get("spooled_at"))
+                         fired_at=spooled.get("spooled_at"), accepted=accepted)
         log(f"{event}: {result}")
         path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001
@@ -572,7 +601,11 @@ def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
             if path.name in attempted:
                 continue
             seen.add(path.name)
-            outcome = process_file(path)
+            try:
+                outcome = process_file(path)
+            except Exception as e:  # noqa: BLE001 (one entry must not stop the others)
+                log(f"hook entry {path} could not be processed (queued to retry): " + traceback.format_exc())
+                outcome = f"retry:{type(e).__name__}: {e}"
             if outcome.startswith("retry:"):
                 left.append((path, outcome))
             else:
@@ -610,7 +643,7 @@ def replay_now(spool: Path) -> ReplaySummary:
     while any(p.name not in attempted for p in spool.glob("*.json")):
         with _lock(spool, blocking=True):
             attempted.update(_drain(spool, (), summary, attempted))
-    log(f"replay: {summary}")
+    log(f"replay {spool}: {summary}")  # doctor reads which spool a clean replay settled
     return summary
 
 
