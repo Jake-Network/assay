@@ -390,3 +390,21 @@ One line per decision the spec left open or that changed during implementation. 
   matches by prefix; pieces are found through their `piece start` task. Other packs refuse `--tags`.
 - **"Reads that changed a plan" is an upper bound (2-P0c).** `brief_log` does not record what a brief showed, so
   the count is citations of claims that a brief could have shown.
+- **CI re-runs rather than reading other workflows' results (2-P1a).** The action runs `check verify` itself, so
+  a CI attempt has the same shape and rule as a lead's. (The plan's wording was to read check-run results with
+  `gh`.)
+- **CI never reports a completion (2-P1a).** It links to an existing claim (`--reported-by` its reporter); with
+  none, it records only the attempt and the piece shows "not reported". A pull request rebased after the lead's
+  verify has new commit ids, so its pieces show "not reported".
+- **The summary's "verified" is the rule, not the decision (2-P1a).** It uses the ledger's own rule check on the
+  recorded runs and shows the claim's status beside it; the precedence is verified, then disagrees, then claimed
+  only.
+- **CI identity (2-P1a).** Owner URL: self-declared `ci:<run_id>`, a worker. Token: the token's agent for every
+  run (a token is one agent), with the run in `trace_ref`. The job that holds the credential runs the pull
+  request's code, so a harness token is recommended and CI passes `--no-decide` unless asked and holding a lead
+  token.
+- **Only the configured author's marked comment counts (2-P1a)**, and extra copies are deleted. Pull requests with
+  no pieces get no new comment. Forks and Dependabot pass with a notice, since they get no secrets; a missing
+  secret on a same-repository pull request fails.
+- **The action installs benchbook from its own tree (2-P1a)**, built as `0.0.0+action`, so the commands match the
+  action. It has not run on a real GitHub runner yet.

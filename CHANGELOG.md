@@ -72,6 +72,15 @@
 - Code projects get their own brief: `benchbook brief --tags mod:media` (MCP `benchbook_brief(tags=...)`) shows
   discarded approaches, open out-of-scope findings, occupied paths and the last verified commit per piece within
   the budget. Other packs refuse `--tags`. docs/code.md also has the "reads that changed a plan" count.
+- GitHub Action `integrations/github-action`: on a pull request it runs `check verify` for each piece named by a
+  `Benchbook-Piece:` commit trailer, as `ci:<run_id>` (or the token's agent), with the run's URL in `trace_ref`.
+  It keeps one comment marked `<!-- benchbook-summary -->` with each piece's state (verified, claimed only, re-run
+  disagrees, not reported), discarded approaches, open out-of-scope findings and test changes. Fork and Dependabot
+  pull requests get a notice and pass. See docs/code.md, "CI evidence and the PR summary".
+- `benchbook pr pieces --base B [--head H] [--claims]`, `benchbook pr summary --base B [--head H] [--run-url URL]`,
+  `benchbook pr comment --repo O/N --pr N --body-file F [--author LOGIN] [--update-only]`.
+- `benchbook check verify` takes `--trace-ref JSON|@file` (stored on the attempt) and `--no-decide` (record only,
+  even with lead authority). SDK: `checks.verify(..., trace_ref=, decide=)`.
 
 ## Unreleased: core for the verification ledger
 
