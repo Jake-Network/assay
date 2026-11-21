@@ -11,7 +11,7 @@ SIM = Path(__file__).resolve().parent.parent / "examples" / "autoresearch-sim" /
 
 
 def test_sim_swarm(db_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
     spec = importlib.util.spec_from_file_location("run_sim_swarm", SIM)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

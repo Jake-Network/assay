@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "completion reported for a piece",
+  "description": "An implementer's report that a piece is done at a commit. The report itself is not stored: only its hash, its size and which declared checks it names.",
+  "type": "object",
+  "required": [
+    "piece",
+    "commit"
+  ],
+  "properties": {
+    "piece": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "reported_by": {
+      "description": "The implementer, when the claim was recorded by someone else on its behalf (check verify under a token, which can write only in the verifier's own name).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "reported_checks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": [
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

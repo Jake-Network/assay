@@ -1,34 +1,57 @@
 # Schema
 
-Postgres schema `assay` (migrations: Alembic revisions that run plain SQL files in
-`src/assay/db/alembic/sql/`). Knowledge tables are append-only; triggers reject UPDATE and DELETE for every
+Postgres schema `benchbook` (migrations: Alembic revisions that run plain SQL files in
+`src/benchbook/db/alembic/sql/`). Knowledge tables are append-only; triggers reject UPDATE and DELETE for every
 role, superusers included.
+
+A ledger made before the rename (schema `assay`, revision 0007 at most) is renamed to `benchbook` in one transaction
+before Alembic runs; there is no revision number for that step. See
+[multi-machine.md](multi-machine.md#a-ledger-made-before-the-rename).
 
 ## Tables
 
 | table | what | mutable |
 |---|---|---|
-| `projects` | goal, primary metric and direction, improve epsilon, pack, settings (`config_schema`, `rerun_min_seeds`, `rerun_min_authors`, `partition_key`, `worker_intents`, `partitions`, ...) | settings only, through `update_settings` |
-| `agents` | contributor identity per project, `role` in worker / orchestrator / human / harness | no |
+| `projects` | goal, primary metric and direction, improve epsilon, pack, settings (`config_schema`, `rerun_min_seeds`, `rerun_min_authors`, `partition_key`, `worker_intents`, `max_lease_seconds`, `partitions`, ...) | settings only, through `update_settings` |
+| `agents` | contributor identity per project, `role` in worker / orchestrator / human / harness; `token_hash`, the SHA-256 of the agent's token when one was issued (`benchbook agent add`), never readable by `benchbook_writer` | `token_hash` only, by the owner (`benchbook agent add --rotate`, `benchbook agent revoke`) |
 | `tasks` | unit of work with a lease (`lease_owner`, `lease_expires_at`, `attempts`) | lease fields, through SDK functions only |
 | `task_events` | audit log of task changes (created, claimed, heartbeat, expired, done, failed, cancelled) | no |
-| `experiments` | config, code_ref, dedup_key, seed, run_status, metrics, primary_value, server-computed outcome, notes, artifacts, trace_ref | no |
+| `experiments` | config, code_ref, dedup_key, seed, run_status, metrics, primary_value, server-computed outcome, notes, artifacts, trace_ref, duplicate_of (the first ok run with the same key and seed, when the pack records repeats: `dedup_mode = "notify"`) | no |
 | `claims` | statement (1-500 chars), kind, payload, statement_hash (unique per project) | no |
 | `sources` | external evidence: uri, title, locator, sha256 | no |
 | `links` | src -relation-> dst between claims, experiments, sources, tasks | no |
 | `decisions` | status transitions of claims, or `invalidated` for experiments; oracle, rationale, evidence_ids | no |
 | `brief_log` | one row per brief (for "since your last brief") | no |
-| `dedup_hits` | `rejected` (a duplicate record was refused) and `avoided` (a repeat check matched) | no |
+| `dedup_hits` | `rejected` (a duplicate record was refused), `notified` (a duplicate was recorded as a repeat, `dedup_mode = "notify"`) and `avoided` (a repeat check matched) | no |
 | `settings_events` | every settings change: agent, JSON merge patch, resulting settings | no |
-| `blobs` | small files by content (`assay://blob/<sha256>`), per project; 1 MB default limit (`blob_max_bytes`) | no |
+| `blobs` | small files by content (`benchbook://blob/<sha256>`), per project; 1 MB default limit (`blob_max_bytes`) | no |
 
 Partitions (Step 3): when `settings.partition_key` is set, outcomes, `v_best`, `v_leaderboard`, `v_progress`
 and duplicate checks only compare experiments whose `config[partition_key]` is equal. Projects without it behave as
 before.
 
+## Roles and identity (migration 0008)
+
+| role | can | used by |
+|---|---|---|
+| owner (whoever ran the migrations) | everything; trusted: the identity triggers let its rows through unchanged | local mode, and the operator in team mode |
+| `benchbook_writer` (login, cluster-wide) | SELECT on every table and view (on `agents` every column but `token_hash`), INSERT on the record tables and `tasks`, UPDATE on `tasks` lease columns and `projects.settings`; nothing on `agents` rows, no UPDATE or DELETE on records | agents on a shared server, each with its token (docs/multi-machine.md) |
+| `benchbook_reader` | SELECT on the `benchbook_q` views only | `benchbook_sql` |
+
+A session is trusted when it may update `agents.token_hash` (the owner, a superuser). Every other session must bind
+an agent before it writes: `benchbook.authenticate(project, token)` (SECURITY DEFINER) checks the token against
+`agents.token_hash` and keeps it in the transaction-local setting `benchbook.token`;
+`benchbook.session_identity(project)` returns the agent and role that setting proves. The BEFORE triggers
+`*_identity` on `experiments`, `claims`, `sources`, `links`, `blobs`, `dedup_hits`, `brief_log`, `decisions`,
+`settings_events`, `tasks`, `task_events` and `projects` hash that setting again on every row, so a name or a hash
+set by hand proves nothing. The author column (`author`, `agent_id`, `decided_by`, `created_by`) must name the
+token's agent and is filled with it when left out; decisions, settings changes, open tasks and cancellations also
+need the agent's role to be orchestrator or human; task updates must be ones the SDK makes, by the lease holder
+(or, for an expired lease, by whoever takes it over). Refusals use SQLSTATE 42501 (`insufficient_privilege`).
+
 ## Views
 
-`assay_sql` (and `assay sql`) can read only these views, through the `assay_reader` role, already
+`benchbook_sql` (and `benchbook sql`) can read only these views, through the `benchbook_reader` role, already
 filtered to the current project, read-only, 2 s timeout, 200 rows / ~4,000 tokens.
 
 | view | columns (main) |
@@ -42,7 +65,7 @@ filtered to the current project, read-only, 2 s timeout, 200 rows / ~4,000 token
 | `v_progress` | best-so-far curve (per partition): id, author, created_at, primary_value, best_so_far, n, tokens_cum, partition, seed |
 | `v_partition_best` | per partition: `verified` result claims and `candidate` first runs awaiting judgement, with mean, std, n, code_ref, author, origin_id, rank |
 | `v_lineage` | experiment, parent_id (derived_from), depth, root_id, changed, description, outcome, primary_value, partition |
-| `v_inflight` | claimed tasks with a live lease: agent, title, spec, is_intent, partition, lease_left_s |
+| `v_inflight` | claimed tasks with a live lease: agent, title, tags, spec, is_intent, partition, lease_left_s (a code piece: `spec.piece`, `spec.paths`, docs/code.md) |
 | `v_knob_history` | per (partition, knob, value) over first runs: n, n_improved, n_no_change, n_worse, n_failed, n_verified, n_refuted, n_inconclusive, last_at |
 | `v_agent_stats` | agent, role, experiments, improved, claims, dedup_avoided, dedup_rejected, last_active_at |
 | `v_dedup_savings` | rejected, avoided |

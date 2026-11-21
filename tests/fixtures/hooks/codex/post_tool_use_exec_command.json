@@ -1,0 +1,15 @@
+{
+  "session_id": "thr_123",
+  "transcript_path": "/workspace/.codex/rollout.jsonl",
+  "cwd": "{CWD}",
+  "hook_event_name": "PostToolUse",
+  "model": "example-model",
+  "permission_mode": "default",
+  "turn_id": "turn_1",
+  "tool_name": "Bash",
+  "tool_use_id": "call_codex_3",
+  "tool_input": {
+    "command": "{COMMAND}"
+  },
+  "tool_response": "SECRET-OUTPUT-4b1d collected 2 items\n\ntests/test_impl.py F.\n\nFAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s\n1 failed, 1 passed in 0.42s"
+}

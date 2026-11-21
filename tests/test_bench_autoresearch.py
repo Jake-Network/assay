@@ -13,7 +13,7 @@ import pytest
 def test_sim_pipeline(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from bench.autoresearch import launch
 
-    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
     out = tmp_path / "run"
     assert launch.main(["--sim", "--agents", "2", "--minutes", "0.3", "--out", str(out)]) == 0
     cond = json.loads((out / "conditions.json").read_text())
@@ -23,13 +23,13 @@ def test_sim_pipeline(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPat
     runs = arms.load_runs(out, "A")
     assert runs and all(r["finished"] and {"code_hash", "val_bpb", "exit", "agent"} <= set(r) for r in runs)
     b = arms.load_runs(out, "B")  # B1: arm B's runs go through the same shim
-    assert b and {r["assay_run"] for r in b} <= {"run", "replicate", "calibration"}
+    assert b and {r["benchbook_run"] for r in b} <= {"run", "replicate", "calibration"}
     assert cond["baseline_code_hash"] in {r["code_hash"] for r in b}
     report = (out / "report.md").read_text()
     assert "pipeline check, not evidence" in report and "| 3. duplicate runs" in report
-    assert "| H1. runs started but not recorded | n/a (no ledger) | 0 (+0 started outside assay ar) |" in report
+    assert "| H1. runs started but not recorded | n/a (no ledger) | 0 (+0 started outside benchbook ar) |" in report
     nums = json.loads((out / "report.json").read_text())
-    assert nums["unrecorded_B"] == {"not_recorded": 0, "ledger_only": 0, "outside_assay": 0}
+    assert nums["unrecorded_B"] == {"not_recorded": 0, "ledger_only": 0, "outside_benchbook": 0}
     post = json.loads((out / "post_replicate.json").read_text())
     assert "A_false_best_ratio" in post and "B_false_best_ratio" in post  # B2: one procedure for both arms
     assert (out / "commands.sh").exists()
@@ -40,7 +40,7 @@ def test_real_mode_only_previews(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     from bench.autoresearch import launch
 
-    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
     up = tmp_path / "upstream"
     up.mkdir()
     sim = Path(__file__).resolve().parent.parent / "examples" / "autoresearch-sim"
@@ -54,13 +54,13 @@ def test_real_mode_only_previews(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
                         "--max-budget-usd", "1", "--out", str(out)])
     assert code == 0
     cmds = (out / "commands.sh").read_text()
-    assert cmds.count("claude -p") == 2 and "--max-budget-usd 1" in cmds and "program.assay.md" in cmds
+    assert cmds.count("claude -p") == 2 and "--max-budget-usd 1" in cmds and "program.benchbook.md" in cmds
     assert not (out / "A" / "runs.jsonl").exists()  # nothing ran
 
 
 
 def _run(**kw: object) -> dict[str, object]:
-    base = {"event": "start", "agent": "gpu0", "commit": "", "cwd": ".", "assay_run": None, "seed": None}
+    base = {"event": "start", "agent": "gpu0", "commit": "", "cwd": ".", "benchbook_run": None, "seed": None}
     return {**base, **kw}
 
 
@@ -70,19 +70,19 @@ def test_counts_are_the_same_for_both_arms(tmp_path: Path) -> None:
 
     (tmp_path / "B").mkdir()
     lines = [
-        _run(id="1", start=0.0, code_hash="base", assay_run="run", seed=0),
+        _run(id="1", start=0.0, code_hash="base", benchbook_run="run", seed=0),
         {"event": "end", "id": "1", "end": 60.0, "exit": 0, "killed": False, "val_bpb": 1.0},
-        _run(id="2", start=1.0, code_hash="base", assay_run="calibration", seed=1),
+        _run(id="2", start=1.0, code_hash="base", benchbook_run="calibration", seed=1),
         {"event": "end", "id": "2", "end": 61.0, "exit": 0, "killed": False, "val_bpb": 1.0},
-        _run(id="3", start=2.0, code_hash="x", assay_run="run", seed=0),
+        _run(id="3", start=2.0, code_hash="x", benchbook_run="run", seed=0),
         {"event": "end", "id": "3", "end": 62.0, "exit": 0, "killed": False, "val_bpb": 0.9},
-        _run(id="4", start=3.0, code_hash="x", assay_run="replicate", seed=1),
+        _run(id="4", start=3.0, code_hash="x", benchbook_run="replicate", seed=1),
         {"event": "end", "id": "4", "end": 63.0, "exit": 0, "killed": False, "val_bpb": 0.9},
         _run(id="5", start=4.0, code_hash="x"),  # the agent ran uv run train.py itself: a duplicate of x/0
         {"event": "end", "id": "5", "end": 124.0, "exit": 0, "killed": False, "val_bpb": 0.91},
-        _run(id="6", start=5.0, code_hash="y", assay_run="run", seed=0),
+        _run(id="6", start=5.0, code_hash="y", benchbook_run="run", seed=0),
         {"event": "end", "id": "6", "end": 6.0, "exit": None, "killed": True, "val_bpb": None},
-        _run(id="7", start=7.0, code_hash="z", assay_run="run", seed=0),  # SIGKILL: no end line
+        _run(id="7", start=7.0, code_hash="z", benchbook_run="run", seed=0),  # SIGKILL: no end line
     ]
     (tmp_path / "B" / "runs.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
     runs = arms.load_runs(tmp_path, "B")
@@ -91,7 +91,7 @@ def test_counts_are_the_same_for_both_arms(tmp_path: Path) -> None:
     assert d["duplicates"] == 1 and d["baseline_runs"] == 2 and d["minutes"] == 2.0
     ledger = [{"author": "gpu0", "code_ref": code, "seed": seed} for code, seed in
               [("base", 0), ("base", 1), ("x", 0), ("x", 1), ("y", 0)]]
-    assert arms.unrecorded(runs, ledger) == {"not_recorded": 1, "outside_assay": 1, "ledger_only": 0}
+    assert arms.unrecorded(runs, ledger) == {"not_recorded": 1, "outside_benchbook": 1, "ledger_only": 0}
 
 
 def test_shim_records_a_killed_run(tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ def test_shim_records_a_killed_run(tmp_path: Path) -> None:
     env = dict(os.environ, PATH=f"{shim}{os.pathsep}{os.environ['PATH']}", AR_BENCH_LOG=str(log),
                AR_BENCH_AGENT="gpu0", AR_BENCH_PY=sys.executable,
                AR_BENCH_HELPER=str(Path(launch.HERE) / "shim_log.py"), AR_BENCH_REAL_CMD="sleep 30",
-               AR_BENCH_REAL=shutil.which("true") or "true", ASSAY_AR_RUN="run", ASSAY_AR_SEED="0")
+               AR_BENCH_REAL=shutil.which("true") or "true", BENCHBOOK_AR_RUN="run", BENCHBOOK_AR_SEED="0")
     p = subprocess.Popen(["uv", "run", "train.py"], cwd=tmp_path, env=env, start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(100):
@@ -122,7 +122,7 @@ def test_shim_records_a_killed_run(tmp_path: Path) -> None:
     assert p.wait(timeout=20) != 0
     events = [json.loads(x) for x in log.read_text().splitlines()]
     assert [e["event"] for e in events] == ["start", "end"]
-    assert events[0]["assay_run"] == "run" and events[0]["seed"] == 0 and events[1]["killed"] is True
+    assert events[0]["benchbook_run"] == "run" and events[0]["seed"] == 0 and events[1]["killed"] is True
 
 
 def test_agents_that_stop_early_are_restarted(tmp_path: Path) -> None:
@@ -148,7 +148,7 @@ def test_gpu_groups_are_randomised(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     from bench.autoresearch import launch
 
-    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
     seed = next(s for s in range(100) if random.Random(s).random() < 0.5)  # a seed that swaps
     up = tmp_path / "upstream"
     up.mkdir()
@@ -246,14 +246,14 @@ def test_shim_collects_training_paths_and_plain_python(tmp_path: Path) -> None:
 def test_receipts_match_each_attempt() -> None:
     from bench.autoresearch import arms
 
-    runs = [_run(code_hash="x", assay_run="run", assay_run_id="first", seed=0)]
+    runs = [_run(code_hash="x", benchbook_run="run", benchbook_run_id="first", seed=0)]
     records = [{"author": "gpu0", "code_ref": "x", "ar_run_id": "second", "seed": 0}]
-    assert arms.unrecorded(runs, records) == {"not_recorded": 1, "outside_assay": 0, "ledger_only": 1}
+    assert arms.unrecorded(runs, records) == {"not_recorded": 1, "outside_benchbook": 0, "ledger_only": 1}
 
 
 def test_keep_matches_its_own_worker_and_score(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from assay.integrations.autoresearch.code import code_hash
     from bench.autoresearch import arms
+    from benchbook.integrations.autoresearch.code import code_hash
 
     tree = tmp_path / "A" / "gpu1"
     tree.mkdir(parents=True)

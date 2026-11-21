@@ -9,11 +9,11 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from assay import Ledger
-from assay.brief import compile_brief
-from assay.errors import ValidationFailed
-from assay.ids import short
-from assay.tokens import estimate_tokens
+from benchbook import Ledger
+from benchbook.brief import compile_brief
+from benchbook.errors import ValidationFailed
+from benchbook.ids import short
+from benchbook.tokens import estimate_tokens
 
 from .conftest import make_project
 
@@ -48,7 +48,7 @@ def test_brief_sections(lead: Ledger, worker: Ledger) -> None:
     lead.decide(c2.id, "supported", "llm_judge", "plausible")
     worker.propose_claim("hypothesis", "Boundary circles first")
     b = worker.brief(task_id=tid)
-    assert b.startswith(f"# assay brief · {lead.project_id} · ")
+    assert b.startswith(f"# benchbook brief · {lead.project_id} · ")
     assert "Goal: Maximise score." in b and "Metric: score (max) · Best: 2.02" in b
     assert f"## Your task t:{str(tid)[:8]}" in b
     assert "## Verified (1)" in b and "oracle: rerun" in b
@@ -57,7 +57,7 @@ def test_brief_sections(lead: Ledger, worker: Ledger) -> None:
     assert "failed: overlap violations" in b
     assert "## Open questions (no evidence yet)" in b and "Boundary circles first" in b
     assert "first brief for worker-1" in b
-    assert b.rstrip().endswith("assay_record_experiment (failures too).")
+    assert b.rstrip().endswith("benchbook_record_experiment (failures too).")
     lead.as_agent("worker-3").record_experiment({"init": "hex", "optimizer": "x"}, {"score": 3.0})
     b2 = worker.brief(task_id=tid)
     assert "## Since your last brief" in b2 and "1 new experiments, 1 new best" in b2
@@ -72,9 +72,9 @@ def test_budget_trims_bottom_first(lead: Ledger, worker: Ledger) -> None:
     full = worker.brief(budget_tokens=20000)
     small = worker.brief(budget_tokens=400)
     assert estimate_tokens(small) <= 400 * 1.05
-    assert "more: assay_search" in small
+    assert "more: benchbook_search" in small
     assert estimate_tokens(full) > estimate_tokens(small)
-    assert "Details: assay_get" in small and "Goal:" in small
+    assert "Details: benchbook_get" in small and "Goal:" in small
 
 
 def test_long_header_and_small_budget_fit_or_reject(db_url: str) -> None:
@@ -89,7 +89,7 @@ def test_long_header_and_small_budget_fit_or_reject(db_url: str) -> None:
     assert best.id is not None and short("experiment", best.id) in brief
     assert f"## Your task {short('task', task)}" in brief and '"실험' in brief
     assert "Tags: 긴태그" in brief and "Spec: {" in brief
-    assert "…" in brief and "Details: assay_get" in brief
+    assert "…" in brief and "Details: benchbook_get" in brief
     with pytest.raises(ValidationFailed, match="budget_tokens: too small"):
         lead.brief(task, budget_tokens=30)
 
@@ -118,7 +118,7 @@ def _rand_ops() -> st.SearchStrategy:
     return st.lists(op, max_size=25)
 
 
-@settings(max_examples=int(os.environ.get("ASSAY_PROPERTY_EXAMPLES", "1000")), deadline=None,
+@settings(max_examples=int(os.environ.get("BENCHBOOK_PROPERTY_EXAMPLES", "1000")), deadline=None,
           suppress_health_check=list(HealthCheck))
 @given(ops=_rand_ops(), budget=st.integers(300, 3000), use_task=st.booleans())
 def test_i5_property(db_url: str, ops: list, budget: int, use_task: bool) -> None:

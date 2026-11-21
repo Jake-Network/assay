@@ -1,0 +1,16 @@
+{
+  "session_id": "gemini-session-1",
+  "transcript_path": "/home/user/.gemini/tmp/session.json",
+  "cwd": "{CWD}",
+  "hook_event_name": "AfterTool",
+  "timestamp": "2026-11-21T09:00:00.000Z",
+  "tool_name": "run_shell_command",
+  "tool_input": {
+    "command": "{COMMAND}",
+    "description": "Run the unit tests"
+  },
+  "tool_response": {
+    "llmContent": "Output: 2 passed in 0.31s\nProcess Group PGID: 4242",
+    "returnDisplay": "2 passed in 0.31s"
+  }
+}

@@ -1,0 +1,69 @@
+# benchbook evidence for pull requests: re-run the declared checks of each piece the pull request's commits complete
+# (trailer "Benchbook-Piece: <piece>"), record the re-runs in the shared ledger, and keep one summary comment on the
+# pull request. README.md in this folder has a sample workflow; docs/code.md has what is recorded and why.
+name: benchbook evidence
+description: Re-run each completed piece's declared checks, record them in the benchbook ledger, and keep one summary comment on the pull request.
+author: benchbook
+inputs:
+  database-url:
+    description: The shared ledger's Postgres URL. Pass it from a secret (secrets.BENCHBOOK_DATABASE_URL); never write it in the workflow. Prefer a benchbook_writer login with a token over the owner's URL.
+    required: false
+    default: ""
+  token:
+    description: A per-agent token (secrets.BENCHBOOK_TOKEN) issued with benchbook agent add. The token's agent then authors every record instead of the self-declared ci:<run_id>.
+    required: false
+    default: ""
+  project:
+    description: The ledger project (default .benchbook/config.toml of the checkout).
+    required: false
+    default: ""
+  decide:
+    description: "'true' lets check verify decide (verified or inconclusive) when the token is a lead's (orchestrator or human role). Default 'false': CI records its re-runs and decides nothing."
+    required: false
+    default: "false"
+  comment:
+    description: "'false' skips the pull request comment (the summary still goes to the job summary)."
+    required: false
+    default: "true"
+  comment-author:
+    description: Only a marked comment by this login is taken for the summary. github-actions[bot] is the author of comments made with the default GITHUB_TOKEN; set it to your bot's login when github-token is another token, or to empty to accept any author.
+    required: false
+    default: github-actions[bot]
+  github-token:
+    description: Token for the comment (needs pull-requests write). It is given to gh only, never to the checks.
+    required: false
+    default: ${{ github.token }}
+  benchbook:
+    description: "What to pip install: empty installs benchbook from this action's own tree (so the commands match the action); a requirement such as benchbook==0.2.0; or skip when benchbook is already on PATH."
+    required: false
+    default: ""
+  python:
+    description: The Python (3.11 or later) to install benchbook with.
+    required: false
+    default: python3
+  working-directory:
+    description: The repository checkout (with .benchbook/config.toml), relative to the workspace.
+    required: false
+    default: "."
+runs:
+  using: composite
+  steps:
+    - name: benchbook evidence
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      # Every value goes in through the environment, never into the script text (script injection).
+      env:
+        BB_DATABASE_URL: ${{ inputs.database-url }}
+        BB_TOKEN: ${{ inputs.token }}
+        BB_PROJECT: ${{ inputs.project }}
+        BB_DECIDE: ${{ inputs.decide }}
+        BB_COMMENT: ${{ inputs.comment }}
+        BB_COMMENT_AUTHOR: ${{ inputs.comment-author }}
+        BB_GITHUB_TOKEN: ${{ inputs.github-token }}
+        BB_INSTALL: ${{ inputs.benchbook }}
+        BB_PYTHON: ${{ inputs.python }}
+        BB_PR: ${{ github.event.pull_request.number }}
+        BB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        BB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BB_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: bash "$GITHUB_ACTION_PATH/run.sh"

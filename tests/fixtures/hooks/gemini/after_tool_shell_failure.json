@@ -1,0 +1,16 @@
+{
+  "session_id": "gemini-session-1",
+  "transcript_path": "/home/user/.gemini/tmp/session.json",
+  "cwd": "{CWD}",
+  "hook_event_name": "AfterTool",
+  "timestamp": "2026-11-21T09:00:00.000Z",
+  "tool_name": "run_shell_command",
+  "tool_input": {
+    "command": "{COMMAND}",
+    "description": "Run the unit tests"
+  },
+  "tool_response": {
+    "llmContent": "Output: SECRET-OUTPUT-4b1d collected 2 items\n\ntests/test_impl.py F.\n\nFAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s\n1 failed, 1 passed in 0.42s\nExit Code: 1\nProcess Group PGID: 4243",
+    "returnDisplay": "SECRET-OUTPUT-4b1d collected 2 items\n\ntests/test_impl.py F.\n\nFAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s\n1 failed, 1 passed in 0.42s"
+  }
+}

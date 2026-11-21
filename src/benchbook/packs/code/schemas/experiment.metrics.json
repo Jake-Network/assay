@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "code metrics",
+  "description": "Results of the declared checks on one commit. Never the check output or the diff: names, counts, guarded paths and a failure signature only. checks_passed and checks_total are required when run_status is ok (checked in code).",
+  "type": "object",
+  "properties": {
+    "checks_passed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "checks_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": [
+          "ok",
+          "fail",
+          "timeout",
+          "not_run"
+        ]
+      }
+    },
+    "checks_declared": {
+      "description": "Every check declared at the merge-base, run or not. A run that left one out (--checks) is partial: it never verifies a completion.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000
+    },
+    "failure_signature": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "guard_touched": {
+      "type": "boolean"
+    },
+    "guard_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100
+    },
+    "checks_changed": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": {
+    "type": [
+      "number",
+      "string",
+      "boolean"
+    ]
+  }
+}

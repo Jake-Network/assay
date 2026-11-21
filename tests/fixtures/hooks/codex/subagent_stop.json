@@ -1,0 +1,14 @@
+{
+  "session_id": "thr_123",
+  "transcript_path": "/workspace/.codex/rollout.jsonl",
+  "cwd": "{CWD}",
+  "hook_event_name": "SubagentStop",
+  "model": "example-model",
+  "permission_mode": "default",
+  "turn_id": "turn_2",
+  "agent_id": "agent_codex_1",
+  "agent_type": "benchbook-worker",
+  "agent_transcript_path": "/workspace/.codex/agent_codex_1.jsonl",
+  "stop_hook_active": false,
+  "last_assistant_message": "Piece media done. The upload test failed before the fix and passes after it; no records cited."
+}

@@ -1,10 +1,29 @@
 [project]
-name = "assay"
+name = "benchbook"
 dynamic = ["version"]
 description = "Your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+keywords = ["agents", "multi-agent", "claude-code", "mcp", "experiment-tracking", "reproducibility", "verification",
+            "ledger", "autoresearch", "postgres"]
+# Only what CI runs: Linux and macOS, Python 3.11 to 3.13. The licence is the SPDX expression above (PEP 639), so
+# there is no licence classifier.
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Quality Assurance",
+  "Typing :: Typed",
+]
 dependencies = [
   "psycopg[binary]>=3.2",
   "psycopg-pool>=3.2",
@@ -20,11 +39,20 @@ dependencies = [
   "sqlalchemy>=2.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Jake-Network/benchbook"
+Documentation = "https://github.com/Jake-Network/benchbook/tree/main/docs"
+Repository = "https://github.com/Jake-Network/benchbook"
+Issues = "https://github.com/Jake-Network/benchbook/issues"
+Changelog = "https://github.com/Jake-Network/benchbook/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 examples = ["numpy>=1.26", "scipy>=1.12"]
 
 [project.scripts]
-assay = "assay.entry:main"
+benchbook = "benchbook.entry:main"
+# the command's name before the rename, kept during 0.1.x: hooks and plugins installed then still call it
+assay = "benchbook.entry:legacy_main"
 
 [dependency-groups]
 dev = ["pytest>=8", "hypothesis>=6.100", "ruff>=0.5", "mypy>=1.10", "httpx>=0.27", "numpy>=1.26", "scipy>=1.12",
@@ -35,12 +63,12 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 # The version comes from git: 0.1.0 on the v0.1.0 tag, 0.1.devN+g<commit> between tags, so every install can say
-# which commit it was built from (`assay --version`).
+# which commit it was built from (`benchbook --version`).
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/assay/_version.py"
+version-file = "src/benchbook/_version.py"
 
 [tool.uv]
 # rebuild a local install when the commit or tags change, not only when pyproject.toml does
@@ -54,7 +82,7 @@ only-include = [".claude-plugin", ".github", ".gitignore", "CHANGELOG.md", "DECI
                 "pyproject.toml", "scripts", "src", "tests", "uv.lock"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/assay"]
+packages = ["src/benchbook"]
 
 [tool.ruff]
 line-length = 120

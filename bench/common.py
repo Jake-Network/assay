@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "examples" / "circle-packing"))
 
-from assay.dedup import canonical_json  # noqa: E402
+from benchbook.dedup import canonical_json  # noqa: E402
 
 SPACE = {"init": ["grid", "hex", "random", "lattice_perturb"], "optimizer": ["slsqp", "penalty"],
          "iters": [10, 30, 100, 300, 1000], "perturb": [0.0, 0.01, 0.02, 0.05]}
@@ -77,6 +77,9 @@ class RunMetrics:
     curve: list[tuple[int, float]]
     cost_usd: float | None = None
     curve_source: str = "simulated"
+    # Per-message usage against the final totals (bench.real.usage_check). tokens_total above is the final result
+    # event's own `usage`, which covers the lead's API calls; the whole session's total is in here.
+    usage_check: dict[str, Any] | None = None
 
 
 def load_evals(path: Path) -> list[dict[str, Any]]:

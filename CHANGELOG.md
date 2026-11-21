@@ -1,5 +1,203 @@
 # Changelog
 
+## Unreleased: code pack
+
+- `benchbook check verify <piece> <commit> [--reported-by NAME] [--report-file F] [--base REF] [--checks a,b]`
+  re-runs the checks declared in `.benchbook/config.toml` `[checks]` on a reported commit in a clean worktree. It
+  records the completion claim (the implementer's) and the attempt (the verifier's), linked supports/refutes, and
+  notes guarded files and `[checks]` changes. See docs/code.md.
+- New `code` pack and `benchbook init --pack`. `--pack code` defaults to metric `checks_passed` (max),
+  partitioned by piece.
+- `.benchbook/config.toml` accepts `[checks.<name>]` (cmd, junit, timeout) and `[guard]` (paths, base).
+- `benchbook check verify` decides when the verifier has lead authority (orchestrator or human): `verified`
+  (oracle rerun) when every check passed, nothing guarded was touched and `[checks]` is unchanged; `inconclusive`
+  when earlier attempts of the piece at that commit disagree, with both ids as evidence; no decision when guarded
+  files or `[checks]` changed, with the files named. Without lead authority it records as before and says so.
+  `--json` adds `decision`, `decision_reason`, `needs_person`, `evidence`, `decisions`.
+- pack.toml `[verify]`: `rule = "replication"` (default, the rule so far; core and ml-research) or `"all_pass"`
+  with `min_runs` / `min_authors` (code pack: 1 and 2). Under `all_pass`, `decide ... verified --oracle rerun` on
+  a completion needs clean passing re-runs by agents other than the implementer and no failed or guard-flagged
+  attempt of that commit; otherwise it is refused, naming the `human` oracle.
+- SDK: `Ledger.check_rerun(claim, evidence)` (dry run of the rerun rule) and `Ledger.completion_attempts(claim)`.
+- Under `BENCHBOOK_TOKEN`, `check verify` uses the token's agent as the verifier and records the completion claim
+  in its own name, with `payload.reported_by`.
+- `benchbook piece start <piece> --paths 'glob'... [--tags mod:x] [--lease S]` declares the paths a piece will
+  change. A piece whose paths overlap a live piece's (same file, a file under its glob, or two globs that can
+  match one path) is refused with the first piece's task id (exit 2). `piece done` releases it, `piece list`
+  shows who holds what, and starting again renews the lease. See docs/code.md, "Path occupancy".
+- SDK: `create_intent` and `update_intent` take `exclusive_paths`, a spec field holding path globs checked for
+  overlap under the intent lock. `benchbook.globs` gains `overlap`, `first_overlap` and `escape`.
+- `init --pack code` also sets `worker_intents = true`.
+- Out-of-scope findings: with `[report] out_of_scope_heading` in `.benchbook/config.toml`, the hook records each
+  item of that section of a code-pack implementer's final report as an `observation` claim tagged `out-of-scope`
+  (plus `piece:`, `mod:`, `file:` when known). A repeated finding adds the new report as evidence instead of a
+  second claim (docs/code.md).
+- `benchbook finding accept <claim> --issue URL --oracle ...` accepts a finding: it links the follow-up issue as a
+  source and decides it `supported`. Reject with `benchbook decide <claim> refuted ...`.
+- `benchbook check run <name> [--piece P]` runs a declared check from the current checkout. The output and exit
+  code are the command's, and the run is recorded through the hook spool as an attempt in check verify's shape
+  plus `via` and `worktree_dirty`. A database outage never changes the exit code; `benchbook hook replay`
+  records the run later.
+- Hooks: `benchbook hook bash-result` (PostToolUse/PostToolUseFailure on Bash) records a declared check run as an
+  attempt, with exit code and last-line hash, never the output. `benchbook hook task-completed` (TaskCompleted)
+  keeps a piece's task open until its HEAD passes every declared check. Plugin 0.1.3; `benchbook doctor` flags
+  older installs.
+- Record coverage: matched runs are logged to `observed.jsonl` in the spool directory; the query is in
+  docs/code.md.
+- Runs from the implementer's checkout (`via`) never count as independent re-runs, and a run with uncommitted
+  changes is no attempt of its commit.
+- `bench/code/`: SWE-bench Verified measurement of the false completion rate: a pre-registration, 40 committed
+  instances (`select.py`), the visible and hidden checks in the harness's Docker image (`swe_check.py`), a
+  resumable implementer + `check verify` runner with `--dry` (`run.py`), and a report whose rate comes from
+  `docs/code.md`'s SQL (`report.py`). Not yet run.
+- `bench`: no arm loads the account's claude.ai connectors any more (`ENABLE_CLAUDEAI_MCP_SERVERS=false`);
+  `command.json` records the MCP servers a session started with.
+- Codex CLI and Cursor hook manifests (`integrations/codex/hooks.json`, `integrations/cursor/hooks.json`) run
+  `benchbook hook bash-result` and `benchbook hook subagent-stop` with `--harness codex|cursor`. Declared check
+  runs are recorded when the harness's input gives the exit code (Cursor `tool_output.exitCode`; Codex only when
+  `tool_response` carries its `Process exited with code N` header) and observed as `unrecordable` otherwise.
+  Worker reports are captured as notes. See docs/harnesses.md.
+- `benchbook hook ... --harness gemini` reads Gemini CLI's `AfterTool` result for `run_shell_command` (the
+  `Exit Code: N` line). No manifest.
+- `observed.jsonl` lines carry `harness` (and `harness_version` from Cursor). `benchbook doctor` adds
+  `harness hook input`, which fails when a harness's hook input no longer has the documented shape.
+- Failure signatures come from one module (`signature.py`): the first failing JUnit test and its type (plus a
+  count and set hash when several fail), TypeScript error codes and files, or the exit code and a hash of the
+  normalised last error line. `check verify`, `check run` and the Bash hook use it. The output is never stored.
+- `check run` and `check verify` name an earlier attempt of the same piece that failed the same way, and the
+  approaches tried. It is a notice, not a refusal. `check run` asks only after a failure and waits at most 2 s.
+- A finished failed attempt leaves a discarded-approach claim (`observation`, tags `discarded`, `piece:<p>`,
+  `approach:<a>`, `mod:`), one per piece, signature and approach. `check run --approach NAME` /
+  `BENCHBOOK_APPROACH` sets `config.approach`.
+- Code projects get their own brief: `benchbook brief --tags mod:media` (MCP `benchbook_brief(tags=...)`) shows
+  discarded approaches, open out-of-scope findings, occupied paths and the last verified commit per piece within
+  the budget. Other packs refuse `--tags`. docs/code.md also has the "reads that changed a plan" count.
+- GitHub Action `integrations/github-action`: on a pull request it runs `check verify` for each piece named by a
+  `Benchbook-Piece:` commit trailer, as `ci:<run_id>` (or the token's agent), with the run's URL in `trace_ref`.
+  It keeps one comment marked `<!-- benchbook-summary -->` with each piece's state (verified, claimed only, re-run
+  disagrees, not reported), discarded approaches, open out-of-scope findings and test changes. Fork and Dependabot
+  pull requests get a notice and pass. See docs/code.md, "CI evidence and the PR summary".
+- `benchbook pr pieces --base B [--head H] [--claims]`, `benchbook pr summary --base B [--head H] [--run-url URL]`,
+  `benchbook pr comment --repo O/N --pr N --body-file F [--author LOGIN] [--update-only]`.
+- `benchbook check verify` takes `--trace-ref JSON|@file` (stored on the attempt) and `--no-decide` (record only,
+  even with lead authority). SDK: `checks.verify(..., trace_ref=, decide=)`.
+- check verify finds a completion claim by piece, commit and reporter, not by its statement: another agent's claim
+  with the same statement no longer takes the credit or blocks the piece; such a report gets a claim whose
+  statement names the reporter.
+- The implementers of a completion include the reporter of every completion claim of the same piece and commit;
+  `pr pieces --claims` and the PR summary take `payload.reported_by` only from claims a lead, a person or a
+  harness agent recorded.
+- A check with `junit = true` that exits 0 now fails unless its JUnit report shows at least one test ran and none
+  failed (`exit 0, no JUnit report`, `exit 0, no tests ran`), in check verify and check run.
+- check verify runs the checks without the ledger's credentials (`BENCHBOOK_TOKEN`, `BENCHBOOK_DATABASE_URL`,
+  `BENCHBOOK_READER_PASSWORD`, their `ASSAY_` forms, `PGPASSWORD`, `PGPASSFILE`).
+- Under tokens the database refuses a worker's intent without `settings.worker_intents`, a lease longer than
+  `settings.max_lease_seconds` (new, default 86400), and an `expired` task event that does not name the previous
+  holder.
+- check verify records `metrics.checks_declared` (every check declared at the merge-base). A run of only some
+  checks (`--checks`) is recorded as partial: it never verifies a completion, in the all_pass rule, in verify's own
+  decision or in the PR summary, though a check it ran that failed still counts.
+- check verify takes `--claim ID`: the re-run is evidence for that completion claim, after checking that it is
+  about the piece and commit; its reporter is the implementer. `pr pieces --claims` adds the claim id as a fourth
+  column and the GitHub Action passes it, so CI links its re-run to the claim the summary shows. Without `--claim`,
+  verify also finds a claim whatever its statement (by piece, commit and reporter).
+- The hook spool is bound to its writer: under `BENCHBOOK_TOKEN` each token has its own spool directory, and an
+  entry records a digest of the token it was queued with. A processor or `hook replay` under another token (or
+  none) leaves it queued, so one agent can no longer record another's queued reports or runs in its own name.
+  Without a token the spool is where it was.
+- The Bash hook records a `junit = true` check that exited 0 only with a JUnit report of that run, named on the
+  command line where the declaration has `{junit}`, in which a test ran and none failed. Without such a report the
+  run is observed as `unrecordable`, and the completion gate asks for `benchbook check run`.
+- `heartbeat` and `update_intent` refuse a lease that has run out (`LeaseLost`), so an expired piece is never
+  revived next to the piece that took its paths. `piece start` without `--paths` after its lease ran out takes the
+  same paths again as a new piece, through the overlap check.
+- After a timeout or an interruption the runner waits for the command's whole process group, not only the shell,
+  and sends SIGKILL to what is left after 10 s: a child that ignores SIGTERM no longer outlives the run.
+- The Bash hook takes a JUnit report only if it was modified after the command started (1 s of slack, down from
+  120 s), and only once: a report already read for a recorded run is not this run's. A harness that reports no
+  duration cannot record a passing JUnit check through the hook.
+- `heartbeat` takes the intent lock the overlap check holds and reads the expiry after it, so a renewal can no
+  longer commit next to a piece that took the paths meanwhile.
+- A partial pass gets no `supports` link: it no longer counts as a re-run in the false completion rate. A partial
+  run that fails still refutes.
+- `piece start` without `--paths` also restores a piece that a `next_task` marked failed when its lease ran out;
+  one released with `piece done` still needs `--paths`.
+- `hook replay` under an agent's new token (after `agent add --rotate`) adopts the entries queued under its
+  earlier token, when a processor had confirmed that token's agent (`writer.info` in the spool).
+- The Bash hook matches a check declared with a bare `--junitxml {junit}`: the word before the option was lost.
+- New `benchbook hook bash-start` (PreToolUse on Bash; plugin 0.1.4 and the manual hooks add it): it notes a
+  JUnit report's state before a declared check runs, and the Bash hook records a passing JUnit run only when the
+  report differs from that note afterwards. No clock is compared any more. Reading a report and marking it used
+  happen under one lock. Harnesses other than Claude Code cannot record a passing JUnit run through the hook.
+- A new piece and a renewal count their lease from the database's clock after the intent lock, and the overlap
+  checks read expiry with the same clock.
+- `piece start` without `--paths` no longer restarts a piece that `piece done` released while it was renewing it.
+- `hook replay` reports entries queued under a token no processor ever confirmed as `held` (and exits non-zero),
+  instead of a clean, empty replay. Adopting an earlier token's entries is idempotent: a retry after a failed
+  removal of the original records nothing twice.
+
+## Unreleased: core for the verification ledger
+
+- `benchbook exp run --config '<json>' [--seed N] -- <cmd>` checks the ledger, runs the command (output shown
+  unchanged) and records the result in one command. Duplicates in a refuse-mode pack are not run (exit 2);
+  `--retry-failed` re-runs a config that only failed. Metrics come from `key: number` lines or a JSON last line.
+  Non-zero exits, timeouts and interrupts are recorded; the exit code passes through.
+- Worker instructions (plugin, manual copy, skill, AGENTS.md) use `exp run` where a shell is available; the MCP
+  tools remain the fallback. Plugin 0.1.2. The capture hook recognises `exp run` receipts.
+- circle-packing: `run_config.py` scores one `packing.py` config; README (b) uses `exp run`.
+- `bench`: real runs save the Claude Code session, copy the lead's and subagents' transcripts into the run
+  directory, and record per-run usage reconciliation (`usage_check`) in `metrics.json`. Configuration C also
+  keeps the queued hook entries and a `benchbook export` of its project.
+- `bench`: new `python -m bench.analyze_cost <runs>` writes `cost-breakdown.md`: prompt tokens by what entered
+  the context, repeated and near evaluations, and a verdict for each cost hypothesis.
+- Core (migration 0009): `dedup_mode = "refuse" | "notify"` in pack.toml. `refuse` (default; core and ml-research)
+  is the behaviour so far. With `notify`, `record_experiment` stores an ok run whose config, code_ref and seed
+  were already recorded and returns the first such run as `duplicate_of` with a `notice`; the MCP tool returns
+  both, `benchbook exp record` exits 0 (notice in `--json`, on stderr otherwise). `experiments.duplicate_of`
+  marks the repeat, `dedup_hits` logs it as `notified`, and the unique indexes still refuse any duplicate that
+  does not declare its original.
+- Hook: a recorded repeat (new id with `duplicate_of`) counts as the subagent's own write.
+- Per-agent tokens: `benchbook agent add NAME --role worker` prints a token once (only its SHA-256 is stored);
+  `--rotate`, `agent revoke` and `agent list` manage it. Clients read `BENCHBOOK_TOKEN`.
+- Migration 0008: the `benchbook_writer` login. On it, every write must carry the token of the agent it names,
+  and decisions, settings, open tasks and cancellations need an orchestrator or human token. Owner connections
+  (local mode) are unchanged. `export()` no longer includes agent token hashes.
+- Runner: the command runner is core (`benchbook.runner`). `run_command` takes `metric=None` (exit code 0 alone
+  is ok) and `tee=True` (the output goes to the log file and, unchanged and as it arrives, to stdout). The
+  autoresearch runner module re-exports the same names.
+- `benchbook ar import --from pi-autoresearch|uditgoenka|codex-autoresearch <path> --hw <class>` records the run
+  logs of the three autoresearch skills as experiments. Imported keeps become candidates that other agents
+  re-run. Importing the same log again adds nothing.
+- `benchbook ar gate on [--from <skill>]` turns on the reproduction gate (verified baseline, referee
+  replications, rerun rule) in one command, creating the project if needed, and writes a program fragment for
+  the skill. Imported runs, results.tsv included, now get the time-budget check on the training time the log
+  reports.
+
+## Unreleased: renamed to benchbook
+
+- The project is now `benchbook`: distribution, import package, command, `BENCHBOOK_*` environment variables,
+  `.benchbook/config.toml`, database schema `benchbook` / `benchbook_q`, role `benchbook_reader`, MCP tools
+  `benchbook_*`, plugin `benchbook@benchbook`, agent `benchbook-worker`, skills `benchbook` and
+  `benchbook-lead`, `program.benchbook.md`. Why: DECISIONS.md, "Name".
+- The `assay` command still works during 0.1.x: it prints one notice and runs `benchbook`. Deployed
+  `assay hook ...` hooks stay silent and write the notice to `hook.log`.
+- `ASSAY_*` variables are read when the `BENCHBOOK_*` one is unset, with one notice per process.
+- `.assay/config.toml`, the old embedded cluster (`~/.local/share/assay/pg`, or
+  `~/Library/Application Support/assay/pg` on macOS) with its `assay` database, and `~/.local/state/assay` stay
+  in use while no new one exists. `benchbook doctor` shows how to move each one; nothing is moved for you.
+- Records with `assay://blob/` artifacts, reports queued by the old build, and the old plugin (`assay@assay`,
+  `assay-worker`, `assay_*` tools) keep working.
+- A database made before the rename (schema `assay`, role `assay_reader`) is renamed in place by
+  `benchbook migrate` or the first connection, in one transaction. Functions and reader views are rebuilt, and
+  stored `search_path` settings are rewritten. Old rows keep their `assay://blob/...` URIs. `benchbook doctor`
+  reports a pre-rename schema; `benchbook migrate --json` includes `renamed_from`. A database holding both the
+  `assay` and `benchbook` schemas is refused, and the message says which one to drop. When the owner may not
+  rename or create roles, nothing changes and the message prints the SQL for an administrator.
+- Project ids longer than 53 bytes (was 57) use the hashed notification channel name.
+- Release: `.github/workflows/release.yml` publishes to PyPI from a `v*` tag with Trusted Publishing; CI builds the
+  wheel and runs `uvx --from dist/*.whl benchbook doctor` and `benchbook init` on empty Linux and macOS runners
+  (`scripts/smoke_wheel.sh`). The checklist is docs/releasing.md.
+
 ## Unreleased: release readiness
 
 - Build identity: the package version comes from git (`0.1.devN+g<commit>` between tags, `0.1.0` on `v0.1.0`);

@@ -1,0 +1,12 @@
+{"type":"config","name":"Lower val_bpb in the 5-minute budget","metricName":"val_bpb","metricUnit":"","bestDirection":"lower"}
+{"type":"hook","stage":"before","exit_code":0,"duration_ms":41,"stdout_bytes":0,"timed_out":false}
+{"run":1,"commit":"aaa1111","metric":1.0021,"metrics":{"peak_vram_mb":45060.2},"status":"keep","description":"baseline","timestamp":1760260443000,"segment":0,"confidence":null}
+{"type":"hook","stage":"after","exit_code":0,"duration_ms":38,"stdout_bytes":0,"timed_out":false}
+{"run":2,"commit":"bbb2222","metric":0.9981,"metrics":{"peak_vram_mb":45060.2},"status":"keep","description":"MATRIX_LR 0.04 -> 0.06","timestamp":1760260900000,"segment":0,"confidence":null,"asi":{"hypothesis":"the matrix learning rate is too conservative"}}
+{"run":3,"commit":"bbb2222","metric":1.0004,"metrics":{"peak_vram_mb":51200},"status":"discard","description":"DEPTH 8 -> 10 in the same budget","timestamp":1760261342000,"segment":0,"confidence":1.4,"asi":{"rollback_reason":"fewer steps fit in the budget"}}
+{"run":4,"commit":"bbb2222","metric":0,"metrics":{},"status":"crash","description":"DEPTH 14 (CUDA out of memory)","timestamp":1760261401000,"segment":0,"confidence":1.4}
+{"run":5,"commit":"bbb2222","metric":0.9979,"metrics":{"peak_vram_mb":45060.2},"status":"checks_failed","description":"skip the last evaluation batch","timestamp":1760261850000,"segment":0,"confidence":1.4}
+{"run":6,"commit":"bbb2222","metric":0.999,"metrics":{"peak_vram_mb":45060.2},"status":"keep","description":"re-run MATRIX_LR 0.06 to confirm","timestamp":1760262301000,"segment":0,"confidence":1.1}
+{"run":7,"commit":"ccc3333","metric":0.9912,"metrics":{"peak_vram_mb":45060.2,"training_seconds":612.4},"status":"keep","description":"WEIGHT_DECAY 0.2 -> 0.1, train until the loss stops falling","timestamp":1760263010000,"segment":0,"confidence":2.6}
+{"type":"config","name":"Lower peak memory","metricName":"peak_vram_mb","metricUnit":"mb","bestDirection":"lower"}
+{"run":8,"commit":"ccc3333","metric":45060.2,"metrics":{},"status":"keep","description":"baseline for memory","timestamp":1760263500000,"segment":1,"confidence":null}

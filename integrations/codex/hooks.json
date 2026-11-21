@@ -1,0 +1,28 @@
+{
+  "description": "benchbook: record declared check runs (benchbook hook bash-result) and capture worker reports (benchbook hook subagent-stop). See integrations/codex/README.md.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook bash-result --harness codex",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook subagent-stop --harness codex",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

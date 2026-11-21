@@ -1,10 +1,10 @@
-"""Every SQL example in docs/schema.md runs through assay_sql."""
+"""Every SQL example in docs/schema.md runs through benchbook_sql."""
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from assay import Ledger
+from benchbook import Ledger
 
 DOC = Path(__file__).resolve().parent.parent / "docs" / "schema.md"
 
@@ -28,14 +28,14 @@ def test_schema_examples(lead: Ledger, worker: Ledger) -> None:
 
 def test_autoresearch_template_matches_package() -> None:
     root = Path(__file__).resolve().parent.parent
-    packaged = root / "src" / "assay" / "integrations" / "autoresearch" / "templates" / "program.assay.md"
-    copy = root / "integrations" / "autoresearch" / "template" / "program.assay.md"
+    packaged = root / "src" / "benchbook" / "integrations" / "autoresearch" / "templates" / "program.benchbook.md"
+    copy = root / "integrations" / "autoresearch" / "template" / "program.benchbook.md"
     assert packaged.read_text() == copy.read_text()
     text = packaged.read_text()
-    assert "MIT" in text and "0. assay ar replicate --auto" in text and "NEVER STOP" in text
+    assert "MIT" in text and "0. benchbook ar replicate --auto" in text and "NEVER STOP" in text
 
 
-def test_readmes_say_what_assay_fits() -> None:
+def test_readmes_say_what_benchbook_fits() -> None:
     root = Path(__file__).resolve().parent.parent
     en = (root / "README.md").read_text()
     ko = (root / "README.ko.md").read_text()
@@ -58,3 +58,24 @@ def test_benchmark_tables_are_filled_with_a_gate_verdict() -> None:
         assert "bench/results/" in section and section.count("**") >= 6, name
         report = re.search(r"(bench/results/\S+/report\.md)", section)
         assert report and (root / report.group(1)).is_file(), name
+
+
+def test_worker_instructions_prefer_exp_run_and_keep_the_mcp_pair() -> None:
+    """Workers with a shell check, run and record in one command; the MCP tools stay as the fallback."""
+    root = Path(__file__).resolve().parent.parent
+    plugin = (root / "integrations/claude-code/agents/benchbook-worker.md").read_text()
+    manual = (root / "integrations/claude-code/manual/agents/benchbook-worker.md").read_text()
+    body = plugin.split("\n---\n", 1)[1]
+    assert manual.split("\n---\n", 1)[1] == body  # the two installs differ only in tool names
+    assert "benchbook --agent <name> exp run --config '<json>' --seed <n> --code-ref <ref> -- " in body
+    assert "benchbook: not run: duplicate of" in body and "benchbook: recorded e:" in body
+    assert body.index("exp run") < body.index("Only when you cannot") < body.index("benchbook_check_tried")
+    for prefix, text in (("mcp__plugin_benchbook_benchbook__", plugin), ("mcp__benchbook__", manual)):
+        tools = text.split("\ntools: ", 1)[1].split("\n", 1)[0]
+        assert "Bash" in tools and f"{prefix}benchbook_record_experiment" in tools
+    for rel in ("integrations/claude-code/skills/benchbook/SKILL.md", "integrations/agents-md/AGENTS.md",
+                "docs/claude-code.md"):
+        text = (root / rel).read_text()
+        assert "exp run --config '<json>' --seed <n>" in text, rel
+        assert text.index("exp run") < text.index("benchbook_record_experiment"), rel
+    assert "## Check, run and record in one command" in (root / "docs/sdk.md").read_text()

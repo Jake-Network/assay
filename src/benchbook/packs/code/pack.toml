@@ -1,0 +1,39 @@
+# code pack: coding work split into pieces. An attempt is a commit of a piece; its metrics are the results of the
+# checks declared in .benchbook/config.toml [checks], re-run by `benchbook check verify` (docs/code.md).
+claim_kinds = ["completion", "observation", "note"]
+# The dedup key is (piece, checks run, commit): how the implementer describes its approach does not make a run new.
+dedup_ignore = ["approach", "paths", "notes"]
+# Re-running the checks of a commit that was already checked is the point of verification: record it, name the first run.
+dedup_mode = "notify"
+ok_metrics_required = ["checks_passed", "checks_total"]
+# Per module tag (benchbook brief --tags mod:media): discarded approaches, open out-of-scope findings, occupied paths
+# and the last verified commit per piece (docs/code.md, "The brief").
+brief_compiler = "benchbook.packs.code.brief:compile_brief"
+
+# What verifies a completion by oracle rerun (docs/code.md, "Verified completion"): at least min_runs re-runs of the
+# piece at its commit, by agents other than its implementer (min_authors counts the implementer), in which every
+# check passed, no guarded path was touched and [checks] did not change, and no finished attempt of that piece and
+# commit failed. Anything less needs a person's decision (oracle human).
+[verify]
+rule = "all_pass"
+min_runs = 1
+min_authors = 2
+
+# `benchbook init --pack code` without --metric/--direction. The partition is the piece (spec §6): best and outcome
+# are per piece, and v_leaderboard ranks within a piece, so one piece's failures are not pushed out by another's passes.
+# worker_intents: an implementer starts its own piece (`benchbook piece start`, path occupancy).
+[project]
+metric = "checks_passed"
+direction = "max"
+settings = { partition_key = "piece", worker_intents = true }
+
+[config]
+max_depth = 6
+max_bytes = 65536
+
+# Items per section of the brief before the budget trims it.
+[brief]
+discarded = 8
+findings = 8
+occupied = 8
+verified = 8
