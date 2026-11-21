@@ -21,3 +21,20 @@ jobs:
       - run: uv run pytest -q
       # first run from an empty directory; its data dir contains a space, like macOS's default
       - run: bash scripts/qa_first_experiment.sh
+
+  smoke:
+    # What a new user gets: the built wheel, run through `uvx` on a runner that has never had benchbook. A file missing
+    # from the wheel, or an embedded Postgres wheel that does not install on the OS, fails here and not after a release.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the package version is derived from git history and tags
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build --no-sources
+      # uvx --from dist/*.whl benchbook doctor, benchbook init in an empty directory, doctor again
+      - run: bash scripts/smoke_wheel.sh
