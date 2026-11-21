@@ -280,3 +280,19 @@ def test_installed_plugin_with_the_old_matcher(env: dict[str, Any], tmp_path: Pa
         {"version": 2, "plugins": {"benchbook@benchbook": [{"scope": "user", "installPath": str(current)}]}}))
     code, out, checks = doctor(env)
     assert code == 0, out and "plugin hooks" not in checks
+
+
+def test_installed_plugin_without_the_check_hooks(env: dict[str, Any], tmp_path: Path) -> None:
+    """0.1.2's hooks (capture only): doctor says Bash results and task completions are not seen."""
+    install = tmp_path / "cache" / "benchbook" / "0.1.2"
+    (install / "hooks").mkdir(parents=True)
+    (install / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {
+        "SubagentStop": [{"hooks": [{"type": "command", "command": "benchbook hook subagent-stop"}]}],
+        "PostToolUse": [{"matcher": "SubagentHandback",
+                         "hooks": [{"type": "command", "command": "benchbook hook subagent-handback"}]}]}}))
+    (env["claude"] / "plugins" / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"benchbook@benchbook": [{"scope": "user", "installPath": str(install)}]}}))
+    code, out, checks = doctor(env)
+    line = failing(out, "plugin hooks")
+    assert code != 0 and "predates 0.1.3" in line and "benchbook hook bash-result" in line
+    assert "benchbook hook task-completed" in line and "claude plugin update benchbook@benchbook" in line

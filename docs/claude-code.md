@@ -19,7 +19,7 @@ command that fixes it:
 |---|---|
 | `benchbook on PATH` | `benchbook` is not on the PATH Claude Code inherits (or the `PATH` in its settings `env`) |
 | `claude code plugin` | `benchbook@benchbook` is not installed or not enabled (a manual install with `.mcp.json` passes) |
-| `plugin hooks` | the installed plugin predates 0.1.1 and still runs the hook only for `benchbook-worker` |
+| `plugin hooks` | the installed plugin predates 0.1.1 and still runs the hook only for `benchbook-worker`, or predates 0.1.3 and runs neither `benchbook hook bash-result` nor `benchbook hook task-completed` |
 | `BENCHBOOK_DATABASE_URL`, `BENCHBOOK_DATA_DIR`, `BENCHBOOK_PROJECT` | the shell value selects a different database or project than the `env` in `~/.claude/settings.json`, `.claude/settings.json` or `.claude/settings.local.json` (the URL itself is never printed) |
 | `hook failures` | for this shell's database: `hook.log` has failure lines from the last 24 hours (after the last clean `benchbook hook replay` of its spool), or its spool holds reports in `dead/` or queued for over 5 minutes |
 
@@ -45,7 +45,7 @@ The plugin (`integrations/claude-code/`) contains:
 | `agents/benchbook-worker.md` | worker subagent: worker tools only (no `benchbook_decide`, `benchbook_create_tasks`, `benchbook_cancel_task`) |
 | `skills/benchbook/SKILL.md` | rules for any agent using the ledger |
 | `skills/benchbook-lead/SKILL.md` | the lead loop, `/benchbook:benchbook-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...` |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
 
 For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
 
@@ -115,6 +115,106 @@ being dropped, and `BENCHBOOK_HOOK_AGENTS=<the original list> benchbook hook rep
 Earlier builds placed spool files directly in `~/.local/state/benchbook/spool/` without recording the database target.
 To recover one, use the environment and project settings from the original session and run
 `python -m benchbook.hooks /path/to/spooled-entry.json` with the Python environment that has benchbook installed.
+
+## Declared checks: the Bash hook and the completion gate
+
+In a project with `[checks]` in `.benchbook/config.toml` (the code pack, docs/code.md) two more hooks keep the
+implementers' check runs in the ledger and hold a piece's task open until its HEAD passes. The plugin installs them;
+the manual copy (`manual/settings.hooks.json`) has the same entries. Neither needs the agent to type a benchbook
+command.
+
+### `benchbook hook bash-result` (PostToolUse and PostToolUseFailure on Bash)
+
+Claude Code fires `PostToolUse` only when a Bash command succeeds; a failure fires `PostToolUseFailure`, whose
+`error` starts with `Exit code N`. The hook reads the command from `tool_input.command`, reads config.toml and
+nothing else (no database module is imported), and compares the command with each declared check:
+
+- Both are split into words the way the shell would, so quoting does not matter (`pytest -k 'a b'` is
+  `pytest -k "a b"`).
+- Leading `VAR=value` assignments (also after `env`) and redirections (`2>&1`, `> out.txt`) are dropped: they
+  change the environment or where the output goes, not which check ran. A number written right before `>` is read
+  as a file descriptor.
+- One leading `cd DIR &&` is allowed; the check is then looked up, and its commit read, in DIR.
+- The check must have run from the repository root, where a declared check runs; the same words run in a
+  subdirectory are observed as `unrecordable`.
+- A word with `{junit}` in the declaration matches a word of that shape or nothing.
+- The remaining words must be equal. Extra arguments (`-k upload`, `-x`) are a different command and do not
+  match.
+
+A match is one of three kinds, and every one is appended to `observed.jsonl` in the spool directory (the
+denominator of the record coverage metric, docs/code.md):
+
+| kind | when | recorded |
+|---|---|---|
+| `direct` | the command is the check | queued in the spool and recorded as an attempt with `via = "bash-hook"` |
+| `wrapped` | `benchbook check run NAME` (also through `uv run` or `python -m benchbook`) | no: the wrapper records it itself, so it is counted once |
+| `unrecordable` | the check inside a pipeline or list (`check \| tail`, `make && check`), run outside the repository root, in the background, interrupted, an error with no `Exit code` line, no piece or no commit | no: the exit code is not the check's, or there is none |
+
+The attempt gets the rough signature: the exit code and a hash of the last line of the error text, normalised
+(whitespace collapsed, digits zeroed). The output itself is never stored. A command that is not a declared check
+leaves nothing behind (no spool entry, no log line) and the handler finishes within 50 ms
+(`tests/test_hooks.py`). The hook always exits 0. Its timeout in hooks.json is 5 s.
+
+### `benchbook hook task-completed` (TaskCompleted)
+
+`TaskCompleted` fires when an agent marks a task completed with TaskUpdate, and when an agent-team teammate ends
+its turn with tasks in progress. Exit code 2 keeps the task open and gives the hook's stderr to the model. The hook
+works out the piece from the hook's `cwd` (`BENCHBOOK_PIECE`, else the branch name) and asks the ledger whether
+every check declared there has a passing attempt for that piece at HEAD: same `config.piece` and `code_ref`,
+finished, not invalidated, from a clean checkout (`worktree_dirty` not true). Attempts from `check run`, from the
+Bash hook and from `check verify` all count, and so does a passing run still waiting in the spool (check run
+returns before its processor has written it). When one is missing it exits 2 with, for example:
+
+```
+benchbook: piece media has no passing run at HEAD 1a2b3c4d5e6f of: unit (not run), lint (its run failed).
+Run this from /path/to/checkout, then mark the task completed again:
+  benchbook check run unit --piece media && benchbook check run lint --piece media
+```
+
+(plus a line asking to commit first when the checkout has uncommitted paths). It fails open, exiting 0 with one
+`task-completed: allowed: ...` line in `hook.log`, when:
+
+| case | why open |
+|---|---|
+| no project for the cwd, or no `[checks]` | nothing is declared, so there is nothing to require |
+| not in a git repository, HEAD detached with `BENCHBOOK_PIECE` unset, or no commit yet | there is no piece or no commit to look up |
+| the branch is the base branch (`[guard] base`'s branch, `main` or `master`) and `BENCHBOOK_PIECE` is unset | the lead's own session and its task list are not a piece |
+| the project is not in the database, or does not use the code pack | its attempts could not be recorded anyway |
+| benchbook raises anything (unreadable config.toml, the database unreachable within 5 s, a bug) | a broken benchbook must not hold every task open; the log line says `gate error` |
+
+If the hook itself cannot start or runs past its 30 s timeout, Claude Code treats that as a non-blocking error, so
+it is open too.
+
+Every task completion in a piece's checkout is gated, the agent's own to-do items included; one passing run of
+each check at HEAD opens all of them until the next commit.
+
+### Under a token
+
+Both hooks work the same with `BENCHBOOK_TOKEN`. The Bash hook only writes the spool; the processor it starts
+records the attempt as the token's agent (no name is given, so it never claims to be someone else). An entry that
+names an agent (`check run` with `--agent` or `BENCHBOOK_AGENT`) different from the token's is refused, moves to
+the spool's `dead/` and is recorded by `benchbook hook replay` run with that agent's token. On a
+`benchbook_writer` login without a token the processor cannot register `hook` and the entry goes to `dead/`, as
+for the result-capture hook. The gate only reads (`projects`, `experiments_valid`), which the writer login may.
+
+### Can SubagentStop block a subagent started with the Agent tool? (open question 1)
+
+The hooks reference (cc_hooks.md, 2026-11-21) says yes. Its exit-code table lists:
+
+> `SubagentStop` | Yes | Prevents the subagent from stopping
+
+and the SubagentStop section says:
+
+> SubagentStop hooks use the same decision control format as Stop hooks [...] Returning `decision: "block"` with a
+> `reason` keeps the subagent running and delivers `reason` to the subagent as its next instruction. A hook that
+> blocks by exiting 2 delivers its stderr message the same way.
+
+SubagentStart, whose matcher values SubagentStop shares, "Runs when Claude spawns a subagent with the Agent tool".
+The same page warns that "Not every SubagentStop event comes from a subagent Claude spawned": internal agents
+(prompt suggestions, `/btw`) fire it too, so a gate there would have to check `agent_type`.
+
+**Not measured.** This answer is from the documentation only; confirming it needs a model run, which was not
+spent. The plugin does not gate on SubagentStop: the completion gate is the TaskCompleted hook above.
 
 ## Installs from before the rename (assay)
 

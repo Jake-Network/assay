@@ -1,5 +1,6 @@
 """The `benchbook` console script. `benchbook hook <event>` goes straight to the hook adapter without loading the CLI
-framework: Claude Code runs it at every subagent stop, so its start-up time is paid on each one.
+framework: Claude Code runs it at every subagent stop and Bash call, so its start-up time is paid on each one.
+`benchbook check run NAME [--piece P]` takes the same short cut: its start-up is added to every check it wraps.
 
 `assay`, the command's name before the rename, is the same script with a one-line notice (legacy_main)."""
 from __future__ import annotations
@@ -7,7 +8,8 @@ from __future__ import annotations
 import sys
 
 # the events Claude Code's hooks run; anything else (--help, replay, a typo) goes through the CLI
-HOOK_EVENTS = ("subagent-stop", "subagent-handback")
+CHECK_HOOK_EVENTS = ("bash-result", "task-completed")  # check_hooks.py: their exit code is the hook's answer
+HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS)
 LEGACY_NOTICE = ("the `assay` command is now `benchbook` (same arguments); `assay` keeps working during 0.1.x. "
                  "Update the scripts, hooks and plugin that still call it: `benchbook doctor` lists what it finds")
 
@@ -24,11 +26,24 @@ def main(legacy: bool = False) -> None:
         if "hook" in argv and argv[argv.index("hook") + 1:][:1] != ["replay"]:
             config.hold_notices()
         config.legacy_notice("command", LEGACY_NOTICE)
+    if len(argv) == 2 and argv[0] == "hook" and argv[1] in CHECK_HOOK_EVENTS:
+        from .check_hooks import main as check_hook_main
+
+        sys.exit(check_hook_main(argv[1]))
     if len(argv) == 2 and argv[0] == "hook" and argv[1] in HOOK_EVENTS:
         from .hooks import main as hook_main
 
         hook_main(argv[1])
         sys.exit(0)
+    if argv[:2] == ["check", "run"]:
+        # A check's own run pays this start-up (the wrapper's budget is 300 ms); --help and other options go
+        # through the CLI and end in the same check_run.run().
+        from .check_run import parse_fast_args
+
+        if (fast := parse_fast_args(argv[2:])) is not None:
+            from .check_run import run
+
+            sys.exit(run(*fast))
     if argv in (["--version"], ["-V"]):
         from . import __version__
 

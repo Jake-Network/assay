@@ -1,0 +1,13 @@
+{
+  "session_id": "s-bash-1",
+  "transcript_path": "/home/user/.claude/projects/p/s-bash-1.jsonl",
+  "cwd": "{CWD}",
+  "permission_mode": "default",
+  "hook_event_name": "TaskCompleted",
+  "task_id": "task-001",
+  "task_subject": "Implement media upload dedupe",
+  "task_description": "Make re-uploading the same file a no-op",
+  "teammate_name": "implementer",
+  "team_name": "session-a1b2c3d4",
+  "agent_id": "agent-impl-1"
+}

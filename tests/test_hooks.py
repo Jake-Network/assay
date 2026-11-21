@@ -502,3 +502,33 @@ def test_malformed_legacy_entry_does_not_stop_replay(repo: Path, worker: Ledger,
     hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
                                "data": {"tool_name": "SubagentHandback", "tool_input": ["x"]}})
     assert hooks.replay_now(spool).ok  # no text to capture, and no AttributeError
+
+
+def test_bash_hook_for_a_command_that_is_not_a_check_finishes_within_50ms(tmp_path: Path) -> None:
+    """Acceptance (PR 2-P0b): the Bash hook runs after every Bash call; for one that is not a declared check it reads
+    config.toml and leaves within 50 ms, writing nothing. Timed in a fresh interpreter from the console script's
+    entry point to its exit (imports included; the interpreter's own start-up is not benchbook's to spend)."""
+    (tmp_path / ".benchbook").mkdir()
+    (tmp_path / ".benchbook" / "config.toml").write_text(
+        'project = "p"\n\n[checks.unit]\ncmd = "uv run pytest tests -q --junitxml={junit}"\njunit = true\n\n'
+        '[checks.lint]\ncmd = "uv run ruff check src"\n')
+    data = {"session_id": "s", "cwd": str(tmp_path), "hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "git status --short && ls -la src", "description": "look around"},
+            "tool_response": {"stdout": "", "stderr": "", "interrupted": False, "isImage": False},
+            "tool_use_id": "toolu_1", "duration_ms": 12}
+    code = ("import io, sys, time\n"
+            "sys.argv = ['benchbook', 'hook', 'bash-result']\n"
+            "sys.stdin = io.StringIO(" + repr(json.dumps(data)) + ")\n"
+            "t = time.perf_counter()\n"
+            "from benchbook.entry import main\n"
+            "try:\n    main()\nexcept SystemExit as e:\n    assert e.code == 0, e.code\n"
+            "print(time.perf_counter() - t)\n")
+    env = {**os.environ, "XDG_STATE_HOME": str(tmp_path / "state")}
+    times = []
+    for _ in range(5):
+        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path, env=env,
+                           timeout=60)
+        assert p.returncode == 0 and p.stderr == "", p.stderr
+        times.append(float(p.stdout))
+    assert min(times) < 0.05, f"bash-result took {min(times) * 1000:.1f} ms"
+    assert not (tmp_path / "state").exists()

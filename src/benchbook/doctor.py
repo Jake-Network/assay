@@ -33,6 +33,8 @@ NO_PROJECT = re.compile(r"no (?:benchbook|assay) project for (.+?)(?: \(|$)")
 SPOOL_KEY = re.compile(r"/spool/([0-9a-f]{64})\b")
 # a queued report older than this was not drained by the background processor (its retries take about a minute)
 STUCK_SECONDS = 300
+# hook commands the plugin runs since 0.1.3 (check_hooks.py); an installed copy without them is older
+CHECK_HOOKS = ("benchbook hook bash-result", "benchbook hook task-completed")
 
 
 @dataclass
@@ -303,25 +305,44 @@ def _installed_plugin_paths() -> list[tuple[str, Path]]:
     return out
 
 
+def _hook_commands(hooks: dict[str, Any]) -> set[str]:
+    """Every command an installed hooks.json runs, spelled with the current name (`assay hook ...` included)."""
+    out: set[str] = set()
+    for entries in hooks.values():
+        for e in entries if isinstance(entries, list) else []:
+            for h in e.get("hooks", []) if isinstance(e, dict) else []:
+                cmd = h.get("command") if isinstance(h, dict) else None
+                if isinstance(cmd, str):
+                    out.add(re.sub(rf"^{config.LEGACY_NAME} ", f"{config.NAME} ", cmd.strip()))
+    return out
+
+
 def check_plugin_hooks() -> Check | None:
-    """An install from before the plugin's SubagentStop matcher was removed keeps running the hook only for
-    benchbook-worker, whatever BENCHBOOK_HOOK_AGENTS says: Claude Code keeps an installed plugin version's files until
-    the plugin is updated."""
-    stale: list[tuple[str, Path]] = []
+    """Claude Code keeps an installed plugin version's files until the plugin is updated, so an older install keeps
+    its older hooks: before 0.1.1 the SubagentStop matcher ran the hook only for benchbook-worker, whatever
+    BENCHBOOK_HOOK_AGENTS says; before 0.1.3 no hook saw Bash results or task completions."""
+    stale: list[tuple[str, Path, str]] = []
     for plugin, path in _installed_plugin_paths():
         hooks = _read_json(path / "hooks" / "hooks.json").get("hooks")
-        entries = hooks.get("SubagentStop") if isinstance(hooks, dict) else None
+        if not isinstance(hooks, dict):
+            continue
+        entries = hooks.get("SubagentStop")
         if isinstance(entries, list) and any(isinstance(e, dict) and e.get("matcher") not in (None, "", "*")
                                              for e in entries):
-            stale.append((plugin, path))
+            stale.append((plugin, path, "runs the hook only for its own worker, so BENCHBOOK_HOOK_AGENTS cannot add "
+                                        "other subagents"))
+        elif missing := sorted(set(CHECK_HOOKS) - _hook_commands(hooks)):
+            stale.append((plugin, path, f"predates 0.1.3 and does not run {' or '.join(f'`{m}`' for m in missing)}, "
+                                        "so declared check runs are not recorded and task completions are not gated"))
     if not stale:
         return None
-    plugin, path = stale[0]
-    return Check("plugin hooks", False,
-                 f"the installed plugin ({path}) runs the hook only for its own worker, so BENCHBOOK_HOOK_AGENTS "
-                 "cannot add other subagents",
-                 f"claude plugin marketplace update {plugin.split('@')[1]} && claude plugin update {plugin},"
-                 " then restart Claude Code")
+    plugin, path, why = stale[0]
+    fix = (f"claude plugin marketplace update {plugin.split('@')[1]} && claude plugin update {plugin},"
+           " then restart Claude Code")
+    if plugin == LEGACY_PLUGIN:
+        fix = (f"claude plugin marketplace add Jake-Network/benchbook && claude plugin install {PLUGIN}, then remove "
+               f"{LEGACY_PLUGIN} and restart Claude Code")
+    return Check("plugin hooks", False, f"the installed plugin ({path}) {why}", fix)
 
 
 def _guarded(name: str, fn: Any, *args: Any) -> list[Check]:

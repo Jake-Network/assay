@@ -9,10 +9,13 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
+from .check_run_cli import run as run_command
+
 if TYPE_CHECKING:
     from .checks import Recorded, Verification
 
 check_app = typer.Typer(no_args_is_help=True, help="Declared checks: re-run them on a reported commit.")
+check_app.command("run")(run_command)
 
 
 @check_app.command("verify")

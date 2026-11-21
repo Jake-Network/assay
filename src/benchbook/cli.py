@@ -480,9 +480,15 @@ def ui(port: Annotated[int, typer.Option()] = 7466) -> None:
 
 @app.command()
 def hook(event: str) -> None:
-    """Claude Code hook entry point. Always exits 0, except `replay`, which reports what it processed."""
+    """Claude Code hook entry point. Always exits 0, except `replay`, which reports what it processed, and
+    `task-completed`, which exits 2 to keep a task open (docs/claude-code.md)."""
+    from .entry import CHECK_HOOK_EVENTS
     from .hooks import main as hook_main
 
+    if event in CHECK_HOOK_EVENTS:
+        from .check_hooks import main as check_hook_main
+
+        raise typer.Exit(check_hook_main(event))
     res = hook_main(event)
     if res is not None:
         emit(res.as_dict(), str(res))

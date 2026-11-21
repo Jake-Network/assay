@@ -61,6 +61,8 @@ WORKER_TYPES = frozenset({"benchbook-worker", "assay-worker"})
 # Domain separator of the auto-capture dedup hash. It is stored with every captured note, so it keeps the old name:
 # a report captured before the upgrade and replayed after it must hash to the same claim.
 CAPTURE_DOMAIN = b"assay:auto-captured\0"
+# Spool entries that are check attempts (benchbook check run, the Bash hook); attempts.record_spooled records them.
+ATTEMPT_EVENTS = frozenset({"check-run", "bash-result"})
 
 
 def _state_dir() -> Path:
@@ -102,6 +104,7 @@ class ReplaySummary:
     """What one drain of the spool did. `errors` has one line per entry left queued or moved to dead/."""
     captured: int = 0
     cited: int = 0
+    recorded: int = 0  # check attempts
     skipped: int = 0
     dead: int = 0
     queued: int = 0
@@ -110,7 +113,7 @@ class ReplaySummary:
 
     @property
     def processed(self) -> int:
-        return self.captured + self.cited + self.skipped
+        return self.captured + self.cited + self.recorded + self.skipped
 
     @property
     def ok(self) -> bool:
@@ -124,6 +127,8 @@ class ReplaySummary:
                 self.captured += 1
             elif res == "cited":
                 self.cited += 1
+            elif res == "recorded":
+                self.recorded += 1
             else:
                 self.skipped += 1
         elif kind == "dead":
@@ -136,11 +141,12 @@ class ReplaySummary:
 
     def as_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "processed": self.processed, "captured": self.captured, "cited": self.cited,
-                "skipped": self.skipped, "dead": self.dead, "queued": self.queued, "requeued": self.requeued,
-                "errors": self.errors}
+                "recorded": self.recorded, "skipped": self.skipped, "dead": self.dead, "queued": self.queued,
+                "requeued": self.requeued, "errors": self.errors}
 
     def __str__(self) -> str:
-        head = (f"processed {self.processed} (captured {self.captured}, cited {self.cited}, skipped {self.skipped});"
+        head = (f"processed {self.processed} (captured {self.captured}, cited {self.cited}, recorded {self.recorded}, "
+                f"skipped {self.skipped});"
                 f" dead {self.dead}; still queued {self.queued}")
         return "\n".join([head, *self.errors])
 
@@ -195,6 +201,14 @@ def main(event: str) -> ReplaySummary | None:
             s.queued = 1
             return s
     return None
+
+
+def start_processor(spool: Path) -> None:
+    """Start the detached processor for this spool unless one is draining it already (check run and the Bash hook
+    queue attempts here too)."""
+    if not _locked(spool):
+        subprocess.Popen([sys.executable, "-m", "benchbook.hooks", str(spool)], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
 
 
 @contextmanager
@@ -654,10 +668,15 @@ def process_file(path: Path) -> str:
             return f"retry:{reason}"
         return f"dead:{reason}"
     try:
-        heading = spooled.get("out_of_scope_heading")
-        result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
-                         fired_at=spooled.get("spooled_at"), accepted=accepted,
-                         out_of_scope_heading=heading if isinstance(heading, str) else None)
+        if event in ATTEMPT_EVENTS:  # a check run (check run, the Bash hook): an attempt, not a report
+            from .attempts import record_spooled
+
+            result = record_spooled(event, data, spooled["project"])
+        else:
+            heading = spooled.get("out_of_scope_heading")
+            result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
+                             fired_at=spooled.get("spooled_at"), accepted=accepted,
+                             out_of_scope_heading=heading if isinstance(heading, str) else None)
         log(f"{event}: {result}")
         path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001

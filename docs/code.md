@@ -442,3 +442,75 @@ SELECT count(*) FILTER (WHERE status IN ('proposed', 'inconclusive')) AS open,
 FROM v_claim_status
 WHERE kind = 'observation' AND 'out-of-scope' = ANY(tags)
 ```
+## The implementer's runs: `benchbook check run`
+
+Verification above is the lead's. The implementer's own runs of the declared checks are recorded as well, without
+asking it to do anything more than run a check. The lead writes the piece's completion condition as
+
+```bash
+benchbook check run <name> [--piece P]
+```
+
+- It runs `[checks.<name>]` as the current checkout declares it (the config.toml found from the working directory,
+  as every command finds it), from the repository root, through the core runner with tee. The output on stdout is
+  the command's, byte for byte (`cmd 2>&1`), and the exit code is the command's: 124 after the check's timeout,
+  128+N after signal N. When the check cannot start (no such check, no project, no piece, not in a git repository)
+  it exits 2, says why on stderr and records nothing.
+- The piece is `--piece`, else `BENCHBOOK_PIECE`, else the current branch name. On a detached HEAD without either it
+  does not run.
+- What it adds is one line on stderr after the output: `benchbook: unit ok (exit 0, 1.2s), piece media at
+  1a2b3c4d5e6f; queued for the ledger (...)`.
+- It never waits for the database. The result goes to the local hook spool (one directory per database target, as
+  for the result-capture hook) and the spool's background processor records it. A database that is down cannot
+  change the exit code or lose the result: the entry waits in the spool and `benchbook hook replay` records it.
+  The time it adds to a check is at most 300 ms (`tests/test_check_run.py` measures it against the bare command).
+
+The attempt has check verify's shape, with two more metrics:
+
+```
+config     {"piece": "media-upload-dedupe", "checks": ["pytest-media"]}
+code_ref   "a1b2c3d4..."                       # HEAD when the check ran
+metrics    {"checks_passed": 1, "checks_total": 1, "checks": {"pytest-media": "ok"}, "failure_signature": null,
+            "guard_touched": false, "guard_files": [], "checks_changed": false,
+            "via": "check-run", "worktree_dirty": false}
+notes      "check run: pytest-media in /path/to/checkout; guard against origin/main (merge-base 4567...)"
+```
+
+- `via` is `check-run`, or `bash-hook` for a run the Claude Code hook saw (docs/claude-code.md). Either way it is
+  the implementer's own run in its own checkout, never an independent re-run, whoever the recorded author is.
+- `worktree_dirty` is true when the checkout had uncommitted or untracked paths. `code_ref` is still HEAD (the
+  commit the run started from), but the run tested something else: the notes give the number of paths, and the
+  completion gate does not count the run. Commit first.
+- The guard columns are computed when the processor records the attempt, against the merge-base of the guard base
+  and HEAD, as check verify does (uncommitted changes are not in them). When they cannot be computed (no base ref
+  locally, no declarations at the merge-base, the checkout is gone) they are left out and the notes say why; a
+  missing `guard_touched` is not `false`.
+- The author is `--agent` or `BENCHBOOK_AGENT`; without either, `hook` (harness role), or under `BENCHBOOK_TOKEN`
+  the token's agent. The processor inherits the environment of the process that started it.
+- The failure signature is check verify's rough one (`check:exit N:<hash>`, or the first failing JUnit test with
+  `junit = true`).
+
+## Record coverage
+
+The share of declared check runs that reached the ledger (spec §11, target 95%): ledger attempts over the runs the
+Claude Code hook observed.
+
+- **Denominator.** Every Bash call the hook matches to a declared check appends one line to `observed.jsonl` in the
+  spool directory of the database target (`~/.local/state/benchbook/spool/<key>/`; `benchbook doctor` prints the
+  path on its `hook failures` line). A line has `ts`, `project`, `piece`, `check`, `kind`, `exit_code`,
+  `reason`, `session_id` and `tool_use_id`. `kind` is `direct` (the hook queued the attempt), `wrapped` (a
+  `benchbook check run`, which records itself) or `unrecordable` (piped or chained, in the background,
+  interrupted, no exit code, no piece or no commit: observed, not recorded).
+- **Numerator.** The attempts with `via` `bash-hook` or `check-run` in the ledger.
+
+```bash
+grep -c '"project": "my-project"' "$SPOOL/observed.jsonl"          # observed runs
+grep '"project": "my-project"' "$SPOOL/observed.jsonl" | grep -c '"kind": "unrecordable"'
+benchbook sql "SELECT metrics ->> 'via' AS via, count(*) AS attempts FROM v_leaderboard WHERE metrics ->> 'via' IN ('bash-hook', 'check-run') AND created_at >= '<since>' GROUP BY 1 ORDER BY 1"
+```
+
+Coverage is the sum of `attempts` over the observed count, both from the same start (`<since>`: the first
+observation of the delegate run measured). Read it with three limits in mind: `check run` used outside Claude Code
+adds attempts no hook observed, so keep the window to the measured run; `v_leaderboard` keeps finished attempts
+only (an interrupted run is observed but not counted) and at most 50 per piece; and the observation file is local
+to the machine whose hooks wrote it.
