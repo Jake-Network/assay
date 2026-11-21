@@ -22,8 +22,15 @@ BEGIN
     -- runs ALTER ROLE benchbook_writer PASSWORD '...'. That statement is what turns team enforcement on.
     CREATE ROLE benchbook_writer LOGIN;
   END IF;
-EXCEPTION WHEN duplicate_object OR unique_violation THEN
-  NULL;  -- another database of this cluster created it at the same moment
+EXCEPTION
+  WHEN duplicate_object OR unique_violation THEN
+    NULL;  -- another database of this cluster created it at the same moment
+  WHEN insufficient_privilege THEN
+    -- a managed Postgres: the ledger's owner may not create roles. Nothing of this migration is kept (one
+    -- transaction); after an administrator creates the role, migrate runs it again.
+    RAISE EXCEPTION 'benchbook: % may not create the role benchbook_writer', current_user
+      USING ERRCODE = 'insufficient_privilege',
+            HINT = 'A database administrator runs:  CREATE ROLE benchbook_writer LOGIN;  Then run benchbook migrate again.';
 END $$;
 
 REVOKE ALL ON SCHEMA benchbook FROM benchbook_writer;

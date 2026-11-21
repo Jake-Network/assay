@@ -146,6 +146,11 @@ class Cluster:
     def roles(self) -> set[str]:
         return {r[0] for r in self.run("SELECT rolname FROM pg_roles WHERE rolname !~ '^pg_' AND NOT rolsuper")}
 
+    def renamed_roles(self) -> set[str]:
+        """The roles the rename is about: without the ones a later migration creates on the way to head (0008's
+        writer login), which exist or not depending on how far a test migrated."""
+        return self.roles() - {"benchbook_writer"}
+
     def dump(self, url: str) -> str:
         """The schema as pg_dump prints it (owners left out), without the random \restrict key lines."""
         out = subprocess.run([str(self.server.bin_path / "pg_dump"), "--schema-only", "--no-owner", url],
@@ -281,7 +286,7 @@ def test_rename_keeps_the_data_and_equals_a_new_database(cluster: Cluster, new_d
     old_names = catalog_mentions(url)
     assert {kind for kind, _ in old_names} >= {"schema", "relation", "function", "view", "trigger", "index", "role",
                                                "default", "constraint"}
-    assert cluster.roles() == {"assay_reader"}
+    assert cluster.renamed_roles() == {"assay_reader"}
     assert dbmigrate.status(url) == dbmigrate.SchemaStatus(None, True, "0007")
     assert dbmigrate.current(url) is None and not schema_version_ok(url)  # "needs the rename", not "up to date"
 
@@ -292,7 +297,7 @@ def test_rename_keeps_the_data_and_equals_a_new_database(cluster: Cluster, new_d
     assert {t: [{k: r[k] for k in rows[0]} for r in after[t]] for t, rows in before.items()} == before
     assert "assay://blob/" in json.dumps(before["experiments"])  # ...so old rows keep their old blob URIs
     assert catalog_mentions(url) == []
-    assert cluster.roles() == {"benchbook_reader"}
+    assert cluster.renamed_roles() == {"benchbook_reader"}
     dump = cluster.dump(url)
     assert "assay" not in dump.lower()
     assert dump == new_dump  # tables, indexes, triggers, function bodies, views and grants, as pg_dump sees them
@@ -371,7 +376,7 @@ def test_rename_from_every_revision_then_the_remaining_migrations(cluster: Clust
     url = cluster.legacy(revision=revision)
     assert dbmigrate.migrate(url) == (revision, dbmigrate.head())
     assert cluster.dump(url) == new_dump
-    assert catalog_mentions(url) == [] and cluster.roles() == {"benchbook_reader"}
+    assert catalog_mentions(url) == [] and cluster.renamed_roles() == {"benchbook_reader"}
     Ledger.init_project("p", metric="score", direction="max", database_url=url)
     lead = Ledger.open(project="p", agent="lead", database_url=url)
     lead.record_experiment({"a": 1}, {"score": 1.0})
@@ -419,7 +424,7 @@ def test_migrate_twice_and_from_two_connections_at_once(cluster: Cluster, new_du
     assert all(r in (("0007", head), (head, head)) for r in results), results
     assert ("0007", head) in results
     assert dbmigrate.migrate(url) == (head, head)  # and once more
-    assert cluster.dump(url) == new_dump and cluster.roles() == {"benchbook_reader"}
+    assert cluster.dump(url) == new_dump and cluster.renamed_roles() == {"benchbook_reader"}
 
 
 def test_both_schemas_are_refused(cluster: Cluster) -> None:
@@ -461,7 +466,7 @@ def test_unknown_legacy_revision_is_refused(cluster: Cluster) -> None:
     before = cluster.dump(url)
     with pytest.raises(BenchbookError, match="revision 9999, which no release under that name produced"):
         dbmigrate.migrate(url)
-    assert cluster.dump(url) == before and cluster.roles() == {"assay_reader"}
+    assert cluster.dump(url) == before and cluster.renamed_roles() == {"assay_reader"}
 
 
 def test_failure_midway_changes_nothing(cluster: Cluster, new_dump: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -479,7 +484,7 @@ def test_failure_midway_changes_nothing(cluster: Cluster, new_dump: str, monkeyp
         m.setattr(dbmigrate, "_repoint_views", boom)
         with pytest.raises(RuntimeError, match="power cut"):
             dbmigrate.migrate(url)
-    assert cluster.dump(url) == before and cluster.roles() == {"assay_reader"}
+    assert cluster.dump(url) == before and cluster.renamed_roles() == {"assay_reader"}
     assert dbmigrate.status(url) == dbmigrate.SchemaStatus(None, True, "0007")
     with psycopg.connect(url, autocommit=True) as c:  # still a working pre-rename ledger
         with pytest.raises(psycopg.errors.RestrictViolation, match=r"assay: TRUNCATE on assay\.\w+ is forbidden"):
@@ -497,7 +502,7 @@ def test_failure_midway_changes_nothing(cluster: Cluster, new_dump: str, monkeyp
         dbmigrate.migrate(url)
     assert "- function benchbook.custom()" in str(ei.value) and "- view benchbook.custom_view" in str(ei.value)
     assert "nothing was changed" in str(ei.value)
-    assert cluster.dump(url) == before and cluster.roles() == {"assay_reader"}
+    assert cluster.dump(url) == before and cluster.renamed_roles() == {"assay_reader"}
 
     cluster.run("DROP FUNCTION assay.custom(); DROP VIEW assay.custom_view", url)
     assert dbmigrate.migrate(url) == ("0007", dbmigrate.head())
@@ -513,7 +518,7 @@ def test_role_rename_carries_the_other_databases_of_the_cluster(cluster: Cluster
         dbmigrate.migrate(first)
     # pg_shdepend showed that another database still uses the role, and the rename said so
     assert "renamed to benchbook_reader for the whole cluster" in caplog.text and ": second." in caplog.text
-    assert cluster.roles() == {"benchbook_reader"}
+    assert cluster.renamed_roles() == {"benchbook_reader"}
     assert dbmigrate.status(second) == dbmigrate.SchemaStatus(None, True, "0007")
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="benchbook.db.migrate"):
@@ -530,7 +535,7 @@ def test_new_role_exists_already(cluster: Cluster, new_dump: str, caplog: pytest
     # a database made by this build came first, so the cluster has both roles
     dbmigrate.migrate(cluster.database("made_new_first"))
     first, second = cluster.legacy("first"), cluster.legacy("second")
-    assert cluster.roles() == {"assay_reader", "benchbook_reader"}
+    assert cluster.renamed_roles() == {"assay_reader", "benchbook_reader"}
     with caplog.at_level(logging.WARNING, logger="benchbook.db.migrate"):
         dbmigrate.migrate(first)
     assert "assay_reader is still used by: second" in caplog.text
@@ -550,14 +555,14 @@ def test_new_role_exists_already(cluster: Cluster, new_dump: str, caplog: pytest
     assert "no database in this cluster uses assay_reader any more (DROP ROLE assay_reader; removes it)" in caplog.text
     assert cluster.dump(second) == new_dump
     cluster.run("DROP ROLE assay_reader")  # nothing depends on it: Postgres would refuse otherwise
-    assert cluster.roles() == {"benchbook_reader"}
+    assert cluster.renamed_roles() == {"benchbook_reader"}
 
 
 def test_missing_role_is_created(cluster: Cluster, new_dump: str) -> None:
     url = cluster.legacy()
     cluster.run("DROP OWNED BY assay_reader; DROP ROLE assay_reader", url)
     assert dbmigrate.migrate(url) == ("0007", dbmigrate.head())
-    assert cluster.roles() == {"benchbook_reader"} and cluster.dump(url) == new_dump
+    assert cluster.renamed_roles() == {"benchbook_reader"} and cluster.dump(url) == new_dump
 
 
 def _scram_matches(verifier: str, password: str) -> bool:
@@ -626,12 +631,19 @@ def test_without_the_privilege_nothing_changes_and_the_sql_is_printed(cluster: C
     # all of it, in the order it has to run: the setting names the role as renamed by the line before
     assert todo == ['ALTER ROLE "assay_reader" RENAME TO "benchbook_reader";',
                     'ALTER ROLE "benchbook_reader" SET search_path = "benchbook_q", "public";']
-    assert cluster.dump(admin_url) == before and cluster.roles() == {"assay_reader", "bb_owner"}
+    assert cluster.dump(admin_url) == before and cluster.renamed_roles() == {"assay_reader", "bb_owner"}
     assert dbmigrate.status(url) == dbmigrate.SchemaStatus(None, True, "0007")
 
     cluster.run("\n".join(todo))  # the administrator runs exactly what the message printed
+    # the rename is done; a later migration (0008) needs a role only an administrator can create, and says so
+    with pytest.raises(BenchbookError, match="migration stopped at revision 0007: .*bb_owner may not create") as ei:
+        dbmigrate.migrate(url)
+    todo = re.findall(r"(CREATE ROLE \w+ LOGIN;)", str(ei.value))
+    assert todo == ["CREATE ROLE benchbook_writer LOGIN;"]
+    assert dbmigrate.status(url) == dbmigrate.SchemaStatus("0007")
+    cluster.run(todo[0])
     assert dbmigrate.migrate(url) == ("0007", dbmigrate.head())
-    assert catalog_mentions(admin_url) == [] and cluster.roles() == {"benchbook_reader", "bb_owner"}
+    assert catalog_mentions(admin_url) == [] and cluster.renamed_roles() == {"benchbook_reader", "bb_owner"}
     Ledger.init_project("p", database_url=url)
     cluster.urls.append(url)
     assert Ledger.open(project="p", agent="lead", database_url=url).sql(

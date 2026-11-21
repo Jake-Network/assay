@@ -153,7 +153,12 @@ def migrate(url: str) -> tuple[str | None, str]:
     if before != head():
         from alembic import command
 
-        command.upgrade(alembic_config(url), "head")
+        try:
+            command.upgrade(alembic_config(url), "head")
+        except psycopg.errors.InsufficientPrivilege as e:
+            # a migration that needs a server-wide privilege (creating a role) says what an administrator must run
+            raise BenchbookError(f"migration stopped at revision {current(url)}: {e.diag.message_primary or e}"
+                                 + (f"\n{e.diag.message_hint}" if e.diag.message_hint else "")) from e
     return before, head()
 
 
