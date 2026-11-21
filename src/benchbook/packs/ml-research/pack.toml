@@ -1,0 +1,26 @@
+# ml-research pack (Step 3): autoresearch-style training runs compared within a partition
+# (hardware class + evaluation harness). Result claims are written by the deterministic referee.
+claim_kinds = ["hypothesis", "observation", "conclusion", "note", "result", "calibration"]
+# The dedup key is (partition, knobs, normalised code): lineage and wording do not make a run new.
+dedup_ignore = ["notes", "seed", "run_id", "timestamp", "changed", "parent", "description"]
+# A run that was already recorded with the same key and seed is refused: `benchbook ar run` stops before training.
+dedup_mode = "refuse"
+ok_metrics_required = ["val_bpb"]
+brief_compiler = "benchbook.integrations.autoresearch.brief:compile_brief"
+
+# The rerun oracle's rule (also the default of a pack without [verify]): seeds and authors of the original config and
+# code from the project settings rerun_min_seeds / rerun_min_authors, and for an improvement both means beat the
+# baseline (docs/concepts.md).
+[verify]
+rule = "replication"
+
+[config]
+max_depth = 6
+max_bytes = 65536
+
+[brief]
+verified = 10
+supported = 5
+tried = 8
+open_questions = 5
+recent = 3

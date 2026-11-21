@@ -1,0 +1,73 @@
+name: release
+# A pushed v* tag builds the distributions, runs the wheel on Linux and macOS, and publishes to PyPI with Trusted
+# Publishing (OIDC): the repository stores no PyPI token. One-time setup and the checklist are in docs/releasing.md.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the package version is derived from git history and tags
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false   # a release is built from the tagged tree only
+      - run: uv build --no-sources
+      # PyPI never accepts the same version twice, so stop unless the build is exactly the tagged version. A tag
+      # that hatch-vcs does not read as this commit's version builds 0.1.devN+g<commit>, which is not a release.
+      - name: Check that the build is the tagged version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ls -l dist
+          test -f "dist/benchbook-$version-py3-none-any.whl"
+          test -f "dist/benchbook-$version.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  smoke:
+    # the same first-run check as ci.yml, on the files that are about to be published
+    needs: build
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4   # for scripts/smoke_wheel.sh; the wheel comes from the build job
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - run: bash scripts/smoke_wheel.sh
+
+  publish:
+    # Its own job, so that the build and the smoke run (which execute code from the repository and from PyPI) never
+    # hold the publishing permission. It checks nothing out: it uploads the files the two jobs above built and ran.
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi   # must equal the environment of the PyPI trusted publisher (docs/releasing.md)
+      url: https://pypi.org/project/benchbook/
+    permissions:
+      id-token: write   # the OIDC token PyPI exchanges for a short-lived upload token
+    steps:
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - run: uv publish

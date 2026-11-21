@@ -3,7 +3,7 @@
     python examples/autoresearch-sim/run_sim_swarm.py --agents 4 --minutes 5
     python examples/autoresearch-sim/run_sim_swarm.py --agents 3 --minutes 1 --sleep 0.2   # CI
 
-Uses ASSAY_DATABASE_URL when set, else the local embedded Postgres. Each agent gets its own git worktree,
+Uses BENCHBOOK_DATABASE_URL when set, else the local embedded Postgres. Each agent gets its own git worktree,
 like one GPU each on a single machine (§11 S1). Exits 1 when any condition fails. This is a pipeline check,
 not evidence about real autoresearch.
 """
@@ -42,12 +42,12 @@ def setup(root: Path, project: str, agents: int, env: dict[str, str]) -> list[Pa
     sh(["git", "init", "-q", "-b", "master"], main)
     sh(["git", "-c", "user.name=sim", "-c", "user.email=sim@example.invalid", "add", "-A"], main)
     sh(["git", "-c", "user.name=sim", "-c", "user.email=sim@example.invalid", "commit", "-qm", "simulator"], main)
-    sh([sys.executable, "-m", "assay", "ar", "init", "--project", project], main, env)
+    sh([sys.executable, "-m", "benchbook", "ar", "init", "--project", project], main, env)
     trees = []
     for i in range(agents):
         wt = root / f"gpu{i}"
         sh(["git", "worktree", "add", "-q", "-b", f"autoresearch/sim-gpu{i}", str(wt)], main)
-        shutil.copy(main / "program.assay.md", wt / "program.assay.md")
+        shutil.copy(main / "program.benchbook.md", wt / "program.benchbook.md")
         for k, v in (("user.name", f"gpu{i}"), ("user.email", f"gpu{i}@example.invalid")):
             sh(["git", "config", k, v], wt)
         trees.append(wt)
@@ -55,32 +55,33 @@ def setup(root: Path, project: str, agents: int, env: dict[str, str]) -> list[Pa
 
 
 def check(project: str, trees: list[Path], invocations: Path) -> tuple[dict[str, Any], list[str]]:
-    from assay import Ledger
+    from benchbook import Ledger
 
     lg = Ledger.open(project=project, agent="human")
     q = lg.sql_internal
     pid = lg.project_id
     bad: list[str] = []
     dups = q("SELECT config->>'partition' AS p, code_ref, coalesce(seed,0) AS seed, count(*) AS n"
-             " FROM assay.experiments_valid WHERE project_id=%s AND run_status='ok' GROUP BY 1,2,3 HAVING count(*)>1",
+             " FROM benchbook.experiments_valid WHERE project_id=%s AND run_status='ok'"
+             " GROUP BY 1,2,3 HAVING count(*)>1",
              (pid,))
     if dups:
         bad.append(f"{len(dups)} code/replication-number pairs ran ok more than once")
     started = {line.strip() for line in invocations.read_text().splitlines() if line.strip()} \
         if invocations.exists() else set()
     recorded = {str(int(r["rid"])) for r in q(
-        "SELECT (metrics->>'sim_run_id')::numeric AS rid FROM assay.experiments WHERE project_id=%s"
+        "SELECT (metrics->>'sim_run_id')::numeric AS rid FROM benchbook.experiments WHERE project_id=%s"
         " AND metrics ? 'sim_run_id'", (pid,))}
     lost = started - recorded
     if lost:
-        bad.append(f"{len(lost)} runs started by assay ar but not recorded")
-    results = q("SELECT s.id, s.status, c.payload FROM assay.v_claim_status s JOIN assay.claims c ON c.id=s.id"
+        bad.append(f"{len(lost)} runs started by benchbook ar but not recorded")
+    results = q("SELECT s.id, s.status, c.payload FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.id=s.id"
                 " WHERE s.project_id=%s AND s.kind='result'", (pid,))
     for r in results:
         if r["status"] != "verified":
             continue
         pl = r["payload"]
-        runs = q("SELECT * FROM assay.experiments_valid WHERE id = ANY(%s::uuid[])", (pl["experiment_ids"],))
+        runs = q("SELECT * FROM benchbook.experiments_valid WHERE id = ANY(%s::uuid[])", (pl["experiment_ids"],))
         ok = [x for x in runs if x["run_status"] == "ok"]
         mean = sum(x["primary_value"] for x in ok) / len(ok) if ok else None
         rule = (len(ok) >= 3 and len({x["seed"] for x in ok}) >= 3 and len({x["author"] for x in ok}) >= 2
@@ -88,23 +89,24 @@ def check(project: str, trees: list[Path], invocations: Path) -> tuple[dict[str,
                 and (pl.get("baseline") is None or mean < pl["baseline"] - pl["epsilon"]))
         if not rule:
             bad.append(f"verified result c:{str(r['id'])[:8]} breaks the replication rule (T5)")
-    lucky = q("SELECT e.id, e.primary_value, s.status, c.payload FROM assay.experiments_valid e"
-              " LEFT JOIN assay.links l ON l.src_id=e.id AND l.relation='supports'"
-              " LEFT JOIN assay.claims c ON c.id=l.dst_id AND c.kind='result'"
-              " LEFT JOIN assay.v_claim_status s ON s.id=c.id"
+    lucky = q("SELECT e.id, e.primary_value, s.status, c.payload FROM benchbook.experiments_valid e"
+              " LEFT JOIN benchbook.links l ON l.src_id=e.id AND l.relation='supports'"
+              " LEFT JOIN benchbook.claims c ON c.id=l.dst_id AND c.kind='result'"
+              " LEFT JOIN benchbook.v_claim_status s ON s.id=c.id"
               " WHERE e.project_id=%s AND coalesce(e.seed,0)=0 AND e.outcome='improved'"
               " AND (e.metrics->>'lucky')::numeric = 1", (pid,))
     lucky_seen = [x for x in lucky if x["status"] is not None]
     for x in lucky_seen:
         if x["status"] == "verified":
             pl = x["payload"]
-            others = q("SELECT primary_value FROM assay.experiments_valid WHERE id = ANY(%s::uuid[]) AND id <> %s"
+            others = q("SELECT primary_value FROM benchbook.experiments_valid WHERE id = ANY(%s::uuid[]) AND id <> %s"
                        " AND run_status='ok'", (pl["experiment_ids"], x["id"]))
             m = sum(o["primary_value"] for o in others) / len(others) if others else None
             if pl.get("baseline") is not None and (m is None or m >= pl["baseline"] - pl["epsilon"]):
                 bad.append(f"lucky run e:{str(x['id'])[:8]} was verified on the strength of the lucky run")
     lg.refresh()
-    parts = [r["p"] for r in q("SELECT DISTINCT config->>'partition' AS p FROM assay.experiments WHERE project_id=%s",
+    parts = [r["p"] for r in q("SELECT DISTINCT config->>'partition' AS p FROM benchbook.experiments"
+                               " WHERE project_id=%s",
                                (pid,))]
     cal = lg.project.settings.get("partitions") or {}
     for p in parts:
@@ -128,17 +130,17 @@ def check(project: str, trees: list[Path], invocations: Path) -> tuple[dict[str,
                     assert row[1] == "0.000000" and row[2] == "0.0"
             except (AssertionError, ValueError):
                 bad.append(f"{f}: malformed row {row}")
-        pending = wt / ".assay" / "ar_pending.jsonl"
+        pending = wt / ".benchbook" / "ar_pending.jsonl"
         if pending.exists() and pending.read_text().strip():
             bad.append(f"{pending}: runs still waiting to be recorded")
     counts = q("SELECT count(*) AS runs, count(*) FILTER (WHERE coalesce(seed,0)>0) AS replications,"
                " count(*) FILTER (WHERE run_status<>'ok') AS failed,"
                " coalesce(sum(duration_ms) FILTER (WHERE coalesce(seed,0)>0),0)::float8"
                "   / nullif(sum(duration_ms),0) AS replication_share"
-               " FROM assay.experiments WHERE project_id=%s", (pid,))[0]
+               " FROM benchbook.experiments WHERE project_id=%s", (pid,))[0]
     # refusals before running only: not 'rejected' hits, not refusals the agent overrode with --retry-failed
-    blocked = q("SELECT count(*) AS n FROM assay.dedup_hits h WHERE h.project_id=%s AND h.kind='avoided'"
-                " AND NOT EXISTS (SELECT 1 FROM assay.experiments x WHERE x.project_id=h.project_id"
+    blocked = q("SELECT count(*) AS n FROM benchbook.dedup_hits h WHERE h.project_id=%s AND h.kind='avoided'"
+                " AND NOT EXISTS (SELECT 1 FROM benchbook.experiments x WHERE x.project_id=h.project_id"
                 "   AND x.dedup_key=h.dedup_key AND x.author=h.agent_id AND coalesce(x.seed,0)=0"
                 "   AND x.created_at >= h.created_at)", (pid,))[0]["n"]
     verdicts: dict[str, int] = {}
@@ -165,8 +167,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep", action="store_true", help="keep the work directory")
     args = ap.parse_args(argv)
     project = args.project or f"sim-{uuid.uuid4().hex[:8]}"
-    root = args.workdir or Path(tempfile.mkdtemp(prefix="assay-ar-sim-"))
-    env = dict(os.environ, ASSAY_PROJECT=project, ASSAY_AR_HW="sim-cpu", AR_SIM_LUCKY=str(args.lucky),
+    root = args.workdir or Path(tempfile.mkdtemp(prefix="benchbook-ar-sim-"))
+    env = dict(os.environ, BENCHBOOK_PROJECT=project, BENCHBOOK_AR_HW="sim-cpu", AR_SIM_LUCKY=str(args.lucky),
                AR_SIM_NOISE=str(args.noise), AR_SIM_INVOCATIONS=str(root / "invocations.log"))
     env.pop("CUDA_VISIBLE_DEVICES", None)
     if args.sleep is not None:
@@ -175,14 +177,14 @@ def main(argv: list[str] | None = None) -> int:
     trees = setup(root, project, args.agents, env)
     procs = []
     for i, wt in enumerate(trees):
-        e = dict(env, ASSAY_AGENT=f"gpu{i}")
+        e = dict(env, BENCHBOOK_AGENT=f"gpu{i}")
         procs.append(subprocess.Popen(
             [sys.executable, str(HERE / "scripted_agent.py"), "--minutes", str(args.minutes), "--seed", str(i),
              "--overlap", str(args.overlap)], cwd=wt, env=e, stdout=open(root / f"gpu{i}.log", "w"),
             stderr=subprocess.STDOUT))
     codes = [p.wait() for p in procs]
-    from assay import Ledger
-    from assay.integrations.autoresearch.referee import tick
+    from benchbook import Ledger
+    from benchbook.integrations.autoresearch.referee import tick
 
     tick(Ledger.open(project=project, agent="referee", role="orchestrator"))
     report, bad = check(project, trees, root / "invocations.log")

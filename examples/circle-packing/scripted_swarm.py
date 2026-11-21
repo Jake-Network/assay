@@ -1,13 +1,15 @@
-"""Scripted circle-packing swarm: N worker processes and a scripted lead write to one assay ledger,
+"""Scripted circle-packing swarm: N worker processes and a scripted lead write to one benchbook ledger,
 with no LLM calls. Used for CI, the viewer demo and `bench --dry`.
 
     python examples/circle-packing/scripted_swarm.py --workers 8 --minutes 5
-    assay serve     # in another terminal, then open http://127.0.0.1:7466
+    benchbook serve     # in another terminal, then open http://127.0.0.1:7466
 
 Workers claim tasks, read their brief, check_tried before every evaluation and record every result,
-failures included. Some workers are deliberately careless (they sometimes re-run a config that was already
-tried) so that duplicate rejection shows up. The lead creates tasks, asks for replications of the best
-configuration and marks a claim verified once the rerun rule (>= 3 seeds, >= 2 agents) holds.
+failures included. They call the SDK in process; an agent with a shell does the same in one command per
+evaluation, `benchbook exp run ... -- python run_config.py` (README.md). Some workers are deliberately careless
+(they sometimes re-run a config that was already tried) so that duplicate rejection shows up. The lead creates
+tasks, asks for replications of the best configuration and marks a claim verified once the rerun rule
+(>= 3 seeds, >= 2 agents) holds.
 """
 from __future__ import annotations
 
@@ -28,8 +30,8 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from assay import Ledger  # noqa: E402
-from assay.errors import AssayError, LeaseLost  # noqa: E402
+from benchbook import Ledger  # noqa: E402
+from benchbook.errors import BenchbookError, LeaseLost  # noqa: E402
 
 CODE_REF = "packing-" + hashlib.sha256((HERE / "packing.py").read_bytes()).hexdigest()[:12]
 CONFIG_SCHEMA = {
@@ -114,7 +116,7 @@ def worker_main(i: int, project: str, deadline: float, careless: float, log_path
             lg.complete_task(task.id, "done", summary)
         except LeaseLost:
             continue
-        except AssayError as e:
+        except BenchbookError as e:
             print(f"worker-{i}: {e}", file=sys.stderr)
     if evals_log:
         evals_log.close()
@@ -169,21 +171,22 @@ def lead_round(lead: Ledger, rng: random.Random, n_workers: int) -> None:
 
 def verify_best(lead: Ledger) -> None:
     top = lead.sql_internal(
-        "SELECT dedup_key, config FROM assay.v_tried WHERE project_id=%s AND code_ref=%s"
+        "SELECT dedup_key, config FROM benchbook.v_tried WHERE project_id=%s AND code_ref=%s"
         " AND best_value IS NOT NULL ORDER BY best_value DESC, dedup_key LIMIT 1",
         (lead.project_id, CODE_REF))
     if not top:
         return
     t = top[0]
     exps = lead.sql_internal(
-        "SELECT id, seed, author, primary_value FROM assay.experiments_valid WHERE project_id=%s AND dedup_key=%s"
+        "SELECT id, seed, author, primary_value FROM benchbook.experiments_valid WHERE project_id=%s AND dedup_key=%s"
         " AND run_status='ok' AND seed IS NOT NULL AND primary_value IS NOT NULL ORDER BY created_at, id",
         (lead.project_id, t["dedup_key"]))
     seeds = sorted({e["seed"] for e in exps})
     authors = {e["author"] for e in exps}
     if len(seeds) < 3 or len(authors) < 2:
         open_rep = lead.sql_internal(
-            "SELECT 1 FROM assay.tasks WHERE project_id=%s AND status IN ('open','claimed') AND spec->'replicate' = %s",
+            "SELECT 1 FROM benchbook.tasks WHERE project_id=%s AND status IN ('open','claimed')"
+            " AND spec->'replicate' = %s",
             (lead.project_id, json.dumps(t["config"])))
         if not open_rep:
             new = [s for s in range(3, 30) if s not in seeds][: max(1, 3 - len(seeds) + 1)]
@@ -192,7 +195,7 @@ def verify_best(lead: Ledger) -> None:
         return
     values = [e["primary_value"] for e in exps]
     lo, mean = min(values), fmean(values)
-    from assay.ledger import config_line
+    from benchbook.ledger import config_line
 
     tested = ", ".join(map(str, seeds))
     stmt = (f"{config_line(t['config'])}: minimum sum_radii {lo!r} across {len(seeds)} tested seeds ({tested}). "

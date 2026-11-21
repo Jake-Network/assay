@@ -5,6 +5,6 @@
   "hook_event_name": "SubagentStop",
   "stop_hook_active": false,
   "agent_id": "a2",
-  "agent_type": "assay:assay-worker",
+  "agent_type": "benchbook:benchbook-worker",
   "last_assistant_message": "I tried lattice perturbation with scale 0.02 and got sum_radii 2.598, slightly worse than hex. Scale 0.05 diverged."
 }

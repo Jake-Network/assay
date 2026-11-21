@@ -7,9 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from assay import Ledger
-from assay.config import write_config
-from assay.mcp_server import build
+from benchbook import Ledger
+from benchbook.config import write_config
+from benchbook.mcp_server import build
 from tests.test_mcp import call
 
 
@@ -37,16 +37,16 @@ def test_any_versus_all_tags(worker: Ledger) -> None:
 
 def test_mcp_and_cli_all_tags(worker: Ledger, project: str, tmp_path: Path, db_url: str) -> None:
     ids = _claims(worker)
-    rows = call(build(project, "all"), "assay_search", agent="lead", text="", kind="claim",
+    rows = call(build(project, "all"), "benchbook_search", agent="lead", text="", kind="claim",
                 all_tags=["mod:ingest", "abandoned"])
     assert [r["id"] for r in rows] == [ids["both"]]
     assert rows[0]["line"].endswith("[tags: mod:ingest, abandoned]")
     write_config(tmp_path, project)
-    env = {**os.environ, "ASSAY_DATABASE_URL": db_url}
-    env.pop("ASSAY_PROJECT", None)
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url}
+    env.pop("BENCHBOOK_PROJECT", None)
 
     def cli(*args: str) -> str:
-        p = subprocess.run([sys.executable, "-m", "assay.cli", "search", "", "--kind", "claim", *args],
+        p = subprocess.run([sys.executable, "-m", "benchbook.cli", "search", "", "--kind", "claim", *args],
                            capture_output=True, text=True, cwd=tmp_path, env=env, timeout=60)
         assert p.returncode == 0, p.stderr
         return p.stdout
@@ -56,6 +56,6 @@ def test_mcp_and_cli_all_tags(worker: Ledger, project: str, tmp_path: Path, db_u
     assert all(i in out_any for i in ids.values())
     assert out_all.strip().splitlines() == [ln for ln in out_any.strip().splitlines() if ln.startswith(ids["both"])]
     assert "[tags: mod:ingest, out-of-scope]" in out_any
-    assert json.loads(subprocess.run([sys.executable, "-m", "assay.cli", "--json", "search", "", "--all-tags",
+    assert json.loads(subprocess.run([sys.executable, "-m", "benchbook.cli", "--json", "search", "", "--all-tags",
                                       "abandoned,mod:export"], capture_output=True, text=True, cwd=tmp_path,
                                      env=env, timeout=60).stdout)[0]["id"] == ids["abandoned-only"]

@@ -1,13 +1,13 @@
 {
-  "name": "assay",
+  "name": "benchbook",
   "owner": {
-    "name": "assay maintainers"
+    "name": "benchbook maintainers"
   },
   "plugins": [
     {
-      "name": "assay",
+      "name": "benchbook",
       "source": "./integrations/claude-code",
-      "description": "Your agents' lab notebook (assay ledger, worker subagent, lead skill, result-capture hook)."
+      "description": "Your agents' lab notebook (benchbook ledger, worker subagent, lead skill, result-capture hook)."
     }
   ]
 }

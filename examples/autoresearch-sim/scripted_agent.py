@@ -1,6 +1,6 @@
-"""An LLM-free agent that follows program.assay.md's loop with the real `assay ar` CLI (§12).
+"""An LLM-free agent that follows program.benchbook.md's loop with the real `benchbook ar` CLI (§12).
 
-Run it from a git worktree of the simulator checkout with ASSAY_AGENT and ASSAY_PROJECT set:
+Run it from a git worktree of the simulator checkout with BENCHBOOK_AGENT and BENCHBOOK_PROJECT set:
     python scripted_agent.py --minutes 1 --seed 3
 It changes one or two knobs at random. With probability --overlap it deliberately picks the knob change
 another agent is working on right now, to exercise intent conflicts.
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import re
 import subprocess
@@ -17,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+from benchbook.config import env
 
 GRID: dict[str, list[Any]] = {
     "MATRIX_LR": [0.02, 0.03, 0.05, 0.06, 0.08],
@@ -29,14 +30,14 @@ GRID: dict[str, list[Any]] = {
 }
 
 
-def assay_cmd() -> list[str]:
-    if env := os.environ.get("ASSAY_BIN"):
-        return env.split()
-    return [sys.executable, "-m", "assay"]
+def benchbook_cmd() -> list[str]:
+    if cmd := env("BIN"):
+        return cmd.split()
+    return [sys.executable, "-m", "benchbook"]
 
 
 def ar(*args: str, json_out: bool = False) -> tuple[int, str]:
-    cmd = assay_cmd() + (["--json"] if json_out else []) + ["ar", *args]
+    cmd = benchbook_cmd() + (["--json"] if json_out else []) + ["ar", *args]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     return r.returncode, (r.stdout + r.stderr).strip()
 
@@ -99,7 +100,7 @@ def main() -> None:
 
     def say(line: str) -> None:
         log.append(line)
-        print(f"[{os.environ.get('ASSAY_AGENT')}] {line}", flush=True)
+        print(f"[{env('AGENT')}] {line}", flush=True)
 
     # the first run of a fresh lab is the baseline; others are refused (claim conflict or duplicate)
     rc, out = ar("claim", "baseline")

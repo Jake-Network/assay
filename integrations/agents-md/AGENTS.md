@@ -1,26 +1,29 @@
-## assay research ledger
+## benchbook research ledger
 
-This repository records experiments in an assay ledger (`.assay/config.toml`). The ledger is the source of
+This repository records experiments in an benchbook ledger (`.benchbook/config.toml`). The ledger is the source of
 truth for results; messages carry only short summaries and record ids (`e:`, `c:`, `t:`).
 
-If an `assay` MCP server is configured, use its tools; otherwise use the CLI with `--json`.
-Always identify yourself: MCP `agent` argument, or `ASSAY_AGENT=worker-<n>` for the CLI.
+If an `benchbook` MCP server is configured, use its tools; otherwise use the CLI with `--json`.
+Always identify yourself: MCP `agent` argument, or `BENCHBOOK_AGENT=worker-<n>` for the CLI.
 
-1. Start: take a task (`assay_next_task` / `assay task next`), then read the brief (`assay_brief` /
-   `assay brief --task <id>`).
-2. Before any evaluation: check it was not already run (`assay_check_tried` / `assay exp tried --config ...`).
-   If it was, choose a different configuration.
-3. Right after any evaluation: record it (`assay_record_experiment` / `assay exp record ...`), including
-   failures, errors and timeouts, with the cause in one sentence in notes.
-4. Generalisable findings: propose a claim with its evidence ids (`assay_propose_claim` / `assay claim add`).
-5. Finish: complete the task (`assay_complete_task` / `assay task done <id> -m "..."`). Your final message is at
+1. Start: take a task (`benchbook_next_task` / `benchbook task next`), then read the brief (`benchbook_brief` /
+   `benchbook brief --task <id>`).
+2. With a shell, run each evaluation as one command that checks, runs and records it:
+   `benchbook exp run --config '<json>' --seed <n> -- <evaluation command>`. `benchbook: not run: duplicate of ...`
+   (exit 2) means it already ran: choose a different configuration. Otherwise its last line names the record;
+   failures, errors and timeouts are recorded too.
+3. Without a shell (MCP only): check before any evaluation that it was not already run (`benchbook_check_tried`)
+   and record it right after (`benchbook_record_experiment`), including failures, errors and timeouts, with the
+   cause in one sentence in notes.
+4. Generalisable findings: propose a claim with its evidence ids (`benchbook_propose_claim` / `benchbook claim add`).
+5. Finish: complete the task (`benchbook_complete_task` / `benchbook task done <id> -m "..."`). Your final message is at
    most 3 sentences plus record ids.
 6. Do not decide claim status; that is the orchestrator's (or a human's) job.
 
 MCP server config (Codex `~/.codex/config.toml`; other MCP clients take the same command):
 
 ```toml
-[mcp_servers.assay]
-command = "assay"
+[mcp_servers.benchbook]
+command = "benchbook"
 args = ["mcp", "--toolset", "worker"]
 ```

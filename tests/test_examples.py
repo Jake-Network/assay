@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from assay import Ledger
+from benchbook import Ledger
 
 ROOT = Path(__file__).resolve().parent.parent
 pytest.importorskip("scipy")
@@ -86,10 +87,35 @@ def test_scripted_verification_is_limited_to_the_recorded_seeds(lead: Ledger, wo
     replica.record_experiment(config, {metric: 2.60}, seed=4, code_ref=CODE_REF)
     verify_best(lead)
     decisions = lead.sql_internal(
-        "SELECT oracle_detail FROM assay.decisions WHERE project_id=%s AND new_status='verified' ORDER BY created_at",
+        "SELECT oracle_detail FROM benchbook.decisions WHERE project_id=%s AND new_status='verified'"
+        " ORDER BY created_at",
         (lead.project_id,),
     )
     assert [d["oracle_detail"]["seeds"] for d in decisions] == [[0, 1, 2], [0, 1, 2, 4]]
+
+
+def test_readme_exp_run_command_scores_and_records_a_config(db_url: str, tmp_path: Path) -> None:
+    """The one command README.md (b) gives workers: exp run around run_config.py."""
+    readme = (ROOT / "examples/circle-packing/README.md").read_text()
+    cmd = "benchbook exp run --config '<json>' --seed <n> --code-ref packing-v1 -- python run_config.py"
+    assert cmd in readme and "run_config.py" in (ROOT / "examples/circle-packing/scripted_swarm.py").read_text()
+    pid = f"cp-{uuid.uuid4().hex[:6]}"
+    Ledger.init_project(pid, goal="pack", metric="sum_radii", direction="max", database_url=db_url)
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "BENCHBOOK_PROJECT": pid, "BENCHBOOK_AGENT": "worker-1"}
+    argv = [sys.executable, "-m", "benchbook.cli", "exp", "run", "--config",
+            '{"init": "hex", "optimizer": "slsqp", "iters": 100}', "--seed", "0", "--code-ref", "packing-v1",
+            "--", sys.executable, "run_config.py"]
+    p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT / "examples/circle-packing", env=env, timeout=120)
+    assert p.returncode == 0, p.stderr
+    out, receipt = p.stdout.rstrip("\n").split("\n")
+    score = json.loads(out)["sum_radii"]
+    assert score > 2.6 and receipt.startswith("benchbook: recorded e:") and f"sum_radii={score}" in receipt
+    lead = Ledger.open(project=pid, agent="lead", database_url=db_url)
+    [e] = lead.sql_internal("SELECT * FROM benchbook.experiments WHERE project_id=%s", (pid,))
+    assert e["metrics"]["sum_radii"] == score and e["code_ref"] == "packing-v1" and e["author"] == "worker-1"
+    again = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT / "examples/circle-packing", env=env,
+                           timeout=120)
+    assert again.returncode == 2 and receipt.split()[2] in again.stdout  # not run again
 
 
 def test_bench_dry(tmp_path: Path) -> None:
@@ -98,7 +124,9 @@ def test_bench_dry(tmp_path: Path) -> None:
                        timeout=240)
     assert p.returncode == 0, p.stderr[-2000:]
     report = (tmp_path / "b" / "report.md").read_text()
-    assert "DRY RUN" in report and "C assay" in report and "A baseline" in report
+    assert "DRY RUN" in report and "C benchbook" in report and "A baseline" in report
     m = json.loads((tmp_path / "b" / "metrics.json").read_text())
     c = [r for r in m["runs"] if r["config"] == "C"][0]
     assert c["lost_results"] == 0 and c["duplicate_ratio"] == 0
+    # The cost instrumentation's reconciliation of per-message usage lands in metrics.json for every run.
+    assert all(r["usage_check"]["reconciled"] for r in m["runs"])

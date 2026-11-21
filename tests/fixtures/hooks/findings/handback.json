@@ -1,0 +1,17 @@
+{
+  "session_id": "f3f3-sess",
+  "transcript_path": "/home/dev/.claude/projects/-repo/f3f3-sess.jsonl",
+  "cwd": "{CWD}",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "agent_id": "f3f3f3",
+  "agent_type": "implementer",
+  "tool_name": "SubagentHandback",
+  "tool_use_id": "toolu_01",
+  "tool_response": {
+    "ok": true
+  },
+  "tool_input": {
+    "message": "Handed back: piece export-csv done at 9c9c9c9.\n\n## Out of scope\n- `src/app/modules/export/csv.py` writes dates in local time.\n"
+  }
+}

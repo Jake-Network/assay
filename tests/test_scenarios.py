@@ -7,11 +7,11 @@ import subprocess
 import sys
 import time
 
-from assay import Ledger
+from benchbook import Ledger
 
 WORKER = """
 import sys, time
-from assay import Ledger
+from benchbook import Ledger
 lg = Ledger.open(project=sys.argv[1], agent="doomed")
 t = lg.next_task(lease_seconds=2)
 lg.record_experiment({"partial": True}, {"score": 1.0}, task_id=t.id)
@@ -23,7 +23,7 @@ time.sleep(60)
 def test_killed_worker_lease_is_taken_over(lead: Ledger, db_url: str) -> None:
     [tid] = lead.create_tasks([{"title": "long job"}])
     p = subprocess.Popen([sys.executable, "-c", WORKER, lead.project_id], stdout=subprocess.PIPE, text=True,
-                         env={**os.environ, "ASSAY_DATABASE_URL": db_url})
+                         env={**os.environ, "BENCHBOOK_DATABASE_URL": db_url})
     assert p.stdout is not None and p.stdout.readline().strip() == "claimed"
     p.send_signal(signal.SIGKILL)
     p.wait()

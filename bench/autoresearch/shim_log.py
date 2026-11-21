@@ -17,8 +17,9 @@ import time
 import uuid
 from pathlib import Path
 
-from assay.integrations.autoresearch.code import code_hash
-from assay.integrations.autoresearch.runner import parse_summary
+from benchbook.config import env
+from benchbook.integrations.autoresearch.code import code_hash
+from benchbook.integrations.autoresearch.runner import parse_summary
 
 UV_PATH_OPTIONS = {"--directory", "--project"}
 UV_VALUE_OPTIONS = {"--python", "-p", "--with", "--with-editable", "--with-requirements", "--index", "--index-url",
@@ -97,10 +98,11 @@ def start(path: Path) -> None:
                                 timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         commit = ""
-    seed = os.environ.get("ASSAY_AR_SEED")
+    seed = env("AR_SEED")
     _append({"event": "start", "id": rid, "agent": os.environ.get("AR_BENCH_AGENT"), "start": time.time(),
              "code_hash": code_hash(src), "commit": commit, "cwd": os.getcwd(),
-             "assay_run": os.environ.get("ASSAY_AR_RUN"), "assay_run_id": os.environ.get("ASSAY_AR_RUN_ID"),
+             "benchbook_run": env("AR_RUN"),
+             "benchbook_run_id": env("AR_RUN_ID"),
              "seed": int(seed) if seed and seed.lstrip("-").isdigit() else None})
     print(rid)
 

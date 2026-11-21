@@ -1,0 +1,11 @@
+# metric_direction: lower_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-10-12T09:14:03Z	aaa1111	1.0021	0.0	pass	-	baseline	initial state
+1	2026-10-12T09:21:40Z	bbb2222	0.9981	-0.0040	pass	-	keep	MATRIX_LR 0.04 -> 0.06
+2	2026-10-12T09:29:02Z	-	1.0004	+0.0023	-	-	discard	DEPTH 8 -> 10 in the same budget
+3	2026-10-12T09:31:15Z	-	-	-	-	-	crash	DEPTH 14 (CUDA out of memory)
+4	2026-10-12T09:31:20Z	-	-	-	-	-	no-op	no change made
+5	2026-10-12T09:38:44Z	-	0.9979	-0.0002	fail	-	discard	skip the last evaluation batch
+6	2026-10-12T09:46:10Z	ccc3333	0.9950	-0.0031	pass	-	keep (reworked)	WEIGHT_DECAY 0.2 -> 0.1
+7	2026-10-12T09:50:00Z	-	n/a	-	-	-	metric-error	verify printed no number
+8	2026-10-12T09:51:00Z	-	-	-	-	-	hook-blocked	pre-commit hook rejected the commit

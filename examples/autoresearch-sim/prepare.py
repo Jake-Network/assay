@@ -1,4 +1,4 @@
-"""Simulated autoresearch prepare.py (assay CPU simulator): the fixed harness constants only.
+"""Simulated autoresearch prepare.py (benchbook CPU simulator): the fixed harness constants only.
 
 Like upstream, this file is read-only for agents. Its normalised hash is part of the partition, so changing
 anything here (TIME_BUDGET, the evaluation) puts runs into a different comparison group.

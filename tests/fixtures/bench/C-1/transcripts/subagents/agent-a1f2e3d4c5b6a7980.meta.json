@@ -1,0 +1,1 @@
+{"agentType": "benchbook:benchbook-worker", "isBuiltIn": false, "description": "Worker 1", "toolUseId": "toolu_A1", "spawnDepth": 1, "model": "claude-sonnet-5-5", "finished": true}

@@ -21,24 +21,24 @@ from .launch import result_cost
 
 
 def b_runs(project: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    from assay import Ledger
+    from benchbook import Ledger
 
     lg = Ledger.open(project=project, agent="human")
     rows = lg.sql_internal(
         "SELECT e.id, e.author, e.code_ref, e.seed, e.run_status, e.primary_value, e.duration_ms, e.outcome,"
         " extract(epoch FROM e.created_at) AS t, e.trace_ref->>'ar_run_id' AS ar_run_id"
-        " FROM assay.experiments e"
+        " FROM benchbook.experiments e"
         " WHERE e.project_id=%s ORDER BY e.created_at", (lg.project_id,))
     verdicts = Counter(r["status"] for r in lg.sql_internal(
-        "SELECT status FROM assay.v_claim_status WHERE project_id=%s AND kind='result'", (lg.project_id,)))
+        "SELECT status FROM benchbook.v_claim_status WHERE project_id=%s AND kind='result'", (lg.project_id,)))
     verified = lg.sql_internal(
-        "SELECT extract(epoch FROM created_at) AS t, mean FROM assay.v_partition_best WHERE project_id=%s"
+        "SELECT extract(epoch FROM created_at) AS t, mean FROM benchbook.v_partition_best WHERE project_id=%s"
         " AND status='verified' ORDER BY created_at", (lg.project_id,))
     # B5: only refusals that were not followed by the same agent running that code anyway (--retry-failed);
     # 'rejected' hits are runs that already happened.
     blocked = lg.sql_internal(
-        "SELECT count(*) AS n FROM assay.dedup_hits h WHERE h.project_id=%s AND h.kind='avoided'"
-        " AND NOT EXISTS (SELECT 1 FROM assay.experiments x WHERE x.project_id=h.project_id"
+        "SELECT count(*) AS n FROM benchbook.dedup_hits h WHERE h.project_id=%s AND h.kind='avoided'"
+        " AND NOT EXISTS (SELECT 1 FROM benchbook.experiments x WHERE x.project_id=h.project_id"
         "   AND x.dedup_key=h.dedup_key AND x.author=h.agent_id AND coalesce(x.seed,0)=0"
         "   AND x.created_at >= h.created_at)", (lg.project_id,))
     return rows, {"verdicts": dict(verdicts), "verified": verified, "blocked": blocked[0]["n"]}
@@ -116,10 +116,10 @@ def report(out: Path) -> None:
     da, db = arms.duplicates(ar, base), arms.duplicates(bshim, base)
     lost = arms.unrecorded(bshim, br)
     missing_coverage = (lost["ledger_only"] or not ar or not bshim or not cond.get("ended_at")
-                        or any(not r.get("assay_run_id") for r in bshim)
+                        or any(not arms.run_id(r) for r in bshim)
                         or (cond.get("stop") or {}).get("reason") == "unaccounted_usage")
     h1 = "inconclusive" if missing_coverage else "observed_pass"
-    if lost["not_recorded"] or lost["outside_assay"] or db["duplicates"]:
+    if lost["not_recorded"] or lost["outside_benchbook"] or db["duplicates"]:
         h1 = "fail"
     a_keeps = arms.a_keeps(out, ar)
     matched_keeps = [k for k in a_keeps if k["source"] == "shim"]
@@ -152,8 +152,8 @@ def report(out: Path) -> None:
         return sum(1 for r in runs if arms.replication_number(r) == 0)
 
     b_minutes = minutes(bshim)
-    b_rep_min = sum(duration(r) for r in bshim if r.get("assay_run") == "replicate")
-    b_cal_min = sum(duration(r) for r in bshim if r.get("assay_run") == "calibration")
+    b_rep_min = sum(duration(r) for r in bshim if arms.run_kind(r) == "replicate")
+    b_cal_min = sum(duration(r) for r in bshim if arms.run_kind(r) == "calibration")
     judged = sum(binfo["verdicts"].get(k, 0) for k in ("verified", "refuted", "inconclusive"))
     restarts = cond.get("restarts") or {}
     ua, ub = usage(out, "A"), usage(out, "B")
@@ -186,7 +186,7 @@ def report(out: Path) -> None:
         ("   reported best at the end", fmt(a_best) + " (best keep, as printed)",
          fmt(b_best) + " (verified mean)"),
         ("H1. runs started but not recorded", "n/a (no ledger)",
-         f"{lost['not_recorded']} (+{lost['outside_assay']} started outside assay ar)"),
+         f"{lost['not_recorded']} (+{lost['outside_benchbook']} started outside benchbook ar)"),
         ("   ledger runs without a collector receipt", "n/a (no ledger)", str(lost["ledger_only"])),
         ("3. duplicate runs (same code and replication number)", f"{da['duplicates']} ({da['minutes']:.1f} GPU min)",
          f"{db['duplicates']} ({db['minutes']:.1f} GPU min); {binfo['blocked']} refused before running"),
@@ -207,25 +207,28 @@ def report(out: Path) -> None:
         ("   GPU minutes used by runs (shim)", f"{minutes(ar):.1f}", f"{minutes(bshim):.1f}"),
         ("   agent restarts", str(restarts.get("A", 0)), str(restarts.get("B", 0))),
     ]
-    conditions_keys = ("label", "model", "claude_version", "upstream_commit", "assay_commit", "hours", "minutes",
+    conditions_keys = ("label", "model", "claude_version", "upstream_commit", "benchbook_commit", "hours", "minutes",
                        "gpu_hours_per_arm", "max_budget_usd_per_agent", "max_restarts", "sim_run_seconds")
-    provenance = {**{k: cond.get(k) for k in conditions_keys}, "gpus_per_arm": gpus,
-                  "post_replicate": post.get("protocol")}
+    # conditions.json written before the rename names the commit assay_commit
+    benchbook_commit = str(cond.get("benchbook_commit") or cond["assay_commit"])
+    provenance = {**{k: cond.get(k) for k in conditions_keys}, "benchbook_commit": benchbook_commit,
+                  "gpus_per_arm": gpus, "post_replicate": post.get("protocol")}
     numbers = {**{k: metrics[k] for k in ("replicated_best", "false_best_ratio", "duplicates")}, "unrecorded_B": lost,
                "restarts": restarts, "gpu_assignment": cond.get("gpu_assignment"),
                "repetition": cond.get("repetition"), "h1_status": h1, "provenance": provenance, "metrics": metrics}
     (out / "report.json").write_text(json.dumps(numbers, indent=2, default=str), encoding="utf-8")
     md = [f"# autoresearch launch experiment: {cond['tag']}", "", f"**{label}**" if label else "",
-          "", f"- Arms: A = independent upstream program.md, B = assay swarm (project {cond['project_b']})",
+          "", f"- Arms: A = independent upstream program.md, B = benchbook swarm (project {cond['project_b']})",
           f"- GPUs per arm: {gpus} (A {cond['gpus_a']}, B {cond['gpus_b']}); wall clock: {hours:.2f} h",
-          f"- Model: {cond.get('model')}; Claude Code: {cond.get('claude_version')}; assay {cond['assay_commit'][:8]};"
+          f"- Model: {cond.get('model')}; Claude Code: {cond.get('claude_version')};"
+          f" benchbook {benchbook_commit[:8]};"
           f" upstream {cond['upstream_commit'][:8]}",
           f"- Started {cond.get('started_at')}, ended {cond.get('ended_at')};"
           f" agent exit codes {cond.get('exit_codes')}",
           f"- Stop: {cond.get('stop')}; sessions missing a cost receipt: {usage_gaps}",
           f"- Repetition {cond.get('repetition')}; GPU assignment {cond.get('gpu_assignment')}; restarts {restarts}",
           f"- B verdicts: {binfo['verdicts'] or 'none'}; epsilon used for keeps (both arms): {post.get('epsilon')}", "",
-          "| metric | A (independent) | B (assay) |", "|---|---|---|"]
+          "| metric | A (independent) | B (benchbook) |", "|---|---|---|"]
     md += [f"| {m} | {a} | {b} |" for m, a, b in rows]
     md += ["", f"H1 within collector scope: {h1}. Collection covers instrumented uv and PATH Python script "
            "invocations. An interpreter launched outside the supplied PATH or a module-based invocation can "

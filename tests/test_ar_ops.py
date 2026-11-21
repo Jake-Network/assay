@@ -1,4 +1,4 @@
-"""assay ar operations on real git checkouts of the CPU simulator (§8, §16.1). Runs take ~0.05 s each."""
+"""benchbook ar operations on real git checkouts of the CPU simulator (§8, §16.1). Runs take ~0.05 s each."""
 from __future__ import annotations
 
 import hashlib
@@ -12,12 +12,12 @@ from threading import Event
 
 import pytest
 
-from assay import Ledger
-from assay.integrations.autoresearch import ops
-from assay.integrations.autoresearch.checkout import Checkout
-from assay.integrations.autoresearch.code import code_hash, normalize, short_hash
-from assay.integrations.autoresearch.referee import tick
-from assay.tokens import estimate_tokens
+from benchbook import Ledger
+from benchbook.integrations.autoresearch import ops
+from benchbook.integrations.autoresearch.checkout import Checkout
+from benchbook.integrations.autoresearch.code import code_hash, normalize, short_hash
+from benchbook.integrations.autoresearch.referee import tick
+from benchbook.tokens import estimate_tokens
 
 SIM = Path(__file__).resolve().parent.parent / "examples" / "autoresearch-sim"
 CMD = f"{sys.executable} train.py"
@@ -25,8 +25,8 @@ CMD = f"{sys.executable} train.py"
 
 @pytest.fixture(autouse=True)
 def sim_env(db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ASSAY_DATABASE_URL", db_url)
-    monkeypatch.setenv("ASSAY_AR_HW", "test-cpu")
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
+    monkeypatch.setenv("BENCHBOOK_AR_HW", "test-cpu")
     monkeypatch.setenv("AR_SIM_SECONDS", "0.05")
     monkeypatch.setenv("AR_SIM_LUCKY", "0")
     monkeypatch.setenv("AR_SIM_NOISE", "0.0005")
@@ -83,9 +83,9 @@ def calibrate(pid: str, roots: list[Path]) -> ops.Ctx:
 
 def test_init(lab: tuple[str, list[Path]]) -> None:
     pid, (root, *_) = lab
-    assert "LOOP FOREVER" in (root / "program.assay.md").read_text()
-    assert ".assay/ar_state.json" in (root / ".gitignore").read_text()
-    assert f'project = "{pid}"' in (root / ".assay" / "config.toml").read_text()
+    assert "LOOP FOREVER" in (root / "program.benchbook.md").read_text()
+    assert ".benchbook/ar_state.json" in (root / ".gitignore").read_text()
+    assert f'project = "{pid}"' in (root / ".benchbook" / "config.toml").read_text()
     lg = Ledger.open(project=pid, agent="human")
     assert lg.project.pack == "ml-research" and lg.project.settings["partition_key"] == "partition"
     assert lg.as_agent("referee").role == "orchestrator"
@@ -127,7 +127,7 @@ def test_running_duplicate_is_refused(lab: tuple[str, list[Path]]) -> None:
     b.lg.create_intent("baseline", {"partition": b.partition, "code_key": f"{b.partition}|{code}"})
     with pytest.raises(ops.Refused, match="running right now"):
         ops.run(a, "baseline", CMD)
-    assert not a.lg.sql_internal("SELECT 1 FROM assay.experiments WHERE project_id=%s", (pid,))
+    assert not a.lg.sql_internal("SELECT 1 FROM benchbook.experiments WHERE project_id=%s", (pid,))
 
 
 def test_parent_changed_knobs_and_lineage(lab: tuple[str, list[Path]]) -> None:
@@ -141,9 +141,9 @@ def test_parent_changed_knobs_and_lineage(lab: tuple[str, list[Path]]) -> None:
     set_knob(root, "WARMDOWN_RATIO", "0.65", commit=False)  # not committed: the parent is HEAD
     r2 = ops.run(a, "warmdown", CMD)
     assert r2["parent_from"] == "HEAD" and r2["changed"] == {"WARMDOWN_RATIO": [0.5, 0.65]}
-    lin = a.lg.sql_internal("SELECT id, depth FROM assay.v_lineage WHERE project_id=%s ORDER BY depth", (pid,))
+    lin = a.lg.sql_internal("SELECT id, depth FROM benchbook.v_lineage WHERE project_id=%s ORDER BY depth", (pid,))
     assert [x["depth"] for x in lin] == [0, 1, 2]
-    kh = a.lg.sql_internal("SELECT knob FROM assay.v_knob_history WHERE project_id=%s ORDER BY knob", (pid,))
+    kh = a.lg.sql_internal("SELECT knob FROM benchbook.v_knob_history WHERE project_id=%s ORDER BY knob", (pid,))
     assert [x["knob"] for x in kh] == ["MATRIX_LR", "WARMDOWN_RATIO"]
 
 
@@ -215,7 +215,7 @@ def test_sync_adopts_verified_best_and_leaves_refuted_lines(lab: tuple[str, list
     assert st["verified_best"]["author"] == "b" and st["results"].get("refuted") == 1
     assert st["calibration"]["status"] == "ok" and st["gpu_minutes"]["replication_share"] > 0
     brief = c.lg.brief(budget_tokens=1500, partition=c.partition)
-    assert "## Verified best" in brief and "MATRIX_LR: 0.06 base" in brief and "assay ar claim" in brief
+    assert "## Verified best" in brief and "MATRIX_LR: 0.06 base" in brief and "benchbook ar claim" in brief
     assert estimate_tokens(brief) <= 1575
     tiny = c.lg.brief(budget_tokens=200, partition=c.partition)
     assert estimate_tokens(tiny) <= 210 and "Next:" in tiny
@@ -231,12 +231,12 @@ def test_unrecorded_runs_are_queued_and_flushed(lab: tuple[str, list[Path]],
 
     monkeypatch.setattr(a.lg, "record_experiment", down)
     r = ops.run(a, "baseline", CMD)
-    assert r["outcome"] == "queued" and (root / ".assay" / "ar_pending.jsonl").exists()
+    assert r["outcome"] == "queued" and (root / ".benchbook" / "ar_pending.jsonl").exists()
     assert len(a.lg.my_intents()) == 1  # A5: the code stays reserved until the run is in the ledger
     a2 = ctx(pid, root, "a")  # every ar command flushes the queue first
-    assert not (root / ".assay" / "ar_pending.jsonl").exists()
-    assert not list((root / ".assay").glob("*.flushing"))
-    assert len(a2.lg.sql_internal("SELECT 1 FROM assay.experiments WHERE project_id=%s", (pid,))) == 1
+    assert not (root / ".benchbook" / "ar_pending.jsonl").exists()
+    assert not list((root / ".benchbook").glob("*.flushing"))
+    assert len(a2.lg.sql_internal("SELECT 1 FROM benchbook.experiments WHERE project_id=%s", (pid,))) == 1
     assert a2.lg.my_intents() == []  # completed once recorded
 
 
@@ -254,7 +254,7 @@ def test_unrecorded_replication_keeps_its_task(lab: tuple[str, list[Path]], monk
     monkeypatch.setattr(b.lg, "record_experiment", down)
     done = ops.replicate(b, cmd=CMD)
     assert done[0]["queued"] and done[0]["id"] is None
-    q = "SELECT status FROM assay.tasks WHERE project_id=%s AND 'calibration'=ANY(tags) ORDER BY created_at"
+    q = "SELECT status FROM benchbook.tasks WHERE project_id=%s AND 'calibration'=ANY(tags) ORDER BY created_at"
     assert [t["status"] for t in a.lg.sql_internal(q, (pid,))] == ["claimed", "open"]
     ctx(pid, roots[1], "b")  # a fresh ledger connection: the flush records the run
     assert [t["status"] for t in a.lg.sql_internal(q, (pid,))] == ["done", "open"]
@@ -263,7 +263,7 @@ def test_unrecorded_replication_keeps_its_task(lab: tuple[str, list[Path]], monk
 def test_changed_run_is_retained_when_database_drops_after_training(
     lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from assay.integrations.autoresearch.runner import RunResult
+    from benchbook.integrations.autoresearch.runner import RunResult
 
     pid, (root, *_) = lab
     a = ctx(pid, root, "a")
@@ -304,7 +304,7 @@ def test_failed_run_replay_does_not_record_again_after_completion_error(
     batch = ops._take_pending(a.co.pending_path())[0]
     batch.write_bytes(b"\xff\xfe\n" + batch.read_bytes())
     a2 = ctx(pid, root, "a")
-    rows = a2.lg.sql_internal("SELECT run_status FROM assay.experiments WHERE project_id=%s", (pid,))
+    rows = a2.lg.sql_internal("SELECT run_status FROM benchbook.experiments WHERE project_id=%s", (pid,))
     assert rows == [{"run_status": "error"}]
     assert not a2.lg.my_intents() and not a2.co.pending_path().exists()
     assert batch.with_suffix(".invalid").exists()
@@ -312,7 +312,7 @@ def test_failed_run_replay_does_not_record_again_after_completion_error(
 
 def test_pending_queue_take_is_atomic(tmp_path: Path) -> None:
     """A5: lines appended while a flush is in progress go to a fresh queue file and are never lost."""
-    p = tmp_path / ".assay" / "ar_pending.jsonl"
+    p = tmp_path / ".benchbook" / "ar_pending.jsonl"
     ops._append_line(p, '{"n": 1}')
     ops._append_line(p, '{"n": 2}')
     taken = ops._take_pending(p)
@@ -367,7 +367,7 @@ def test_notes_and_ideas(lab: tuple[str, list[Path]]) -> None:
 def test_viewer_pages(lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch) -> None:
     from starlette.testclient import TestClient
 
-    from assay.web.app import create_app
+    from benchbook.web.app import create_app
 
     pid, roots = lab
     monkeypatch.setenv("AR_SIM_NOISE", "0.0001")  # epsilon from 3 noisy runs can swallow the 0.004 gain
@@ -405,7 +405,7 @@ def test_import_results_tsv(lab: tuple[str, list[Path]]) -> None:
     a = ctx(pid, root, "a")
     r = ops.import_results(a, root / "old.tsv", hw="test-cpu")
     assert r == {"imported": 3, "duplicates": 0, "missing_commit": 1, "rows": 4, "referee": r["referee"]}
-    exps = a.lg.sql_internal("SELECT outcome, config->'changed' AS ch FROM assay.experiments WHERE project_id=%s"
+    exps = a.lg.sql_internal("SELECT outcome, config->'changed' AS ch FROM benchbook.experiments WHERE project_id=%s"
                              " ORDER BY created_at", (pid,))
     assert [e["outcome"] for e in exps] == ["improved", "improved", "failed"]
     assert exps[1]["ch"] == {"MATRIX_LR": [0.04, 0.06]}
@@ -438,7 +438,7 @@ def test_keep_compares_with_the_parent(lab: tuple[str, list[Path]], monkeypatch:
 def test_local_keep_does_not_require_beating_the_verified_baseline(
     lab: tuple[str, list[Path]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from assay.integrations.autoresearch.runner import RunResult
+    from benchbook.integrations.autoresearch.runner import RunResult
 
     pid, roots = lab
     a = calibrate(pid, roots)
@@ -496,7 +496,7 @@ def test_interrupted_run_is_recorded(lab: tuple[str, list[Path]], monkeypatch: p
     """A4: SIGTERM during the training kills it (runner) and the run is still recorded before re-raising."""
     import signal
 
-    from assay.integrations.autoresearch.runner import Interrupted
+    from benchbook.integrations.autoresearch.runner import Interrupted
 
     pid, (root, *_) = lab
     a = ctx(pid, root, "a")
@@ -508,7 +508,7 @@ def test_interrupted_run_is_recorded(lab: tuple[str, list[Path]], monkeypatch: p
     monkeypatch.setattr(ops, "run_command", killed)
     with pytest.raises(Interrupted):
         ops.run(a, "baseline", CMD)
-    rows = a.lg.sql_internal("SELECT run_status, notes FROM assay.experiments WHERE project_id=%s", (pid,))
+    rows = a.lg.sql_internal("SELECT run_status, notes FROM benchbook.experiments WHERE project_id=%s", (pid,))
     assert len(rows) == 1 and rows[0]["run_status"] == "error" and "interrupted (SIGTERM)" in rows[0]["notes"]
     assert a.lg.my_intents() == []
     assert (root / "results.tsv").read_text().splitlines()[-1].split("\t")[3] == "crash"
@@ -585,14 +585,14 @@ def test_status_counts_only_refused_duplicates(lab: tuple[str, list[Path]]) -> N
 
 def test_import_needs_the_hardware(lab: tuple[str, list[Path]]) -> None:
     """A9: results.tsv does not say which GPU produced it, so import refuses to guess."""
-    from assay.errors import AssayError
+    from benchbook.errors import BenchbookError
 
     pid, (root, *_) = lab
     base = git(root, "rev-parse", "--short=7", "HEAD").strip()
     (root / "old.tsv").write_text(f"commit\tval_bpb\tmemory_gb\tstatus\tdescription\n{base}\t1.0\t44.0\tkeep\tb\n")
     a = ctx(pid, root, "a")
-    with pytest.raises(AssayError, match="--hw"):
+    with pytest.raises(BenchbookError, match="--hw"):
         ops.import_results(a, root / "old.tsv")
     assert ops.import_results(a, root / "old.tsv", hw="RTX 4090")["imported"] == 1
-    parts = a.lg.sql_internal("SELECT config->>'partition' AS p FROM assay.experiments WHERE project_id=%s", (pid,))
+    parts = a.lg.sql_internal("SELECT config->>'partition' AS p FROM benchbook.experiments WHERE project_id=%s", (pid,))
     assert parts[0]["p"].startswith("rtx-4090/") and parts[0]["p"] != a.partition

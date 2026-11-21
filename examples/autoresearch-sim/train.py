@@ -1,6 +1,6 @@
-"""Simulated autoresearch train.py (assay CPU simulator). No torch, no GPU.
+"""Simulated autoresearch train.py (benchbook CPU simulator). No torch, no GPU.
 
-Same UPPER_CASE knobs and the same end-of-run summary as upstream train.py, so `assay ar` treats it exactly
+Same UPPER_CASE knobs and the same end-of-run summary as upstream train.py, so `benchbook ar` treats it exactly
 like the real thing. val_bpb is a smooth function of the knobs plus one interaction term plus Gaussian noise.
 
 Differences from the real script, on purpose:

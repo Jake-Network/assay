@@ -6,7 +6,7 @@
 #   AR_BENCH_LOG     file to append to          AR_BENCH_AGENT     agent label (gpu<n>)
 #   AR_BENCH_REAL    the real uv binary          AR_BENCH_REAL_CMD  a command used instead of "uv run train.py" (simulator)
 #   AR_BENCH_PY      python that runs shim_log   AR_BENCH_HELPER    path of shim_log.py
-# In arm B, assay ar run/replicate set ASSAY_AR_RUN and ASSAY_AR_SEED; both are logged.
+# In arm B, benchbook ar run/replicate set BENCHBOOK_AR_RUN and BENCHBOOK_AR_SEED; both are logged.
 set -u
 command=${0##*/}
 case "$command" in

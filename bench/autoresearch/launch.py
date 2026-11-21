@@ -1,4 +1,4 @@
-"""Launch experiment harness (§13): arm A (independent upstream autoresearch) vs arm B (assay swarm).
+"""Launch experiment harness (§13): arm A (independent upstream autoresearch) vs arm B (benchbook swarm).
 
 Real mode prepares worktrees and prints the commands; nothing is started without --execute (cost rule):
 
@@ -32,7 +32,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from assay.integrations.autoresearch.code import code_hash
+from benchbook import config as benchbook_config
+from benchbook.integrations.autoresearch.code import code_hash
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -40,8 +41,8 @@ SIM = ROOT / "examples" / "autoresearch-sim"
 PROMPT_A = ("Read program.md and start. Setup is done for you: the run tag is {tag}, the branch {branch} already "
             "exists and is checked out, the data is prepared, and results.tsv does not exist yet. Do not ask for "
             "confirmation; go straight to the baseline run and then the experiment loop.")
-PROMPT_B = ("Read program.assay.md and start. Setup is done for you: ASSAY_AGENT and ASSAY_PROJECT are set and the "
-            "data is prepared. Do not ask for confirmation; go straight to the loop.")
+PROMPT_B = ("Read program.benchbook.md and start. Setup is done for you: BENCHBOOK_AGENT and "
+            "BENCHBOOK_PROJECT are set and the data is prepared. Do not ask for confirmation; go straight to the loop.")
 TRAINING_PROMPT = " For this experiment, launch training through the supplied PATH with `uv run train.py`."
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep"
 
@@ -104,7 +105,10 @@ def prepare(args: Any, out: Path) -> dict[str, Any]:
     real_uv = shutil.which("uv")
     if real_uv is None and not args.sim:
         raise SystemExit("uv must be on PATH to collect training runs")
-    base_env = {k: v for k, v in os.environ.items() if k not in ("ASSAY_PROJECT", "ASSAY_AGENT")}
+    # neither arm inherits the launching shell's project or agent, under the current or the pre-rename variable name
+    inherited = {prefix + name for prefix in (benchbook_config.ENV_PREFIX, benchbook_config.LEGACY_ENV_PREFIX)
+                 for name in ("PROJECT", "AGENT")}
+    base_env = {k: v for k, v in os.environ.items() if k not in inherited}
 
     def shim_env(arm: str, g: int) -> dict[str, str]:
         """B1: the same uv shim counts runs in both arms."""
@@ -132,15 +136,15 @@ def prepare(args: Any, out: Path) -> dict[str, Any]:
     for g in gpus_b:
         wt = worktree(upstream, out / "B" / f"gpu{g}", f"autoresearch/{tag}-b-gpu{g}")
         b_trees.append(wt)
-    init_env = dict(base_env, ASSAY_AR_HW="sim-cpu") if args.sim else dict(base_env)
-    sh([sys.executable, "-m", "assay", "ar", "init", "--project", project], b_trees[0], init_env)
+    init_env = dict(base_env, BENCHBOOK_AR_HW="sim-cpu") if args.sim else dict(base_env)
+    sh([sys.executable, "-m", "benchbook", "ar", "init", "--project", project], b_trees[0], init_env)
     for wt in b_trees[1:]:
-        shutil.copy(b_trees[0] / "program.assay.md", wt / "program.assay.md")
+        shutil.copy(b_trees[0] / "program.benchbook.md", wt / "program.benchbook.md")
     for g, wt in zip(gpus_b, b_trees, strict=True):
-        env = dict(base_env, CUDA_VISIBLE_DEVICES=str(g), ASSAY_AGENT=f"gpu{g}", ASSAY_PROJECT=project,
+        env = dict(base_env, CUDA_VISIBLE_DEVICES=str(g), BENCHBOOK_AGENT=f"gpu{g}", BENCHBOOK_PROJECT=project,
                    **shim_env("B", g))
         if args.sim:
-            env.update(ASSAY_AR_HW="sim-cpu")
+            env.update(BENCHBOOK_AR_HW="sim-cpu")
             cmd = [sys.executable, str(SIM / "scripted_agent.py"), "--minutes", str(args.minutes), "--seed", str(g),
                    "--drain-seconds", "0", "--cmd", "uv run train.py"]
         else:
@@ -158,8 +162,8 @@ def prepare(args: Any, out: Path) -> dict[str, Any]:
         "sim_run_seconds": args.sleep if args.sim else None,
         "model": None if args.sim else args.model, "max_budget_usd_per_agent": None if args.sim else
         args.max_budget_usd, "claude_version": None if args.sim else _claude_version(),
-        "assay_commit": sh(["git", "-C", str(ROOT), "rev-parse", "HEAD"]),
-        "database": "ASSAY_DATABASE_URL" if os.environ.get("ASSAY_DATABASE_URL") else "embedded",
+        "benchbook_commit": sh(["git", "-C", str(ROOT), "rev-parse", "HEAD"]),
+        "database": "BENCHBOOK_DATABASE_URL" if benchbook_config.env("DATABASE_URL") else "embedded",
         "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "agents": [{k: a[k] for k in ("arm", "gpu", "cwd", "cmd")} for a in agents],
     }
@@ -169,8 +173,8 @@ def prepare(args: Any, out: Path) -> dict[str, Any]:
         lines.append("# Preview only. Use launch --execute to supervise both arms and enforce budgets.")
     for a in agents:
         keys = ["CUDA_VISIBLE_DEVICES", "PATH", "AR_BENCH_LOG", "AR_BENCH_AGENT", "AR_BENCH_REAL", "AR_BENCH_PY",
-                "AR_BENCH_REAL_PYTHON", "AR_BENCH_REAL_PYTHON3", "AR_BENCH_HELPER", "ASSAY_AGENT", "ASSAY_PROJECT",
-                "ASSAY_AR_HW", "AR_SIM_SECONDS", "AR_BENCH_REAL_CMD"]
+                "AR_BENCH_REAL_PYTHON", "AR_BENCH_REAL_PYTHON3", "AR_BENCH_HELPER", "BENCHBOOK_AGENT",
+                "BENCHBOOK_PROJECT", "BENCHBOOK_AR_HW", "AR_SIM_SECONDS", "AR_BENCH_REAL_CMD"]
         envs = " ".join(f"{k}={shlex.quote(a['env'][k])}" for k in keys if k in a["env"])
         log = shlex.quote(str(out / a["arm"] / f"agent-gpu{a['gpu']}.jsonl"))
         prefix = "" if args.sim else "# "
