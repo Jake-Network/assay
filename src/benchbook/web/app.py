@@ -29,6 +29,8 @@ from starlette.responses import (
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from ..blobs import is_blob_uri
+from ..config import env
 from ..db.conn import notification_channel
 from ..errors import BenchbookError
 from ..ids import short
@@ -228,7 +230,7 @@ class Viewer:
 
         def blob(r: dict[str, Any]) -> str | None:
             for a in r.get("artifacts") or []:
-                if isinstance(a, dict) and str(a.get("uri", "")).startswith("benchbook://blob/"):
+                if isinstance(a, dict) and is_blob_uri(a.get("uri")):
                     try:
                         return self.lg.get_blob(a["uri"]).decode("utf-8", errors="replace")
                     except BenchbookError:
@@ -342,6 +344,7 @@ class Viewer:
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 WILDCARD_HOSTS = ("0.0.0.0", "::", "")
 TOKEN_COOKIE = "benchbook_token"
+LEGACY_TOKEN_COOKIE = "assay_token"  # set by a viewer from before the rename; still accepted, never set again
 
 
 def requires_serve_token(host: str) -> bool:
@@ -396,7 +399,8 @@ class TokenMiddleware:
         auth = req.headers.get("authorization", "")
         bearer = auth[7:] if auth.lower().startswith("bearer ") else None
         via_query = self._ok(req.query_params.get("token"))
-        if not (via_query or self._ok(bearer) or self._ok(req.cookies.get(TOKEN_COOKIE))):
+        if not (via_query or self._ok(bearer) or self._ok(req.cookies.get(TOKEN_COOKIE))
+                or self._ok(req.cookies.get(LEGACY_TOKEN_COOKIE))):
             await PlainTextResponse("benchbook: token required (open /?token=... once, or send Authorization: Bearer)",
                                     status_code=401)(scope, receive, send)
             return
@@ -426,9 +430,7 @@ class TokenMiddleware:
 def create_app(project: str | None = None, toolset: str = "all", with_mcp: bool = True,
                host: str = "127.0.0.1", token: str | None = None) -> Starlette:
     """A non-loopback bind needs `token` or BENCHBOOK_SERVE_TOKEN to protect the viewer and MCP tools."""
-    import os
-
-    token = token or os.environ.get("BENCHBOOK_SERVE_TOKEN") or None
+    token = token or env("SERVE_TOKEN") or None
     wildcard = host in WILDCARD_HOSTS
     if requires_serve_token(host) and not token:
         raise BenchbookError(f"binding to {host or 'all interfaces'} requires a token; "

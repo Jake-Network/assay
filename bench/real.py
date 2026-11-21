@@ -118,7 +118,8 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
            # workers report and the stream carries one result event per wake-up. Every arm waits for its workers.
            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
            "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ.get("PATH", "")))}
-    env.pop("BENCHBOOK_PROJECT", None)
+    for inherited in ("BENCHBOOK_PROJECT", "ASSAY_PROJECT"):  # the pre-rename name is read as a fallback
+        env.pop(inherited, None)
     prompt = LEAD[mode].format(task=TASK, rounds=args.rounds, workers=args.workers, evals=args.evals) + REPORT
     tools = "Agent,Bash(python tools/evaluate.py:*),Read,Write,Glob"
     cmd = [
@@ -287,7 +288,9 @@ def _ledger_receipts(project_id: str) -> list[Any]:
         lg = Ledger.open(project=project_id, agent="human")
         receipts = lg.sql_internal(
             "SELECT trace_ref->>'trace_id' AS eval_id, config, code_ref, seed, run_status, primary_value AS value"
-            " FROM benchbook.experiments WHERE project_id=%s AND trace_ref->>'system'='benchbook-bench'", (project_id,))
+            " FROM benchbook.experiments WHERE project_id=%s"
+            # runs recorded before the rename say assay-bench
+            " AND trace_ref->>'system' IN ('benchbook-bench', 'assay-bench')", (project_id,))
         notes = lg.sql_internal(
             "SELECT payload->>'text' AS body FROM benchbook.claims WHERE project_id=%s AND kind='note'"
             " AND author='hook' AND 'auto-captured'=ANY(tags)", (project_id,))

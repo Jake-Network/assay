@@ -16,6 +16,12 @@ X is newer than this benchbook; upgrade benchbook" instead of writing.
 
 `BENCHBOOK_DATABASE_URL` is never written to `.benchbook/config.toml` (that file is meant to be committed).
 
+A server started before the rename (when benchbook was called assay) keeps its data in the compose volume
+`assay-pg`, with the user and database `assay`. Keep running it with the compose file it was started with and
+keep its URL (`postgresql://assay:<password>@db-host:5432/assay`, in `BENCHBOOK_DATABASE_URL` or the still-read
+`ASSAY_DATABASE_URL`): the current compose file names a new volume, so `docker compose up` with it starts an empty
+server next to the old data.
+
 ## Example: four GPU machines on one experiment
 
 On each machine:

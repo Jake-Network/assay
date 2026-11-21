@@ -1,8 +1,11 @@
 """MCP server: a thin adapter over the SDK (P10). Tools are prefixed benchbook_ and their descriptions
 start with when to call them (§7.3). Every tool takes `agent`, the caller's self-reported identity:
-unknown names are registered as workers."""
+unknown names are registered as workers.
+
+A server started through the pre-rename `assay` command serves the same tools as assay_* (see build)."""
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -11,13 +14,20 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from . import config as localcfg
 from .errors import BenchbookError, ValidationFailed
 from .ids import short
 from .ledger import Ledger, jsonable
 from .models import ExperimentSummary
 
 T = TypeVar("T")
+F = TypeVar("F", bound=Callable[..., Any])
 TOOLSETS = ("worker", "orchestrator", "all")
+# Every tool, without its prefix. Under the pre-rename names only these words are renamed in what the server says
+# (instructions, descriptions, briefs): a record that happens to mention benchbook_something keeps its text.
+TOOLS = ("brief", "next_task", "heartbeat", "check_tried", "record_experiment", "propose_claim", "link",
+         "complete_task", "get", "create_tasks", "decide", "cancel_task", "status", "sql", "search")
+TOOL_REF = re.compile(rf"\b{localcfg.NAME}(_(?:{'|'.join(TOOLS)})\b|://(?:schema|brief)\b)")
 
 INSTRUCTIONS = """benchbook is the shared lab notebook for this project. Results live in the ledger, not in messages.
 Workers: benchbook_next_task, then benchbook_brief. Before every evaluation call benchbook_check_tried; right after it \
@@ -82,19 +92,35 @@ async def _run(fn: Callable[[], T]) -> T:
                         "stopped, restart the MCP server (it reconnects on start).") from None
 
 
-def build(project: str | None = None, toolset: str = "all") -> MCPServer:
+def build(project: str | None = None, toolset: str = "all", legacy_names: bool | None = None) -> MCPServer:
+    """legacy_names: register the tools as assay_* and the resources as assay://, their names before the rename.
+    By default only a server started through the `assay` command does: that is a plugin or .mcp.json installed
+    before the rename, whose worker definition, skills and permission rules name the tools that way. Updating the
+    plugin switches the command, and with it the names."""
+    if legacy_names is None:
+        legacy_names = localcfg.LEGACY_COMMAND
+    new, old = localcfg.NAME, localcfg.LEGACY_NAME
+
+    def named(text: str) -> str:
+        """Tool and resource names in text, as this server registers them."""
+        return TOOL_REF.sub(lambda m: old + m.group(1), text) if legacy_names else text
+
     srv = Server(project, toolset)
-    mcp: MCPServer = MCPServer(name="benchbook", instructions=INSTRUCTIONS)
+    mcp: MCPServer = MCPServer(name=old if legacy_names else new, instructions=named(INSTRUCTIONS))
     orchestrator = toolset in ("orchestrator", "all")
 
+    def tool(fn: F) -> F:
+        mcp.tool(name=named(fn.__name__), description=named(fn.__doc__ or "") if legacy_names else None)(fn)
+        return fn
+
     # ---------------------------------------------------------------- worker set
-    @mcp.tool()
+    @tool
     async def benchbook_brief(agent: str, task_id: str | None = None, budget_tokens: int = 2000) -> str:
         """Call right after taking a task, and again after a long step: returns what you need to know now
         (goal, current best, verified claims, what was already tried, open questions) as markdown with ids."""
-        return await _run(lambda: srv.lg(agent).brief(task_id, budget_tokens))
+        return named(await _run(lambda: srv.lg(agent).brief(task_id, budget_tokens)))
 
-    @mcp.tool()
+    @tool
     async def benchbook_next_task(agent: str, tags: list[str] | None = None,
                               lease_seconds: int | None = None) -> dict[str, Any]:
         """Call when you need work: atomically claims the next open task. Omit lease_seconds to use the
@@ -105,14 +131,14 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
         return {"task": {"id": t.short_id, "title": t.title, "tags": t.tags, "spec": t.spec,
                          "lease_expires_at": t.lease_expires_at, "attempt": t.attempts}}
 
-    @mcp.tool()
+    @tool
     async def benchbook_heartbeat(agent: str, task_id: str) -> dict[str, Any]:
         """Call every 5 minutes while working on a task to keep your lease. 'lease lost' means stop working on
         the task; record results without task_id."""
         exp = await _run(lambda: srv.lg(agent).heartbeat(task_id))
         return {"lease_expires_at": exp.isoformat()}
 
-    @mcp.tool()
+    @tool
     async def benchbook_check_tried(agent: str, config: dict[str, Any], code_ref: str | None = None) -> dict[str, Any]:
         """Call BEFORE every evaluation: says whether this exact config (and code_ref) was already run, how many
         seeds replicate it and its best valid value. If tried, choose a different config or see the note about
@@ -127,7 +153,7 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
                 "exact": [summary(e) for e in t.exact[:5]], "invalidated": [summary(e) for e in t.invalidated[:5]],
                 "note": t.note}
 
-    @mcp.tool()
+    @tool
     async def benchbook_record_experiment(agent: str, config: dict[str, Any], metrics: dict[str, Any],
                                       run_status: str = "ok", seed: int | None = None, code_ref: str | None = None,
                                       notes: str | None = None, artifacts: list[dict[str, Any]] | None = None,
@@ -147,7 +173,7 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
             out["notice"] = r.notice
         return out
 
-    @mcp.tool()
+    @tool
     async def benchbook_propose_claim(agent: str, kind: str, statement: str, payload: dict[str, Any] | None = None,
                                   tags: list[str] | None = None, task_id: str | None = None,
                                   evidence: list[list[str]] | None = None) -> dict[str, Any]:
@@ -159,35 +185,35 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
         r = await _run(lambda: srv.lg(agent).propose_claim(kind, statement, payload, tags, task_id, ev))
         return {"id": short("claim", r.id), "duplicate_of": short("claim", r.duplicate_of) if r.duplicate_of else None}
 
-    @mcp.tool()
+    @tool
     async def benchbook_link(agent: str, src: str, relation: str, dst: str, note: str | None = None) -> dict[str, Any]:
         """Call when an existing record bears on another: src supports|refutes|derived_from|depends_on|supersedes|
         replicates|cites dst."""
         lid = await _run(lambda: srv.lg(agent).link(src, relation, dst, note))
         return {"id": short("link", lid)}
 
-    @mcp.tool()
+    @tool
     async def benchbook_complete_task(agent: str, task_id: str, status: str, summary: str) -> dict[str, Any]:
         """Call when you finish a task. status: done|failed. summary: at most 3 sentences; details are in the
         records."""
         t = await _run(lambda: srv.lg(agent).complete_task(task_id, status, summary))
         return {"ok": True, "task": t.short_id, "status": t.status}
 
-    @mcp.tool()
+    @tool
     async def benchbook_get(agent: str, id: str) -> dict[str, Any]:
         """Call only when you need the details behind an id from a brief: the full record plus its links."""
         return await _run(lambda: srv.lg(agent).get(id))
 
     # ---------------------------------------------------------------- orchestrator set
     if orchestrator:
-        @mcp.tool()
+        @tool
         async def benchbook_create_tasks(agent: str, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             """Call to split the search space into independent tasks. Each: {title, spec: {config_space: ...},
             tags, priority, depends_on}. Orchestrator only."""
             ids = await _run(lambda: srv.lg(agent).create_tasks(tasks))
             return {"ids": [short("task", i) for i in ids]}
 
-        @mcp.tool()
+        @tool
         async def benchbook_decide(agent: str, target_id: str, new_status: str, oracle: str, rationale: str,
                                evidence_ids: list[str] | None = None,
                                oracle_detail: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -201,25 +227,25 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
             return {"id": short("decision", d.id), "target": short(d.target_type, d.target_id),
                     "status": d.new_status}
 
-        @mcp.tool()
+        @tool
         async def benchbook_cancel_task(agent: str, task_id: str, reason: str) -> dict[str, Any]:
             """Call to withdraw an open or claimed task that is no longer useful. Orchestrator only."""
             t = await _run(lambda: srv.lg(agent).cancel_task(task_id, reason))
             return {"ok": True, "task": t.short_id, "status": t.status}
 
-        @mcp.tool()
+        @tool
         async def benchbook_status(agent: str) -> dict[str, Any]:
             """Call at the start of each round: project numbers (best, experiment counts, duplicates avoided,
             claim status counts, tasks, active agents)."""
             return await _run(lambda: srv.lg(agent).status())
 
-        @mcp.tool()
+        @tool
         async def benchbook_sql(agent: str, query: str) -> dict[str, Any]:
             """Call for aggregate questions the brief does not answer. One read-only SELECT over the v_* views
             (read resource benchbook://schema first). Already scoped to this project. Max 200 rows, 2s."""
             return await _run(lambda: srv.lg(agent).sql(query))
 
-        @mcp.tool()
+        @tool
         async def benchbook_search(agent: str, text: str | None = None, kind: str | None = None,
                                status: str | None = None, tags: list[str] | None = None,
                                limit: int = 20, all_tags: list[str] | None = None) -> list[dict[str, Any]]:
@@ -228,24 +254,27 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
             Returns one line per record with its id; the line ends with the record's tags."""
             return await _run(lambda: srv.lg(agent).search(text, kind, status, tags, limit, all_tags=all_tags))
 
-    @mcp.resource("benchbook://schema", name="schema", mime_type="text/markdown",
-                  description="The v_* views benchbook_sql can read, with their columns. Read before benchbook_sql.")
+    @mcp.resource(named("benchbook://schema"), name="schema", mime_type="text/markdown",
+                  description=named("The v_* views benchbook_sql can read, with their columns. "
+                                    "Read before benchbook_sql."))
     async def schema_resource() -> str:
         def build_doc() -> str:
             rows = srv.lg("lead").sql_internal(
                 "SELECT table_name, string_agg(column_name, ', ' ORDER BY ordinal_position) AS cols"
                 " FROM information_schema.columns WHERE table_schema='benchbook_q' GROUP BY table_name ORDER BY 1")
-            out = ["# benchbook views (benchbook_sql)", "Each view is already filtered to the current project.", ""]
+            out = [named("# benchbook views (benchbook_sql)"), "Each view is already filtered to the current project.",
+                   ""]
             for r in rows:
-                out += [f"## {r['table_name']}", SCHEMA_DOC.get(r["table_name"], ""), f"columns: {r['cols']}", ""]
+                out += [f"## {r['table_name']}", named(SCHEMA_DOC.get(r["table_name"], "")),
+                        f"columns: {r['cols']}", ""]
             return "\n".join(out)
 
         return await anyio.to_thread.run_sync(build_doc)
 
-    @mcp.resource("benchbook://brief", name="brief", mime_type="text/markdown",
+    @mcp.resource(named("benchbook://brief"), name="brief", mime_type="text/markdown",
                   description="The project's default brief (no task).")
     async def brief_resource() -> str:
-        return await anyio.to_thread.run_sync(lambda: srv.lg("lead").brief())
+        return named(await anyio.to_thread.run_sync(lambda: srv.lg("lead").brief()))
 
     return mcp
 

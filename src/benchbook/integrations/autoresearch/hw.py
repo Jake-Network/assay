@@ -8,6 +8,7 @@ import socket
 import subprocess
 import time
 
+from ...config import env as benchbook_env
 from ...errors import BenchbookError
 
 VENDOR = {"nvidia", "geforce", "tesla", "amd", "radeon", "intel", "corporation", "graphics", "apple", "gpu"}
@@ -94,7 +95,7 @@ def detect(override: str | None = None, env: dict[str, str] | None = None) -> st
     """--hw, then BENCHBOOK_AR_HW, then nvidia-smi, then macOS sysctl, then unknown-<hostname>. An installed
     nvidia-smi that fails raises BenchbookError instead of falling through."""
     env = dict(os.environ if env is None else env)
-    value = override or env.get("BENCHBOOK_AR_HW")
+    value = override or benchbook_env("AR_HW", environ=env)
     if value:
         return slug(value)
     return detect_nvidia(env) or detect_macos() or "unknown-" + (slug(socket.gethostname()) or "host")

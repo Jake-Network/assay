@@ -14,6 +14,24 @@ from benchbook import Ledger
 from benchbook.db import conn as dbconn
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _throwaway_dirs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Keep every test away from the developer's own benchbook: the default state and data directories resolve under
+    a temporary folder, and pre-rename ASSAY_* variables of the shell are not read as a fallback. Without this a
+    test that forgets XDG_STATE_HOME would write into ~/.local/state, where an install from before the rename keeps
+    its hook spool (benchbook.config.state_dir prefers that folder while it is the only one)."""
+    base = tmp_path_factory.mktemp("xdg")
+    saved = {k: v for k, v in os.environ.items() if k.startswith("ASSAY_") or k in ("XDG_STATE_HOME", "XDG_DATA_HOME")}
+    for k in saved:
+        del os.environ[k]
+    os.environ["XDG_STATE_HOME"] = str(base / "state")
+    os.environ["XDG_DATA_HOME"] = str(base / "data")
+    yield
+    for k in ("XDG_STATE_HOME", "XDG_DATA_HOME"):
+        os.environ.pop(k, None)
+    os.environ.update(saved)
+
+
 @pytest.fixture(scope="session")
 def db_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """A throwaway database: BENCHBOOK_TEST_DATABASE_URL (CI service) or a fresh embedded Postgres."""

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import re
 import subprocess
@@ -17,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+from benchbook.config import env
 
 GRID: dict[str, list[Any]] = {
     "MATRIX_LR": [0.02, 0.03, 0.05, 0.06, 0.08],
@@ -30,8 +31,8 @@ GRID: dict[str, list[Any]] = {
 
 
 def benchbook_cmd() -> list[str]:
-    if env := os.environ.get("BENCHBOOK_BIN"):
-        return env.split()
+    if cmd := env("BIN"):
+        return cmd.split()
     return [sys.executable, "-m", "benchbook"]
 
 
@@ -99,7 +100,7 @@ def main() -> None:
 
     def say(line: str) -> None:
         log.append(line)
-        print(f"[{os.environ.get('BENCHBOOK_AGENT')}] {line}", flush=True)
+        print(f"[{env('AGENT')}] {line}", flush=True)
 
     # the first run of a fresh lab is the baseline; others are refused (claim conflict or duplicate)
     rc, out = ar("claim", "baseline")

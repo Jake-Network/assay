@@ -12,6 +12,7 @@ from uuid import UUID
 
 import psycopg
 
+from ...blobs import artifact_blob
 from ...errors import InvalidTransition, PermissionDenied
 from ...ids import short
 from ...ledger import Ledger, partition_epsilon
@@ -66,10 +67,7 @@ class Tick:
         return rows[0] if rows else None
 
     def blob_uri(self, exp: dict[str, Any]) -> str | None:
-        for a in exp.get("artifacts") or []:
-            if isinstance(a, dict) and str(a.get("uri", "")).startswith("benchbook://blob/"):
-                return str(a["uri"])
-        return None
+        return artifact_blob(exp.get("artifacts"))
 
     def result_claim(self, origin: UUID, rnd: int = 1) -> dict[str, Any] | None:
         """The result claim of an origin's replication round (calibration can be repeated, A2)."""

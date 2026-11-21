@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ... import config
 from ...errors import BenchbookError
 from .code import code_hash, code_hashes, extract_knobs, short_hash
 
-STATE_REL = Path(".benchbook") / "ar_state.json"
-PENDING_REL = Path(".benchbook") / "ar_pending.jsonl"
+# files in the checkout's benchbook folder (config.local_dir: .benchbook, or .assay from before the rename)
+STATE_FILE = "ar_state.json"
+PENDING_FILE = "ar_pending.jsonl"
 
 
 @dataclass
@@ -85,8 +87,23 @@ class Checkout:
 
     # ------------------------------------------------------------------ local state
 
+    def _local(self, name: str, *leftovers: str) -> Path:
+        """A file in the checkout's benchbook folder. While the new folder has none, a copy in the pre-rename folder
+        is the one in use: after `git mv .assay .benchbook` in one worktree and a pull in another, the tracked
+        config moves and the untracked state and queued runs stay behind in .assay/. leftovers: glob patterns of
+        files that also count as the old copy being in use."""
+        p = config.local_dir(self.root) / name
+        old = self.root / config.LEGACY_CONFIG_DIR
+        if p.parent != old and not p.exists() and old.is_dir():
+            if (old / name).exists() or any(f for pattern in leftovers for f in old.glob(pattern)):
+                return old / name
+        return p
+
+    def state_path(self) -> Path:
+        return self._local(STATE_FILE)
+
     def load_state(self) -> dict[str, Any]:
-        p = self.root / STATE_REL
+        p = self.state_path()
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
@@ -94,7 +111,7 @@ class Checkout:
             return {}
 
     def save_state(self, **updates: Any) -> None:
-        p = self.root / STATE_REL
+        p = self.state_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         data = {**self.load_state(), **updates}
         tmp = p.with_suffix(".tmp")
@@ -102,7 +119,8 @@ class Checkout:
         os.replace(tmp, p)
 
     def pending_path(self) -> Path:
-        return self.root / PENDING_REL
+        # a batch a crashed flush left behind is still queued work
+        return self._local(PENDING_FILE, PENDING_FILE + ".*.flushing")
 
 
 def partition_keys(hw: str, source: bytes) -> tuple[str, ...]:

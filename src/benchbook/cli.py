@@ -3,7 +3,6 @@ Exit codes: 0 ok, 1 user error, 2 duplicate rejected (exp record), 3 no claimabl
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
+from .config import env
 from .errors import BenchbookError, Conflict, ValidationFailed
 from .ids import short
 
@@ -71,7 +71,7 @@ def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
     'human' so a person can look around without naming themselves (I1)."""
     from .ledger import Ledger
 
-    name = agent or STATE["agent"] or os.environ.get("BENCHBOOK_AGENT") or ("human" if read_only else None)
+    name = agent or STATE["agent"] or env("AGENT") or ("human" if read_only else None)
     return Ledger.open(project=STATE["project"], agent=name)
 
 
@@ -480,11 +480,12 @@ def doctor() -> None:
     import platform
 
     from . import __version__
-    from .doctor import Check, claude_code_checks
+    from .doctor import Check, claude_code_checks, legacy_checks
 
     checks = [Check("benchbook build", True, __version__), *_db_checks()]
     checks.append(Check("python", sys.version_info >= (3, 11), platform.python_version()))
     checks += claude_code_checks(_repo_root())
+    checks += legacy_checks()
     _report(checks)
 
 
@@ -495,7 +496,7 @@ def _db_checks() -> list[Any]:
 
     checks: list[Check] = []
     try:
-        mode = "url" if os.environ.get("BENCHBOOK_DATABASE_URL") else f"embedded ({data_dir()})"
+        mode = "url" if env("DATABASE_URL") else f"embedded ({data_dir()})"
     except RuntimeError as e:  # BENCHBOOK_DATA_DIR=~name of a user that does not exist
         return [Check("connect", False, f"BENCHBOOK_DATA_DIR: {e}",
                       "export BENCHBOOK_DATA_DIR=<an existing directory>"),

@@ -26,6 +26,8 @@ from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
 
+from ... import config as localcfg
+from ...blobs import artifact_blob, blob_digest, blob_uris
 from ...dedup import canonical_json
 from ...errors import BenchbookError, Conflict, LeaseLost, NotFound
 from ...ids import short
@@ -99,7 +101,7 @@ def default_agent_name(env: dict[str, str] | None = None, hostname: str | None =
 def open_ctx(project: str | None = None, agent: str | None = None, hw: str | None = None,
              start: Path | None = None) -> Ctx:
     co = Checkout.find(start)
-    agent = agent or os.environ.get("BENCHBOOK_AGENT")
+    agent = agent or localcfg.env("AGENT")
     if not agent:
         raise BenchbookError(
             f"set BENCHBOOK_AGENT (one name per GPU), e.g. export BENCHBOOK_AGENT={default_agent_name()}")
@@ -146,8 +148,6 @@ def better(lg: Ledger, a: float, b: float, eps: float = 0.0) -> bool:
 
 def init(project: str, hw: str | None = None, start: Path | None = None, force: bool = False,
          database_url: str | None = None) -> dict[str, Any]:
-    from ...config import write_config
-
     co = Checkout.find(start)
     p, created = Ledger.init_project(project, title=f"autoresearch {project}", goal=GOAL, metric=METRIC,
                                      direction="min", epsilon=PROJECT_SETTINGS["epsilon_floor"],
@@ -156,7 +156,7 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
         raise BenchbookError(f"project {p.id} already exists with pack {p.pack!r}; choose another --project")
     lg = Ledger.open(project=p.id, agent="human", database_url=database_url)
     referee.referee_ledger(lg)
-    cfg = write_config(co.root, p.id, budget=1500)
+    cfg = localcfg.write_config(co.root, p.id, budget=1500)
     program = co.root / "program.benchbook.md"
     template = resources.files("benchbook.integrations.autoresearch").joinpath("templates/program.benchbook.md")
     text = template.read_text(encoding="utf-8")
@@ -166,7 +166,8 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
         wrote_program = True
     gi = co.root / ".gitignore"
     lines = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
-    add = [x for x in (".benchbook/ar_state.json", ".benchbook/ar_pending.jsonl", ".benchbook/ar_pending.jsonl.*",
+    local = cfg.parent.name  # .benchbook, or .assay in a checkout set up before the rename
+    add = [x for x in (f"{local}/ar_state.json", f"{local}/ar_pending.jsonl", f"{local}/ar_pending.jsonl.*",
                        "run.log", "ar_run.out") if x not in lines]
     if add:
         with open(gi, "a", encoding="utf-8") as f:
@@ -178,7 +179,7 @@ def init(project: str, hw: str | None = None, start: Path | None = None, force: 
     return {"project": p.id, "created": created, "partition": part, "hw": hw_class,
             "config": str(cfg), "program": str(program), "wrote_program": wrote_program,
             "program_differs": not wrote_program and program.read_text(encoding="utf-8") != text,
-            "agent_suggestion": os.environ.get("BENCHBOOK_AGENT") or default_agent_name(),
+            "agent_suggestion": localcfg.env("AGENT") or default_agent_name(),
             "prompt": "Read program.benchbook.md and start. Use the benchbook ar commands for every run."}
 
 
@@ -337,15 +338,17 @@ def experiments_for_code(ctx: Ctx, refs: tuple[str, ...], partition: str | None 
 
 def _finished_runs(ctx: Ctx, src: bytes, refs: tuple[str, ...]) -> list[dict[str, Any]]:
     # The stored blob URI also matches identical bytes from a host whose old ast.unparse renders them differently.
-    blob = f"benchbook://blob/{hashlib.sha256(src).hexdigest()}"
+    # Runs recorded before the rename carry the same content under the assay:// scheme.
+    blob, legacy_blob = blob_uris(hashlib.sha256(src).hexdigest())
     return ctx.lg.sql_internal(
         "SELECT id, config, code_ref, author, run_status, outcome, primary_value,"
         " v.id IS NOT NULL AS valid FROM benchbook.experiments e LEFT JOIN"
         " (SELECT id FROM benchbook.experiments_valid WHERE project_id=%(p)s) v USING (id)"
         " WHERE e.project_id=%(p)s AND e.config->>'partition'=ANY(%(parts)s)"
-        " AND (e.code_ref=ANY(%(refs)s) OR e.artifacts @> %(blob)s)"
+        " AND (e.code_ref=ANY(%(refs)s) OR e.artifacts @> %(blob)s OR e.artifacts @> %(legacy_blob)s)"
         " ORDER BY (e.run_status='ok') DESC, coalesce(e.seed,0), e.created_at, e.id",
-        {"p": ctx.lg.project_id, "parts": list(ctx.partitions), "refs": list(refs), "blob": Jsonb([{"uri": blob}])})
+        {"p": ctx.lg.project_id, "parts": list(ctx.partitions), "refs": list(refs), "blob": Jsonb([{"uri": blob}]),
+         "legacy_blob": Jsonb([{"uri": legacy_blob}])})
 
 
 def partition_best(ctx: Ctx, statuses: tuple[str, ...] = ("verified",)) -> dict[str, Any] | None:
@@ -368,10 +371,7 @@ def inflight(ctx: Ctx, others_only: bool = True) -> list[dict[str, Any]]:
 
 
 def blob_of(exp: dict[str, Any]) -> str | None:
-    for a in exp.get("artifacts") or []:
-        if isinstance(a, dict) and str(a.get("uri", "")).startswith("benchbook://blob/"):
-            return str(a["uri"])
-    return None
+    return artifact_blob(exp.get("artifacts"))
 
 
 # ---------------------------------------------------------------------------------------------- claim
@@ -648,7 +648,7 @@ def _isolated_dir(co: Checkout, src: bytes) -> Path:
     """§8.1: a temp dir with symlinks to every top-level entry of the checkout except train.py (and
     git, logs, results), plus the code under replication as train.py."""
     tmp = Path(tempfile.mkdtemp(prefix="benchbook-replicate-"))
-    skip = {"train.py", ".git", "run.log", "results.tsv", ".benchbook"}
+    skip = {"train.py", ".git", "run.log", "results.tsv", localcfg.CONFIG_DIR.name, localcfg.LEGACY_CONFIG_DIR.name}
     for entry in co.root.iterdir():
         if entry.name in skip:
             continue
@@ -688,7 +688,7 @@ def replicate(ctx: Ctx, max_tasks: int = 1, cmd: str = DEFAULT_CMD, timeout: flo
             continue
         legacy_blob = (spec["partition"] != ctx.partitions[0]
                        and spec.get("code_ref") == origin.get("code_ref") and uri == blob_of(origin)
-                       and uri == f"benchbook://blob/{hashlib.sha256(src).hexdigest()}")
+                       and blob_digest(uri) == hashlib.sha256(src).hexdigest())
         if spec.get("code_ref") not in code_hashes(src) and not legacy_blob:
             lg.complete_task(t.id, "failed", "code blob does not match code_ref")
             continue

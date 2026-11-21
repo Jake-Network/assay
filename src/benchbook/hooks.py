@@ -12,11 +12,12 @@ Inputs handled:
 - PostToolUse on SubagentHandback: tool_input.message (the report, when handed back through that tool)
 
 Only benchbook workers are captured: the agent type must be one of BENCHBOOK_HOOK_AGENTS (default
-`benchbook-worker`, matched with or without a plugin prefix such as `benchbook:`). The plugin's matcher passes every
-subagent; any other type, and an event with no agent type at all, exits before the config is read or anything is
-spooled (`BENCHBOOK_HOOK_AGENTS=*` captures every event). A run that handed its report back is captured once,
-from the handback. Permanent failures (unknown project, schema newer than this benchbook, data Postgres refuses)
-move to `dead/` in the spool; `benchbook hook replay` retries them once more and reports what it did.
+`benchbook-worker` and its pre-rename name `assay-worker`, matched with or without a plugin prefix such as
+`benchbook:`). The plugin's matcher passes every subagent; any other type, and an event with no agent type at all,
+exits before the config is read or anything is spooled (`BENCHBOOK_HOOK_AGENTS=*` captures every event). A run that
+handed its report back is captured once, from the handback. Permanent failures (unknown project, schema newer than
+this benchbook, data Postgres refuses) move to `dead/` in the spool; `benchbook hook replay` retries them once more
+and reports what it did.
 """
 from __future__ import annotations
 
@@ -36,6 +37,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import config
+from .config import env
+
 MAX_INPUT = 2_000_000
 STATEMENT_HEAD = 300
 PAYLOAD_TEXT = 4000
@@ -45,13 +49,22 @@ MAX_TRANSCRIPT = 20_000_000
 CLOCK_SKEW = timedelta(minutes=2)
 MARKER_TTL = 86400
 CITABLE = {"e": "experiments", "c": "claims"}
-WRITE_TOOLS = {"benchbook_record_experiment": "e", "benchbook_propose_claim": "c"}
+# Transcripts written before the rename (and sessions still running the old plugin) name the tools, the command and
+# the agent variable with the old prefix; a worker that cited its own record there must still count as having cited.
+WRITE_TOOLS = {"benchbook_record_experiment": "e", "benchbook_propose_claim": "c",
+               "assay_record_experiment": "e", "assay_propose_claim": "c"}
 CLI_WRITES = {("exp", "record"): "e", ("claim", "add"): "c"}
+COMMANDS = (config.NAME, config.LEGACY_NAME)
+AGENT_ASSIGNMENTS = (config.ENV_PREFIX + "AGENT=", config.LEGACY_ENV_PREFIX + "AGENT=")
+# the worker subagent of the plugin, under its current name and the one it had before the rename
+WORKER_TYPES = frozenset({"benchbook-worker", "assay-worker"})
+# Domain separator of the auto-capture dedup hash. It is stored with every captured note, so it keeps the old name:
+# a report captured before the upgrade and replayed after it must hash to the same claim.
+CAPTURE_DOMAIN = b"assay:auto-captured\0"
 
 
 def _state_dir() -> Path:
-    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "benchbook"
+    return config.state_dir()
 
 
 def log(msg: str) -> None:
@@ -66,8 +79,9 @@ def log(msg: str) -> None:
 
 def _spool_dir() -> Path:
     # Different database targets must never pick up one another's pending writes.
-    url = os.environ.get("BENCHBOOK_DATABASE_URL")
-    data_dir = os.environ.get("BENCHBOOK_DATA_DIR")
+    # The key is built from the values, not the variable names, so entries queued under ASSAY_* variables are found.
+    url = env("DATABASE_URL")
+    data_dir = env("DATA_DIR")
     xdg_dir = os.environ.get("XDG_DATA_HOME")
     embedded = [
         str(Path(d).expanduser().resolve()) if d else None
@@ -75,6 +89,12 @@ def _spool_dir() -> Path:
     ] if not url else []
     key = hashlib.sha256(json.dumps([url, *embedded]).encode()).hexdigest()
     return _state_dir() / "spool" / key
+
+
+def _log_notices() -> None:
+    """Write the notes held back from stderr (config.hold_notices) to hook.log."""
+    for note in config.take_notices():
+        log(f"note: {note}")
 
 
 @dataclass
@@ -128,6 +148,10 @@ class ReplaySummary:
 def main(event: str) -> ReplaySummary | None:
     """Spool atomically and detach without waiting for Postgres. `replay` drains in the foreground instead and
     returns a summary (the caller prints it)."""
+    if event != "replay":
+        # Claude Code runs this: nothing may reach stderr. Notes about pre-rename names (the `assay` command,
+        # ASSAY_* variables) are held and written to hook.log once the event turns out to be a worker's.
+        config.hold_notices()
     try:
         spool = _spool_dir()
         spool.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -144,10 +168,9 @@ def main(event: str) -> ReplaySummary | None:
             # The plugin hook fires for every subagent; BENCHBOOK_HOOK_AGENTS decides which ones are captured. Leave
             # before reading config, spooling or importing anything heavier.
             return None
-        from .config import load
-
         cwd = Path(data.get("cwd") or os.getcwd())
-        project = load(cwd).project
+        project = config.load(cwd).project
+        _log_notices()  # after load: BENCHBOOK_PROJECT is read there
         if project:
             # The capture decision is made here, under the environment Claude Code ran the hook with. A later
             # `benchbook hook replay` from a shell with another BENCHBOOK_HOOK_AGENTS must not undo it.
@@ -162,6 +185,7 @@ def main(event: str) -> ReplaySummary | None:
                              close_fds=True)
     except Exception as e:  # noqa: BLE001
         log("hook spool failed: " + traceback.format_exc())
+        _log_notices()
         if event == "replay":
             s = ReplaySummary()
             s.errors.append(f"replay failed: {type(e).__name__}: {e}")
@@ -237,7 +261,11 @@ def _flatten(v: Any) -> str:
 
 
 def _worker_types() -> set[str]:
-    return {t.strip() for t in os.environ.get("BENCHBOOK_HOOK_AGENTS", "benchbook-worker").split(",") if t.strip()}
+    """BENCHBOOK_HOOK_AGENTS, or the plugin's worker. The worker's two names stand for each other: an install whose
+    setting or plugin still says assay-worker keeps capturing when the other side is updated first."""
+    raw = env("HOOK_AGENTS")
+    types = {t.strip() for t in raw.split(",") if t.strip()} if raw is not None else set(WORKER_TYPES)
+    return types | WORKER_TYPES if types & WORKER_TYPES else types
 
 
 def _agent_type(data: dict[str, Any]) -> str | None:
@@ -250,9 +278,10 @@ def _agent_type(data: dict[str, Any]) -> str | None:
 
 
 def is_worker(agent_type: str | None, *, require_type: bool = True) -> bool:
-    """The agent type must be a worker type, with or without its plugin prefix (`benchbook:benchbook-worker`). The hook
-    fires for every subagent, so a new event without a type (older Claude Code, an Agent call without
-    subagent_type) is not captured; BENCHBOOK_HOOK_AGENTS=* captures everything, untyped events included.
+    """The agent type must be a worker type, with or without its plugin prefix (`benchbook:benchbook-worker`, or
+    `assay:assay-worker` from a plugin installed before the rename). The hook fires for every subagent, so a new
+    event without a type (older Claude Code, an Agent call without subagent_type) is not captured;
+    BENCHBOOK_HOOK_AGENTS=* captures everything, untyped events included.
     require_type=False is for entries already in the spool: they passed the filter of the build that wrote them
     (earlier builds relied on the plugin matcher and spooled untyped events), so replay must not drop them."""
     types = _worker_types()
@@ -350,15 +379,15 @@ def _write_tool(block: dict[str, Any]) -> tuple[str, str | None, bool] | None:
     cmd = next(args, "")
     author = None
     while "=" in cmd and cmd.split("=", 1)[0].isidentifier():
-        if cmd.startswith("BENCHBOOK_AGENT="):
+        if cmd.startswith(AGENT_ASSIGNMENTS):
             author = cmd.split("=", 1)[1]
         cmd = next(args, "")
     if Path(cmd).name == "uv" and next(args, "") == "run":
         cmd = next(args, "")
     if re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(cmd).name) and next(args, "") == "-m":
-        if next(args, "") in ("benchbook", "benchbook.cli"):
-            cmd = "benchbook"
-    if Path(cmd).name != "benchbook":
+        if next(args, "") in tuple(m for c in COMMANDS for m in (c, c + ".cli")):
+            cmd = config.NAME
+    if Path(cmd).name not in COMMANDS:
         return None
     positional: list[str] = []
     for arg in args:
@@ -464,8 +493,6 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
             fired_at: float | None = None, accepted: bool = False) -> str:
     """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'. accepted: the hook entry point already decided
     to capture this event (spool entries record it), so the current BENCHBOOK_HOOK_AGENTS is not consulted again."""
-    from .config import load
-
     if not accepted and not is_worker(_agent_type(data), require_type=False):
         return f"skipped:not-a-worker ({_agent_type(data)})"
     text = extract_text(data).replace("\x00", "").strip()  # Postgres text cannot hold NUL
@@ -480,7 +507,7 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
             and data["tool_response"].get("status") == "async_launched":
         return "skipped:async-launch"
     if project is None:
-        project = load(Path(data.get("cwd") or cwd or os.getcwd())).project
+        project = config.load(Path(data.get("cwd") or cwd or os.getcwd())).project
     if not project:
         log(f"{event}: not captured: no benchbook project for {data.get('cwd') or cwd or os.getcwd()}")
         return "skipped:no-project"
@@ -495,7 +522,7 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
               "agent_id": data.get("agent_id"), "agent_type": data.get("agent_type"),
               "tool_name": data.get("tool_name")}
     # The display excerpt can match independently written reports. The digest covers the entire text.
-    digest = hashlib.sha256(b"benchbook:auto-captured\0" + text.encode()).hexdigest()
+    digest = hashlib.sha256(CAPTURE_DOMAIN + text.encode()).hexdigest()
     r = lg._propose_claim("note", "[auto-captured] " + head,
                           payload={"text": text[:PAYLOAD_TEXT], "source": {k: v for k, v in source.items() if v}},
                           tags=["auto-captured"], _dedup_hash=digest)

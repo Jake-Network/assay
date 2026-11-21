@@ -88,7 +88,7 @@ hook events. Reports with a shared opening and different conclusions each get a 
 
 Other subagents (Explore, general-purpose, ...) are not captured. The hook fires for every subagent and
 `BENCHBOOK_HOOK_AGENTS` (comma separated, default `benchbook-worker`, with or without a plugin prefix) decides which are
-captured; any other type exits at once without reading the config or touching the database. An event without an
+captured (`assay-worker`, the worker's name before the rename, counts as `benchbook-worker`); any other type exits at once without reading the config or touching the database. An event without an
 agent type (older Claude Code versions) is not captured either; `BENCHBOOK_HOOK_AGENTS=*` captures every event. To capture your own
 worker types too, set `BENCHBOOK_HOOK_AGENTS=benchbook-worker,implementer` in your shell and in the `env` of Claude Code's
 `settings.json`. This works the same for the plugin and the manual install.
@@ -107,6 +107,33 @@ being dropped, and `BENCHBOOK_HOOK_AGENTS=<the original list> benchbook hook rep
 Earlier builds placed spool files directly in `~/.local/state/benchbook/spool/` without recording the database target.
 To recover one, use the environment and project settings from the original session and run
 `python -m benchbook.hooks /path/to/spooled-entry.json` with the Python environment that has benchbook installed.
+
+## Installs from before the rename (assay)
+
+benchbook was called assay before v0.1.0. An install from then keeps working during 0.1.x with nothing changed,
+and nothing is moved or rewritten for you:
+
+| what the install has | what benchbook does with it |
+|---|---|
+| `ASSAY_*` variables (shell, `env` in Claude Code's `settings.json`) | read when the `BENCHBOOK_*` name is unset. One line on stderr per process says so; a hook writes it to `hook.log` instead |
+| `.assay/config.toml` | found by the same search (parent directories, the main worktree); `.benchbook/` wins in the same directory. `benchbook init` and `benchbook ar` keep writing into `.assay/` while it is the only folder |
+| `~/.local/share/assay/pg` (macOS: `~/Library/Application Support/assay/pg`) | stays the embedded database while the new location holds no cluster. The database in it keeps the name `assay` |
+| `~/.local/state/assay` | stays the state directory while the new one does not exist, so reports queued before the upgrade are replayed |
+| the `assay` command | runs as `benchbook` after one notice line on stderr (`hook.log` for a hook) |
+| the plugin `assay@assay` | its hooks call `assay hook ...` and are captured as before (`assay:assay-worker` is a worker); `assay mcp` serves the tools under their old `assay_*` names (its instructions and briefs name them so too), which is what that plugin's worker and skills call |
+| `assay://blob/<sha256>` in recorded artifacts | read for as long as the ledger exists; new records say `benchbook://blob/` |
+
+`benchbook doctor` lists what it found under the old name, each with the command that moves it:
+
+```bash
+git mv .assay .benchbook                         # in each repository (plain mv when the folder is not committed)
+benchbook db stop && mkdir -p ~/.local/share/benchbook && mv ~/.local/share/assay/pg ~/.local/share/benchbook/pg
+mv ~/.local/state/assay ~/.local/state/benchbook   # with no Claude Code session running
+claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook   # then remove assay@assay
+```
+
+Rename `ASSAY_*` variables to `BENCHBOOK_*` in your shell profile and in `settings.json` together: the CLI, the MCP
+server and the hook must still see the same database. The order of the steps does not matter, and each can wait.
 
 ## Other MCP clients (Codex, ...)
 

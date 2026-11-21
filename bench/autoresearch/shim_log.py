@@ -17,6 +17,7 @@ import time
 import uuid
 from pathlib import Path
 
+from benchbook.config import env
 from benchbook.integrations.autoresearch.code import code_hash
 from benchbook.integrations.autoresearch.runner import parse_summary
 
@@ -97,11 +98,11 @@ def start(path: Path) -> None:
                                 timeout=10).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         commit = ""
-    seed = os.environ.get("BENCHBOOK_AR_SEED")
+    seed = env("AR_SEED")
     _append({"event": "start", "id": rid, "agent": os.environ.get("AR_BENCH_AGENT"), "start": time.time(),
              "code_hash": code_hash(src), "commit": commit, "cwd": os.getcwd(),
-             "benchbook_run": os.environ.get("BENCHBOOK_AR_RUN"),
-             "benchbook_run_id": os.environ.get("BENCHBOOK_AR_RUN_ID"),
+             "benchbook_run": env("AR_RUN"),
+             "benchbook_run_id": env("AR_RUN_ID"),
              "seed": int(seed) if seed and seed.lstrip("-").isdigit() else None})
     print(rid)
 

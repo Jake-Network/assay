@@ -14,7 +14,8 @@ cleanup() {
 trap cleanup EXIT
 # The data dir has a space on purpose: macOS's default (~/Library/Application Support/benchbook/pg) does too.
 export BENCHBOOK_DATA_DIR="$WORK/data dir/pg" XDG_STATE_HOME="$WORK/state"
-unset BENCHBOOK_DATABASE_URL BENCHBOOK_PROJECT BENCHBOOK_AGENT
+# the pre-rename ASSAY_* names are read as a fallback, so they must not leak in from the shell either
+unset BENCHBOOK_DATABASE_URL BENCHBOOK_PROJECT BENCHBOOK_AGENT ASSAY_DATABASE_URL ASSAY_DATA_DIR ASSAY_PROJECT ASSAY_AGENT
 start=$(date +%s)
 cd "$WORK"
 uv venv -q .venv

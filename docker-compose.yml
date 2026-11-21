@@ -3,6 +3,8 @@
 # export BENCHBOOK_DATABASE_URL=postgresql://benchbook:<password>@localhost:5432/benchbook
 # The port is published on 127.0.0.1 only. For other machines, change it to "<this host's LAN or VPN address>:5432:5432"
 # and allow that network in your firewall; never publish it on 0.0.0.0 on a public network.
+# A server started before the rename (user, database and volume named assay) keeps its data in the old volume: run it
+# with the compose file it was started with, not this one, which would start an empty server (docs/multi-machine.md).
 services:
   db:
     image: pgvector/pgvector:pg17

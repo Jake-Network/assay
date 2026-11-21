@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from benchbook.blobs import artifact_blob
 from benchbook.integrations.autoresearch.checkout import Checkout
 from benchbook.integrations.autoresearch.code import code_hash
 from benchbook.integrations.autoresearch.ops import _isolated_dir
@@ -36,7 +37,7 @@ def b_best(lg: Any) -> tuple[bytes | None, dict[str, Any]]:
     if not rows:
         return None, {}
     origin = lg.get(str(rows[0]["origin_id"]))["record"]
-    uri = next((a["uri"] for a in origin["artifacts"] if str(a.get("uri", "")).startswith("benchbook://blob/")), None)
+    uri = artifact_blob(origin["artifacts"])
     eps = (lg.project.settings.get("partitions") or {}).get(rows[0]["partition"], {}).get("epsilon")
     return (lg.get_blob(uri) if uri else None), {"status": rows[0]["status"], "mean": rows[0]["mean"],
                                                  "n": rows[0]["n"], "epsilon": eps}

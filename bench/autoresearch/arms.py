@@ -13,6 +13,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from benchbook.blobs import artifact_blob
 from benchbook.integrations.autoresearch.code import code_hash
 
 
@@ -48,8 +49,18 @@ def minutes(r: dict[str, Any]) -> float:
     return ((r.get("end") or r["start"]) - r["start"]) / 60
 
 
+def run_kind(r: dict[str, Any]) -> Any:
+    """Which `benchbook ar` command started a shim-log run (None: started outside it). Logs collected before the
+    rename say assay_run and assay_run_id; both spellings are read so an old run directory can be re-reported."""
+    return r.get("benchbook_run") or r.get("assay_run")
+
+
+def run_id(r: dict[str, Any]) -> Any:
+    return r.get("benchbook_run_id") or r.get("assay_run_id")
+
+
 def replication_number(r: dict[str, Any]) -> int:
-    return int(r.get("seed") or 0) if r.get("benchbook_run") else 0
+    return int(r.get("seed") or 0) if run_kind(r) else 0
 
 
 def duplicates(runs: list[dict[str, Any]], baseline_hash: str | None) -> dict[str, Any]:
@@ -70,11 +81,11 @@ def duplicates(runs: list[dict[str, Any]], baseline_hash: str | None) -> dict[st
 
 def unrecorded(runs: list[dict[str, Any]], ledger_rows: list[dict[str, Any]]) -> dict[str, int]:
     """Reconcile the ledger and the independent collector in both directions for arm B."""
-    started = Counter((r.get("benchbook_run_id"), r.get("agent"), r["code_hash"], replication_number(r))
-                      for r in runs if r.get("benchbook_run"))
+    started = Counter((run_id(r), r.get("agent"), r["code_hash"], replication_number(r))
+                      for r in runs if run_kind(r))
     recorded = Counter((e.get("ar_run_id"), e.get("author"), e["code_ref"], int(e["seed"] or 0)) for e in ledger_rows)
     return {"not_recorded": (started - recorded).total(), "ledger_only": (recorded - started).total(),
-            "outside_benchbook": sum(1 for r in runs if not r.get("benchbook_run"))}
+            "outside_benchbook": sum(1 for r in runs if not run_kind(r))}
 
 
 def code_at(tree: Path, commit: str) -> bytes | None:
@@ -131,8 +142,7 @@ def b_keeps(lg: Any, baseline_hash: str | None) -> list[dict[str, Any]]:
     for r in rows:
         if r["code_ref"] == baseline_hash:
             continue
-        uri = next((a["uri"] for a in r["artifacts"] or [] if str(a.get("uri", "")).startswith("benchbook://blob/")),
-                   None)
+        uri = artifact_blob(r["artifacts"])
         out.append({"id": str(r["id"]), "code_hash": r["code_ref"], "val_bpb": float(r["primary_value"]),
                     "uri": uri})
     return out

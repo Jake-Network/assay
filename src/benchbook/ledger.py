@@ -21,6 +21,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from . import config as localcfg
+from .blobs import BLOB_PREFIX, blob_digest
 from .db import conn as dbconn
 from .db.migrate import head as migrate_head
 from .db.migrate import migrate as run_migrate
@@ -164,12 +165,10 @@ class Ledger:
         Agent comes from the argument or BENCHBOOK_AGENT; there is no default, so a process that forgot to name
         itself cannot act as 'human' by accident. An unknown agent is registered with `role`
         (default worker; 'human' defaults to the human role)."""
-        import os
-
         project = project or localcfg.load().project
         if not project:
             raise BenchbookError("no project: pass project=, set BENCHBOOK_PROJECT, or run `benchbook init`")
-        agent = agent or os.environ.get("BENCHBOOK_AGENT")
+        agent = agent or localcfg.env("AGENT")
         if not agent:
             raise BenchbookError("no agent name: set BENCHBOOK_AGENT=<name> or pass --agent <name> "
                              "(a person deciding by hand uses `benchbook decide ... --as human`)")
@@ -284,7 +283,8 @@ class Ledger:
         return BLOB_PREFIX + digest
 
     def get_blob(self, uri: str) -> bytes:
-        digest = uri[len(BLOB_PREFIX):] if uri.startswith(BLOB_PREFIX) else uri
+        """The bytes behind a blob URI (benchbook://blob/..., the pre-rename assay://blob/... or the bare sha256)."""
+        digest = blob_digest(uri)
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise NotFound(f"not a blob uri: {uri!r} (expected {BLOB_PREFIX}<sha256>)")
         with self._conn() as conn:
@@ -1296,17 +1296,15 @@ class Ledger:
     def _reader_conn(self) -> tuple[psycopg.Connection[Any], bool]:
         """Connect as benchbook_reader so the session user itself is the reader. If that is impossible
         (a managed Postgres with password auth and no reader password), fall back to SET ROLE."""
-        import os
-
         kw: dict[str, Any] = {"row_factory": dict_row, "autocommit": False, "user": "benchbook_reader"}
-        if pw := os.environ.get("BENCHBOOK_READER_PASSWORD"):
+        if pw := localcfg.env("READER_PASSWORD"):
             kw["password"] = pw
         try:
             return psycopg.connect(self.url, **kw), False
         except psycopg.OperationalError as e:
             # SET ROLE keeps the owner as session user, so a query that escapes the reader role regains its
             # privileges. Only on explicit opt-in (C4).
-            if os.environ.get("BENCHBOOK_SQL_ALLOW_SET_ROLE") != "1":
+            if localcfg.env("SQL_ALLOW_SET_ROLE") != "1":
                 raise BenchbookError(
                     "benchbook_sql connects as the benchbook_reader role and could not log in "
                     f"({str(e).strip().splitlines()[0] if str(e).strip() else 'connection failed'}). Set a password "
@@ -1342,9 +1340,6 @@ class Ledger:
         """Full-privilege read for adapters (viewer). Not exposed to agents."""
         with self._conn() as conn:
             return conn.execute(query, params).fetchall()  # type: ignore[no-any-return]
-
-
-BLOB_PREFIX = "benchbook://blob/"
 
 
 def partition_text(v: Any) -> str | None:

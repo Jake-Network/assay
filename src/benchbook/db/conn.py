@@ -12,11 +12,15 @@ from pathlib import Path
 
 import psycopg
 
+from .. import config
+from ..config import env
+
 # the embedded server logs at INFO; keep stderr quiet for CLI, hooks and stdio MCP
 logging.getLogger("pixeltable_pgserver").setLevel(logging.WARNING)
 
 EMBEDDED_PG_VERSION = 16
 EMBEDDED_DB = "benchbook"
+LEGACY_EMBEDDED_DB = "assay"  # the database's name in an embedded cluster created before the rename
 
 
 def notification_channel(project_id: str) -> str:
@@ -28,18 +32,26 @@ def notification_channel(project_id: str) -> str:
     return f"benchbook_:{digest}"
 
 
-def data_dir() -> Path:
-    if env := os.environ.get("BENCHBOOK_DATA_DIR"):
-        return Path(env).expanduser()
+def default_data_dirs() -> tuple[Path, Path]:
+    """(the default data directory of the embedded Postgres, the one from before the rename)."""
     if platform.system() == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "benchbook" / "pg"
-    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "benchbook" / "pg"
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / config.NAME / "pg", base / config.LEGACY_NAME / "pg"
+
+
+def data_dir() -> Path:
+    """BENCHBOOK_DATA_DIR, else the default. A cluster created before the rename stays in use where it is while the
+    new location holds none: a server may be running in it, so benchbook never moves the folder (doctor says how)."""
+    if explicit := env("DATA_DIR"):
+        return Path(explicit).expanduser()
+    new, old = default_data_dirs()
+    return old if config.prefer_legacy(new, old, marker="PG_VERSION") else new
 
 
 def state_dir() -> Path:
-    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "benchbook"
+    return config.state_dir()
 
 
 def _shell_safe(p: Path) -> bool:
@@ -121,10 +133,15 @@ def _with_db(uri: str, dbname: str) -> str:
     return f"{base}/{dbname}{sep}{query}"
 
 
-def ensure_database(server_uri: str, dbname: str) -> str:
+def ensure_database(server_uri: str, dbname: str, legacy: str | None = None) -> str:
+    """The URL of database dbname on the server, created when missing. legacy: the name it had before the rename;
+    when that database exists and dbname does not, it is the ledger, and it is used under its old name."""
     with psycopg.connect(server_uri, autocommit=True) as conn:
-        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (dbname,)).fetchone()
-        if not exists:
+        found = {r[0] for r in conn.execute("SELECT datname FROM pg_database WHERE datname = ANY(%s)",
+                                            ([n for n in (dbname, legacy) if n],))}
+        if dbname not in found:
+            if legacy in found:
+                return _with_db(server_uri, str(legacy))
             try:
                 conn.execute(f'CREATE DATABASE "{dbname}"')
             except psycopg.errors.DuplicateDatabase:
@@ -134,10 +151,10 @@ def ensure_database(server_uri: str, dbname: str) -> str:
 
 def database_url(explicit: str | None = None) -> str:
     """Resolve the database URL: argument, then BENCHBOOK_DATABASE_URL, then embedded Postgres."""
-    url = explicit or os.environ.get("BENCHBOOK_DATABASE_URL")
+    url = explicit or env("DATABASE_URL")
     if url:
         return url
-    return ensure_database(_embedded_server_uri(data_dir()), EMBEDDED_DB)
+    return ensure_database(_embedded_server_uri(data_dir()), EMBEDDED_DB, legacy=LEGACY_EMBEDDED_DB)
 
 
 def stop_embedded() -> bool:

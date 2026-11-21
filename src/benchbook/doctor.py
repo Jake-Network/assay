@@ -16,14 +16,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import config
+
 PLUGIN = "benchbook@benchbook"
+# The plugin's id before the rename. An install from then runs `assay mcp` and `assay hook`, which keep working
+# during 0.1.x, so it passes; the detail says how to switch.
+LEGACY_PLUGIN = "assay@assay"
 ENV_KEYS = ("BENCHBOOK_DATABASE_URL", "BENCHBOOK_DATA_DIR", "BENCHBOOK_PROJECT")
 # values doctor compares but never prints: a database URL can carry a password
 SECRET_KEYS = {"BENCHBOOK_DATABASE_URL"}
 RECENT_SECONDS = 24 * 3600
 # hook.log lines that mean a report did not reach the ledger (see hooks.py)
 FAILURE_MARKERS = ("failed", "not captured", "moved to", "quarantined", "cannot read")
-NO_PROJECT = re.compile(r"no benchbook project for (.+?)(?: \(|$)")
+# hook.log lines of the last 24 hours can come from the build before the rename
+NO_PROJECT = re.compile(r"no (?:benchbook|assay) project for (.+?)(?: \(|$)")
 SPOOL_KEY = re.compile(r"/spool/([0-9a-f]{64})\b")
 # a queued report older than this was not drained by the background processor (its retries take about a minute)
 STUCK_SECONDS = 300
@@ -81,20 +87,31 @@ def check_path(root: Path) -> Check:
                  "benchbook: uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook)")
 
 
-def _manual_install(root: Path) -> bool:
+def _manual_install(root: Path) -> str | None:
+    """The name of the benchbook server in the repository's .mcp.json (`assay` in one written before the rename)."""
     servers = _read_json(root / ".mcp.json").get("mcpServers")
-    return isinstance(servers, dict) and "benchbook" in servers
+    if not isinstance(servers, dict):
+        return None
+    return next((name for name in (config.NAME, config.LEGACY_NAME) if name in servers), None)
 
 
 def check_plugin(root: Path) -> Check:
     installed = _read_json(claude_dir() / "plugins" / "installed_plugins.json")
     plugins = installed.get("plugins", installed)
-    has = isinstance(plugins, dict) and PLUGIN in plugins
-    enabled, _ = _effective(root, "enabledPlugins", PLUGIN)
-    if has and enabled is True:
+
+    def state(plugin: str) -> tuple[bool, bool]:
+        return isinstance(plugins, dict) and plugin in plugins, _effective(root, "enabledPlugins", plugin)[0] is True
+
+    has, enabled = state(PLUGIN)
+    if has and enabled:
         return Check("claude code plugin", True, f"{PLUGIN} installed and enabled")
-    if _manual_install(root):
-        return Check("claude code plugin", True, "manual install (.mcp.json has an benchbook server)")
+    if all(state(LEGACY_PLUGIN)):
+        return Check("claude code plugin", True,
+                     f"{LEGACY_PLUGIN} installed and enabled (the plugin from before the rename; its `assay mcp` and "
+                     f"`assay hook` keep working in 0.1.x). To switch: claude plugin marketplace add "
+                     f"Jake-Network/benchbook && claude plugin install {PLUGIN}, then remove {LEGACY_PLUGIN}")
+    if server := _manual_install(root):
+        return Check("claude code plugin", True, f"manual install (.mcp.json has a server named {server})")
     if has:
         return Check("claude code plugin", False, f"{PLUGIN} is installed but not enabled",
                      f"claude plugin enable {PLUGIN}")
@@ -130,14 +147,39 @@ def _shown(key: str, v: str | None) -> str:
     return "(set, not shown)" if key in SECRET_KEYS else v
 
 
+def _legacy_key(key: str) -> str:
+    return config.LEGACY_ENV_PREFIX + key[len(config.ENV_PREFIX):]
+
+
+def _claude_env(root: Path, key: str) -> tuple[Any, Path | None, str]:
+    """Claude Code's value for a BENCHBOOK_* variable, the settings file it comes from and the name it is set
+    under: benchbook reads the pre-rename ASSAY_* name when the new one is not set."""
+    raw, source = _effective(root, "env", key)
+    if not raw:
+        old, old_source = _effective(root, "env", _legacy_key(key))
+        if old:
+            return old, old_source, _legacy_key(key)
+    return raw, source, key
+
+
+def _shell_env(key: str) -> tuple[str | None, str]:
+    """This shell's value for a BENCHBOOK_* variable and the name it is set under."""
+    used = config.env_name(key[len(config.ENV_PREFIX):])
+    return (os.environ[used], used) if used else (None, key)
+
+
 def check_env(root: Path) -> list[Check]:
     out: list[Check] = []
-    url_claude, _ = _effective(root, "env", "BENCHBOOK_DATABASE_URL")
-    url_shell = os.environ.get("BENCHBOOK_DATABASE_URL")
+    url_claude = _claude_env(root, "BENCHBOOK_DATABASE_URL")[0]
+    url_shell = _shell_env("BENCHBOOK_DATABASE_URL")[0]
     for key in ENV_KEYS:
-        raw, source = _effective(root, "env", key)
+        raw, source, claude_name = _claude_env(root, key)
         claude = None if raw is None else str(raw)
-        shell = os.environ.get(key)
+        shell, shell_name = _shell_env(key)
+        old_names = [f"{name} ({side})" for name, side in ((shell_name, "shell"), (claude_name, "Claude Code"))
+                     if name != key]
+        renamed = (f"; set as {' and '.join(old_names)}, the name before the rename: rename to {key}"
+                   if old_names else "")
         target = source or settings_files(root)[0]
         where = f" ({source})" if source else ""
         try:
@@ -153,13 +195,13 @@ def check_env(root: Path) -> list[Check]:
             continue
         if n_claude == n_shell:
             shown = "set, not shown" if key in SECRET_KEYS and shell else (shell or "unset")
-            out.append(Check(key, True, f"{shown} (shell and Claude Code)"))
+            out.append(Check(key, True, f"{shown} (shell and Claude Code){renamed}"))
             continue
         if key == "BENCHBOOK_DATA_DIR" and url_shell and url_claude:
             # both sides use a server, so the embedded data directory is not used (BENCHBOOK_DATABASE_URL is checked)
             out.append(Check(key, True, "not used: BENCHBOOK_DATABASE_URL is set in the shell and Claude Code"))
             continue
-        detail = f"shell {_shown(key, shell)}, Claude Code {_shown(key, claude)}{where}"
+        detail = f"shell {_shown(key, shell)}, Claude Code {_shown(key, claude)}{where}{renamed}"
         if key in SECRET_KEYS:
             if shell and claude:
                 detail = "Claude Code uses a different database than this shell: " + detail
@@ -246,34 +288,39 @@ def check_hook_log(root: Path) -> Check:
     return Check("hook failures", False, detail, f"read {log}, fix the cause, then run: benchbook hook replay")
 
 
-def _installed_plugin_paths() -> list[Path]:
+def _installed_plugin_paths() -> list[tuple[str, Path]]:
+    """(plugin id, install path) of every installed copy of the plugin, under its current id or the pre-rename one."""
     installed = _read_json(claude_dir() / "plugins" / "installed_plugins.json")
     plugins = installed.get("plugins", installed)
-    entries = plugins.get(PLUGIN) if isinstance(plugins, dict) else None
-    if isinstance(entries, dict):
-        entries = [entries]
-    if not isinstance(entries, list):
-        return []
-    return [Path(e["installPath"]) for e in entries if isinstance(e, dict) and isinstance(e.get("installPath"), str)]
+    out: list[tuple[str, Path]] = []
+    for plugin in (PLUGIN, LEGACY_PLUGIN):
+        entries = plugins.get(plugin) if isinstance(plugins, dict) else None
+        if isinstance(entries, dict):
+            entries = [entries]
+        if isinstance(entries, list):
+            out += [(plugin, Path(e["installPath"])) for e in entries
+                    if isinstance(e, dict) and isinstance(e.get("installPath"), str)]
+    return out
 
 
 def check_plugin_hooks() -> Check | None:
     """An install from before the plugin's SubagentStop matcher was removed keeps running the hook only for
     benchbook-worker, whatever BENCHBOOK_HOOK_AGENTS says: Claude Code keeps an installed plugin version's files until
     the plugin is updated."""
-    stale: list[Path] = []
-    for path in _installed_plugin_paths():
+    stale: list[tuple[str, Path]] = []
+    for plugin, path in _installed_plugin_paths():
         hooks = _read_json(path / "hooks" / "hooks.json").get("hooks")
         entries = hooks.get("SubagentStop") if isinstance(hooks, dict) else None
         if isinstance(entries, list) and any(isinstance(e, dict) and e.get("matcher") not in (None, "", "*")
                                              for e in entries):
-            stale.append(path)
+            stale.append((plugin, path))
     if not stale:
         return None
+    plugin, path = stale[0]
     return Check("plugin hooks", False,
-                 f"the installed plugin ({stale[0]}) runs the hook only for benchbook-worker, so BENCHBOOK_HOOK_AGENTS "
+                 f"the installed plugin ({path}) runs the hook only for its own worker, so BENCHBOOK_HOOK_AGENTS "
                  "cannot add other subagents",
-                 f"claude plugin marketplace update benchbook && claude plugin update {PLUGIN},"
+                 f"claude plugin marketplace update {plugin.split('@')[1]} && claude plugin update {plugin},"
                  " then restart Claude Code")
 
 
@@ -298,4 +345,61 @@ def claude_code_checks(root: Path) -> list[Check]:
     else:
         checks.append(Check("claude code", True, f"{claude_dir()} not found; connection checks skipped"))
     checks += _guarded("hook failures", check_hook_log, root.resolve())
+    return checks
+
+
+# ---------------------------------------------------------------------- names from before the rename
+
+
+def _legacy_config(start: Path | None) -> Check | None:
+    cfg = config.load(start)
+    if not cfg.legacy or cfg.path is None:
+        return None
+    old, new = config.LEGACY_CONFIG_DIR, config.CONFIG_DIR
+    return Check("config folder", True,
+                 f"{cfg.path} is in the folder from before the rename (still read in 0.1.x). To rename it, in "
+                 f"{cfg.path.parent.parent}: git mv {old} {new}   (plain mv when the folder is not committed)")
+
+
+def _legacy_data_dir() -> Check | None:
+    from .db.conn import data_dir, default_data_dirs
+
+    if config.env_name("DATABASE_URL") or config.env_name("DATA_DIR"):
+        return None  # the embedded default is not what this shell uses
+    new, old = default_data_dirs()
+    if data_dir() != old:
+        return None
+    return Check("data directory", True,
+                 f"{old} is the embedded Postgres from before the rename; it stays in use and is never moved for you "
+                 "(its database keeps the name assay). To move it, with no Claude Code session running: "
+                 f"benchbook db stop && mkdir -p {shlex.quote(str(new.parent))} && "
+                 f"mv {shlex.quote(str(old))} {shlex.quote(str(new))}")
+
+
+def _legacy_state_dir() -> Check | None:
+    new, old = config.default_state_dirs()
+    if config.state_dir() != old:
+        return None
+    return Check("state directory", True,
+                 f"{old} is the hook log and spool from before the rename; it stays in use. To move it, with no "
+                 f"Claude Code session running: mv {shlex.quote(str(old))} {shlex.quote(str(new))}")
+
+
+def _legacy_variables() -> Check | None:
+    names = config.legacy_variables()
+    if not names:
+        return None
+    return Check("legacy variables", True,
+                 f"{', '.join(names)}: read under the name from before the rename when the {config.ENV_PREFIX}* one "
+                 f"is unset; rename each to {config.ENV_PREFIX}<NAME> in your shell profile")
+
+
+def legacy_checks(start: Path | None = None) -> list[Check]:
+    """What this install still uses under the project's old name, assay. All of it keeps working during 0.1.x, so
+    these lines pass; each says how to move to the new name. An install made after the rename gets none."""
+    checks: list[Check] = []
+    checks += _guarded("config folder", _legacy_config, start)
+    checks += _guarded("data directory", _legacy_data_dir)
+    checks += _guarded("state directory", _legacy_state_dir)
+    checks += _guarded("legacy variables", _legacy_variables)
     return checks

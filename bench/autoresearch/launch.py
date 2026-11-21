@@ -32,6 +32,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from benchbook import config as benchbook_config
 from benchbook.integrations.autoresearch.code import code_hash
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,7 +105,10 @@ def prepare(args: Any, out: Path) -> dict[str, Any]:
     real_uv = shutil.which("uv")
     if real_uv is None and not args.sim:
         raise SystemExit("uv must be on PATH to collect training runs")
-    base_env = {k: v for k, v in os.environ.items() if k not in ("BENCHBOOK_PROJECT", "BENCHBOOK_AGENT")}
+    # neither arm inherits the launching shell's project or agent, under the current or the pre-rename variable name
+    inherited = {prefix + name for prefix in (benchbook_config.ENV_PREFIX, benchbook_config.LEGACY_ENV_PREFIX)
+                 for name in ("PROJECT", "AGENT")}
+    base_env = {k: v for k, v in os.environ.items() if k not in inherited}
 
     def shim_env(arm: str, g: int) -> dict[str, str]:
         """B1: the same uv shim counts runs in both arms."""
@@ -159,7 +163,7 @@ def prepare(args: Any, out: Path) -> dict[str, Any]:
         "model": None if args.sim else args.model, "max_budget_usd_per_agent": None if args.sim else
         args.max_budget_usd, "claude_version": None if args.sim else _claude_version(),
         "benchbook_commit": sh(["git", "-C", str(ROOT), "rev-parse", "HEAD"]),
-        "database": "BENCHBOOK_DATABASE_URL" if os.environ.get("BENCHBOOK_DATABASE_URL") else "embedded",
+        "database": "BENCHBOOK_DATABASE_URL" if benchbook_config.env("DATABASE_URL") else "embedded",
         "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "agents": [{k: a[k] for k in ("arm", "gpu", "cwd", "cmd")} for a in agents],
     }

@@ -116,7 +116,7 @@ def report(out: Path) -> None:
     da, db = arms.duplicates(ar, base), arms.duplicates(bshim, base)
     lost = arms.unrecorded(bshim, br)
     missing_coverage = (lost["ledger_only"] or not ar or not bshim or not cond.get("ended_at")
-                        or any(not r.get("benchbook_run_id") for r in bshim)
+                        or any(not arms.run_id(r) for r in bshim)
                         or (cond.get("stop") or {}).get("reason") == "unaccounted_usage")
     h1 = "inconclusive" if missing_coverage else "observed_pass"
     if lost["not_recorded"] or lost["outside_benchbook"] or db["duplicates"]:
@@ -152,8 +152,8 @@ def report(out: Path) -> None:
         return sum(1 for r in runs if arms.replication_number(r) == 0)
 
     b_minutes = minutes(bshim)
-    b_rep_min = sum(duration(r) for r in bshim if r.get("benchbook_run") == "replicate")
-    b_cal_min = sum(duration(r) for r in bshim if r.get("benchbook_run") == "calibration")
+    b_rep_min = sum(duration(r) for r in bshim if arms.run_kind(r) == "replicate")
+    b_cal_min = sum(duration(r) for r in bshim if arms.run_kind(r) == "calibration")
     judged = sum(binfo["verdicts"].get(k, 0) for k in ("verified", "refuted", "inconclusive"))
     restarts = cond.get("restarts") or {}
     ua, ub = usage(out, "A"), usage(out, "B")
@@ -209,8 +209,10 @@ def report(out: Path) -> None:
     ]
     conditions_keys = ("label", "model", "claude_version", "upstream_commit", "benchbook_commit", "hours", "minutes",
                        "gpu_hours_per_arm", "max_budget_usd_per_agent", "max_restarts", "sim_run_seconds")
-    provenance = {**{k: cond.get(k) for k in conditions_keys}, "gpus_per_arm": gpus,
-                  "post_replicate": post.get("protocol")}
+    # conditions.json written before the rename names the commit assay_commit
+    benchbook_commit = str(cond.get("benchbook_commit") or cond["assay_commit"])
+    provenance = {**{k: cond.get(k) for k in conditions_keys}, "benchbook_commit": benchbook_commit,
+                  "gpus_per_arm": gpus, "post_replicate": post.get("protocol")}
     numbers = {**{k: metrics[k] for k in ("replicated_best", "false_best_ratio", "duplicates")}, "unrecorded_B": lost,
                "restarts": restarts, "gpu_assignment": cond.get("gpu_assignment"),
                "repetition": cond.get("repetition"), "h1_status": h1, "provenance": provenance, "metrics": metrics}
@@ -219,7 +221,7 @@ def report(out: Path) -> None:
           "", f"- Arms: A = independent upstream program.md, B = benchbook swarm (project {cond['project_b']})",
           f"- GPUs per arm: {gpus} (A {cond['gpus_a']}, B {cond['gpus_b']}); wall clock: {hours:.2f} h",
           f"- Model: {cond.get('model')}; Claude Code: {cond.get('claude_version')};"
-          f" benchbook {cond['benchbook_commit'][:8]};"
+          f" benchbook {benchbook_commit[:8]};"
           f" upstream {cond['upstream_commit'][:8]}",
           f"- Started {cond.get('started_at')}, ended {cond.get('ended_at')};"
           f" agent exit codes {cond.get('exit_codes')}",
