@@ -60,6 +60,20 @@ config with two or more seeds compares its mean with the best mean of the other 
 one lucky seed does not keep it labelled `improved`; briefs mark a single-seed improvement as unreplicated.
 Ignored keys may be nested: `optimizer.log_every`. Seed `NULL` and seed `-1` are different runs.
 
+Whether an exact duplicate is refused is the pack's choice: `dedup_mode` in its `pack.toml`.
+
+| `dedup_mode` | an ok run with a key and seed that already have an ok run | `record_experiment` returns | `dedup_hits` |
+|---|---|---|---|
+| `"refuse"` (default; `core`, `ml-research`) | not stored; the CLI exits 2 | `id` null, `duplicate_of` the earlier run | `rejected` |
+| `"notify"` | stored, with `experiments.duplicate_of` set | a new `id`, `duplicate_of` the first run, and a `notice` sentence | `notified` |
+
+Notify is for packs where running the same thing again is the point, such as a verifier re-running the checks of
+the commit an implementer reported. Every repeat names the first run of its key and seed, not the previous repeat.
+A repeat is an ordinary valid run: it counts in `v_tried` (`attempts` and `ok_runs`; `seeds` does not grow), can be
+the best of its partition, and never becomes a second `v_partition_best` candidate. In notify mode a repeat of an
+invalidated run is stored too. The CLI prints the notice on stderr (in the JSON with `--json`) and exits 0. The
+database keeps refusing a second ok row for a key and seed unless the row declares the original it repeats.
+
 Claims are deduplicated by their normalised statement; a duplicate's evidence is attached to the existing claim,
 so independent agents reaching the same conclusion add up.
 

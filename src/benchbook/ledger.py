@@ -659,9 +659,14 @@ class Ledger:
         if inval:
             seeds = sorted({"none" if r["seed"] is None else str(r["seed"]) for r in inval})
             note = (f"{len(inval)} invalidated run(s) of this exact config and code_ref exist "
-                    f"(seeds {', '.join(seeds)}); recording the same config, code_ref and seed again is rejected "
-                    "as a duplicate. Change code_ref "
-                    "(e.g. after fixing the evaluator) or use another seed.")
+                    f"(seeds {', '.join(seeds)}); ")
+            if self.pack.dedup_mode == "notify":
+                note += ("recording the same config, code_ref and seed again is stored and reported as a repeat "
+                         "of the invalidated run (duplicate_of).")
+            else:
+                note += ("recording the same config, code_ref and seed again is rejected "
+                         "as a duplicate. Change code_ref "
+                         "(e.g. after fixing the evaluator) or use another seed.")
         return TriedResult(dedup_key=key, exact=[ExperimentSummary(**r) for r in rows],
                            replicates=int(agg["reps"]) if agg else 0,
                            best_value=agg["best_value"] if agg else None,
@@ -673,7 +678,9 @@ class Ledger:
                           task_id: str | UUID | None = None, trace_ref: dict[str, Any] | None = None,
                           duration_ms: int | None = None, tokens: int | None = None,
                           cost_usd: float | None = None) -> RecordResult:
-        """Call right after every evaluation, failures included. The server computes the outcome (§6.3)."""
+        """Call right after every evaluation, failures included. The server computes the outcome (§6.3).
+        An ok run whose config, code_ref and seed were already recorded is refused (id None) or, when the pack
+        sets dedup_mode = "notify", stored with duplicate_of naming the first such run."""
         cfg = self._validate_config(config)
         metrics = dict(metrics or {})
         problems: list[str] = []
@@ -703,15 +710,15 @@ class Ledger:
         pm, direction = self.project.primary_metric, self.project.metric_direction
         value = _num(metrics.get(pm)) if (pm and run_status == "ok") else None
 
+        notify = self.pack.dedup_mode == "notify"
+        original: UUID | None = None  # the earlier run this one repeats (notify mode only)
+
         with self._conn() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (self.project_id,))
             if run_status == "ok":
-                dup = conn.execute(
-                    "SELECT id FROM benchbook.experiments WHERE project_id=%s AND dedup_key=%s"
-                    " AND seed IS NOT DISTINCT FROM %s::bigint AND run_status='ok'",
-                    (self.project_id, key, seed)).fetchone()
-                if dup:
-                    return self._reject(conn, key, dup["id"])
+                original = self._original(conn, key, seed)
+                if original is not None and not notify:
+                    return self._reject(conn, key, original)
             if run_status != "ok":
                 outcome = "failed"
             elif value is None:
@@ -730,24 +737,37 @@ class Ledger:
                     better = value > best + eps if direction == "max" else value < best - eps
                     worse = value < best - eps if direction == "max" else value > best + eps
                     outcome = "improved" if better else ("worse" if worse else "no_change")
+
+            def insert(duplicate_of: UUID | None) -> Any:
+                return conn.execute(
+                    """INSERT INTO benchbook.experiments(project_id,author,task_id,config,code_ref,dedup_key,seed,
+                         run_status,metrics,primary_value,outcome,notes,artifacts,trace_ref,duration_ms,tokens,
+                         cost_usd,duplicate_of) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       RETURNING id""",
+                    (self.project_id, self.agent, tid, Jsonb(cfg), code_ref, key, seed, run_status,
+                     Jsonb(metrics), value, outcome, notes, Jsonb(arts),
+                     Jsonb(trace_ref) if trace_ref is not None else None, duration_ms, tokens, cost_usd,
+                     duplicate_of),
+                ).fetchone()
+
             try:
                 with conn.transaction():
-                    r = conn.execute(
-                        """INSERT INTO benchbook.experiments(project_id,author,task_id,config,code_ref,dedup_key,seed,
-                             run_status,metrics,primary_value,outcome,notes,artifacts,trace_ref,duration_ms,tokens,
-                             cost_usd) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (self.project_id, self.agent, tid, Jsonb(cfg), code_ref, key, seed, run_status,
-                         Jsonb(metrics), value, outcome, notes, Jsonb(arts),
-                         Jsonb(trace_ref) if trace_ref is not None else None, duration_ms, tokens, cost_usd),
-                    ).fetchone()
+                    r = insert(original)
             except psycopg.errors.UniqueViolation:
-                dup = conn.execute(
-                    "SELECT id FROM benchbook.experiments WHERE project_id=%s AND dedup_key=%s"
-                    " AND seed IS NOT DISTINCT FROM %s::bigint AND run_status='ok'",
-                    (self.project_id, key, seed)).fetchone()
-                return self._reject(conn, key, dup["id"] if dup else None)
+                # Only a writer that skipped the advisory lock (a direct INSERT) gets its original in between.
+                original = self._original(conn, key, seed)
+                if original is None or not notify:
+                    return self._reject(conn, key, original)
+                r = insert(original)
+            if original is not None:
+                conn.execute("INSERT INTO benchbook.dedup_hits(project_id,kind,dedup_key,existing_id,agent_id)"
+                             " VALUES (%s,'notified',%s,%s,%s)", (self.project_id, key, original, self.agent))
+        notice = None
+        if original is not None:
+            notice = (f"same config, code_ref and seed as {short('experiment', original)}; recorded anyway "
+                      f"(pack {self.pack.name}: dedup_mode notify)")
         return RecordResult(id=r["id"], outcome=outcome, is_new_best=outcome == "improved",
-                            duplicate_of=None, dedup_key=key, primary_value=value)
+                            duplicate_of=original, dedup_key=key, primary_value=value, notice=notice)
 
     def live_leases(self) -> list[Task]:
         """Tasks this agent holds a live lease on, intents excluded."""
@@ -782,6 +802,14 @@ class Ledger:
                                 (self.project_id,)).fetchone()
             return (self._baseline(conn, prow["settings"], partition),
                     partition_epsilon(prow["settings"], partition, prow["improve_epsilon"]))
+
+    def _original(self, conn: psycopg.Connection[Any], key: str, seed: int | None) -> UUID | None:
+        """The ok run with this key and seed that is not itself a repeat: at most one (the unique indexes)."""
+        r = conn.execute(
+            "SELECT id FROM benchbook.experiments WHERE project_id=%s AND dedup_key=%s"
+            " AND seed IS NOT DISTINCT FROM %s::bigint AND run_status='ok' AND duplicate_of IS NULL",
+            (self.project_id, key, seed)).fetchone()
+        return None if r is None else r["id"]
 
     def _reject(self, conn: psycopg.Connection[Any], key: str, existing: UUID | None) -> RecordResult:
         conn.execute("INSERT INTO benchbook.dedup_hits(project_id,kind,dedup_key,existing_id,agent_id)"

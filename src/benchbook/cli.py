@@ -286,7 +286,8 @@ def exp_record(config: Annotated[str, typer.Option(help="JSON or @file")],
                duration_ms: Annotated[int | None, typer.Option("--duration-ms")] = None,
                tokens: Annotated[int | None, typer.Option()] = None,
                cost_usd: Annotated[float | None, typer.Option("--cost-usd")] = None) -> None:
-    """Record an evaluation (failures too). Exit 2 when it duplicates an existing ok run. Without --task the
+    """Record an evaluation (failures too). Exit 2 when it duplicates an existing ok run; a pack with
+    dedup_mode = "notify" records it instead and names the earlier run in duplicate_of. Without --task the
     experiment belongs to the one task you hold a lease on, if there is exactly one."""
     lg = ledger()
     if task is None:
@@ -298,15 +299,20 @@ def exp_record(config: Annotated[str, typer.Option(help="JSON or @file")],
         load_json(config, "--config"), load_json(metrics, "--metrics") or {}, run_status=run_status, seed=seed,
         code_ref=code_ref, notes=notes, task_id=task, artifacts=load_json(artifacts, "--artifacts"),
         trace_ref=load_json(trace_ref, "--trace-ref"), duration_ms=duration_ms, tokens=tokens, cost_usd=cost_usd)
-    if r.duplicate_of is not None:
-        emit({"ok": False, "duplicate_of": short("experiment", r.duplicate_of), "dedup_key": r.dedup_key},
-             f"duplicate of {short('experiment', r.duplicate_of)}: same config, code_ref and seed already "
+    dup = short("experiment", r.duplicate_of) if r.duplicate_of is not None else None
+    if r.id is None:  # refused (dedup_mode "refuse")
+        emit({"ok": False, "duplicate_of": dup, "dedup_key": r.dedup_key},
+             f"duplicate of {dup}: same config, code_ref and seed already "
              "recorded. Use a different seed to replicate.")
         raise typer.Exit(2)
-    assert r.id is not None
-    emit({"ok": True, "id": short("experiment", r.id), "outcome": r.outcome, "is_new_best": r.is_new_best,
-          "duplicate_of": None},
-         f"{short('experiment', r.id)} {r.outcome}{'  ★ new best' if r.is_new_best else ''}")
+    out = {"ok": True, "id": short("experiment", r.id), "outcome": r.outcome, "is_new_best": r.is_new_best,
+           "duplicate_of": dup}
+    if r.notice is not None:  # recorded repeat (dedup_mode "notify")
+        out["notice"] = r.notice
+        if not STATE["json"]:
+            # stderr: the stdout line stays the one the capture hook reads as a write receipt
+            print(f"notice: {r.notice}", file=sys.stderr)
+    emit(out, f"{short('experiment', r.id)} {r.outcome}{'  ★ new best' if r.is_new_best else ''}")
 
 
 @exp_app.command("tried")

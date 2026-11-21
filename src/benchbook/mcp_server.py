@@ -135,13 +135,17 @@ def build(project: str | None = None, toolset: str = "all") -> MCPServer:
                                       trace_ref: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call RIGHT AFTER every evaluation, including failures, errors and timeouts (run_status error|timeout|
         invalid, with the cause in notes). The server computes the outcome. Returns id, outcome, is_new_best,
-        duplicate_of."""
+        duplicate_of (the earlier identical run; id is null when the record was refused, set with a notice when
+        the project records repeats)."""
         r = await _run(lambda: srv.lg(agent).record_experiment(
             config, metrics, run_status=run_status, seed=seed, code_ref=code_ref, notes=notes, artifacts=artifacts,
             task_id=task_id, trace_ref=trace_ref))
-        return {"id": short("experiment", r.id) if r.id else None, "outcome": r.outcome,
-                "is_new_best": r.is_new_best,
-                "duplicate_of": short("experiment", r.duplicate_of) if r.duplicate_of else None}
+        out = {"id": short("experiment", r.id) if r.id else None, "outcome": r.outcome,
+               "is_new_best": r.is_new_best,
+               "duplicate_of": short("experiment", r.duplicate_of) if r.duplicate_of else None}
+        if r.notice is not None:
+            out["notice"] = r.notice
+        return out
 
     @mcp.tool()
     async def benchbook_propose_claim(agent: str, kind: str, statement: str, payload: dict[str, Any] | None = None,

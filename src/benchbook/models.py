@@ -74,12 +74,17 @@ class TriedResult(_M):
 
 
 class RecordResult(_M):
+    """id is None when the record was refused as a duplicate (dedup_mode "refuse"). With dedup_mode "notify"
+    the run is stored: id is set, duplicate_of names the first run with the same config, code_ref and seed,
+    and notice says so in words."""
+
     id: UUID | None
     outcome: str | None
     is_new_best: bool
     duplicate_of: UUID | None
     dedup_key: str
     primary_value: float | None = None
+    notice: str | None = None
 
 
 class ClaimResult(_M):

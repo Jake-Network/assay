@@ -12,13 +12,13 @@ role, superusers included.
 | `agents` | contributor identity per project, `role` in worker / orchestrator / human / harness | no |
 | `tasks` | unit of work with a lease (`lease_owner`, `lease_expires_at`, `attempts`) | lease fields, through SDK functions only |
 | `task_events` | audit log of task changes (created, claimed, heartbeat, expired, done, failed, cancelled) | no |
-| `experiments` | config, code_ref, dedup_key, seed, run_status, metrics, primary_value, server-computed outcome, notes, artifacts, trace_ref | no |
+| `experiments` | config, code_ref, dedup_key, seed, run_status, metrics, primary_value, server-computed outcome, notes, artifacts, trace_ref, duplicate_of (the first ok run with the same key and seed, when the pack records repeats: `dedup_mode = "notify"`) | no |
 | `claims` | statement (1-500 chars), kind, payload, statement_hash (unique per project) | no |
 | `sources` | external evidence: uri, title, locator, sha256 | no |
 | `links` | src -relation-> dst between claims, experiments, sources, tasks | no |
 | `decisions` | status transitions of claims, or `invalidated` for experiments; oracle, rationale, evidence_ids | no |
 | `brief_log` | one row per brief (for "since your last brief") | no |
-| `dedup_hits` | `rejected` (a duplicate record was refused) and `avoided` (a repeat check matched) | no |
+| `dedup_hits` | `rejected` (a duplicate record was refused), `notified` (a duplicate was recorded as a repeat, `dedup_mode = "notify"`) and `avoided` (a repeat check matched) | no |
 | `settings_events` | every settings change: agent, JSON merge patch, resulting settings | no |
 | `blobs` | small files by content (`benchbook://blob/<sha256>`), per project; 1 MB default limit (`blob_max_bytes`) | no |
 

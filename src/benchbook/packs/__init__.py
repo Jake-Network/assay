@@ -6,11 +6,16 @@ import tomllib
 from dataclasses import dataclass, field
 from functools import cache
 from importlib import resources
+from importlib.resources.abc import Traversable
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from ..errors import BenchbookError, ValidationFailed
+
+# What record_experiment does with an ok run whose config, code_ref and seed were already recorded:
+# "refuse" stores nothing and points to the earlier run; "notify" stores it and reports the earlier run.
+DEDUP_MODES = ("refuse", "notify")
 
 
 @dataclass
@@ -21,6 +26,7 @@ class Pack:
     brief_limits: dict[str, int]
     config_max_depth: int
     config_max_bytes: int
+    dedup_mode: str = "refuse"
     ok_metrics_required: list[str] = field(default_factory=list)
     brief_compiler: str | None = None  # "module:function", replaces the default brief (§6.7)
     validators: dict[str, Draft202012Validator] = field(default_factory=dict)
@@ -47,11 +53,20 @@ def load_pack(name: str) -> Pack:
     root = resources.files("benchbook.packs").joinpath(name)
     if not root.joinpath("pack.toml").is_file():
         raise BenchbookError(f"unknown pack: {name}")
+    return read_pack(name, root)
+
+
+def read_pack(name: str, root: Traversable) -> Pack:
+    """Parse the pack in directory `root` (pack.toml and schemas/)."""
     meta = tomllib.loads(root.joinpath("pack.toml").read_text(encoding="utf-8"))
+    dedup_mode = meta.get("dedup_mode", "refuse")
+    if dedup_mode not in DEDUP_MODES:
+        raise BenchbookError(f"pack {name}: dedup_mode must be one of {', '.join(DEDUP_MODES)}; got {dedup_mode!r}")
     pack = Pack(
         name=name,
         claim_kinds=list(meta["claim_kinds"]),
         dedup_ignore=list(meta.get("dedup_ignore", ["notes", "seed", "run_id", "timestamp"])),
+        dedup_mode=dedup_mode,
         brief_limits=dict(meta.get("brief", {})),
         config_max_depth=int(meta.get("config", {}).get("max_depth", 6)),
         config_max_bytes=int(meta.get("config", {}).get("max_bytes", 65536)),

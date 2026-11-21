@@ -15,7 +15,7 @@ Workers:
 | `heartbeat(task_id, lease_seconds=900)` | new expiry; raises `LeaseLost` |
 | `brief(task_id=None, budget_tokens=2000)` | markdown |
 | `check_tried(config, code_ref=None)` | `TriedResult(exact, replicates, best_value, dedup_key)` |
-| `record_experiment(config, metrics, run_status="ok", seed=None, code_ref=None, notes=None, artifacts=None, task_id=None, trace_ref=None, duration_ms=None, tokens=None, cost_usd=None)` | `RecordResult(id, outcome, is_new_best, duplicate_of)` |
+| `record_experiment(config, metrics, run_status="ok", seed=None, code_ref=None, notes=None, artifacts=None, task_id=None, trace_ref=None, duration_ms=None, tokens=None, cost_usd=None)` | `RecordResult(id, outcome, is_new_best, duplicate_of, notice)`; an exact duplicate has `id=None`, or with a `dedup_mode = "notify"` pack a new `id` plus `duplicate_of` and `notice` |
 | `propose_claim(kind, statement, payload=None, tags=None, task_id=None, evidence=[(id, "supports")])` | `ClaimResult(id, duplicate_of)` |
 | `link(src, relation, dst, note=None)` | link id |
 | `add_source(uri, title=None, locator=None, sha256=None)` | source id |

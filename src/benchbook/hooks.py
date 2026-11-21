@@ -375,7 +375,9 @@ def _write_tool(block: dict[str, Any]) -> tuple[str, str | None, bool] | None:
 
 
 def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
-    """Accept a new ID from a write response. A duplicate response refers to an already existing record."""
+    """Accept a new ID from a write response. A duplicate response refers to an already existing record: its id
+    is that record (claims) or missing (a refused experiment). A repeat recorded in notify mode is new: its id
+    differs from duplicate_of."""
     from .ids import SHORT_ID_RE
 
     try:
@@ -383,9 +385,10 @@ def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
     except ValueError:
         result = None
     if isinstance(result, dict):
-        if result.get("ok") is False or result.get("duplicate_of") is not None:
-            return None
         ref = result.get("id")
+        dup = result.get("duplicate_of")
+        if result.get("ok") is False or (dup is not None and (ref is None or ref == dup)):
+            return None
     elif not is_mcp and prefix == "e":
         match = re.fullmatch(r"(e:[0-9a-f]{8}) (?:improved|no_change|worse|failed|unscored)(?:  ★ new best)?", text)
         ref = match[1] if match else None
