@@ -142,9 +142,10 @@ reserve a file you will create, name it (or a glob that matches no tracked file 
   paths; with `--paths` it replaces them (checked against everyone else's, the agent's own other pieces included).
   It is the same task, so the piece keeps its id and its tags (tags given on a restart are not added).
   `benchbook task heartbeat <task>` also renews, but with the project's default lease (900 seconds) unless
-  `--lease` is given. Both renew only a live lease: once it has run out, another piece may hold the paths, so a
-  heartbeat fails with "lease lost", and `piece start <piece>` (without `--paths` it takes the declared paths again)
-  starts a new piece through the overlap check.
+  `--lease` is given. Both renew only a live lease, read under the same lock the overlap check holds: once it has
+  run out, another piece may hold the paths, so a heartbeat fails with "lease lost", and `piece start <piece>`
+  starts a new piece through the overlap check. Without `--paths` it takes the paths the expired piece declared,
+  also when a `next_task` has since marked it failed; a piece released with `piece done` needs `--paths` again.
 - *Release:* `piece done <piece>` by the holder marks the task done (`--failed`: failed). A lead (orchestrator or
   human) running it on another agent's piece cancels that task, for instance after merging it. `check verify` does
   not release a piece: a refuted completion goes back to its implementer, who still needs the paths.
@@ -196,8 +197,9 @@ A check's status is `ok`, `fail`, `timeout` or `not_run` (after an interruption)
 `check:part` per failing check, where the part names the failing JUnit test, the TypeScript errors, or the exit code
 and a hash of the last error line ([Failure signatures](#failure-signatures)). `guard_files` keeps the first 100
 paths; `guard_touched` counts all. `checks_declared` names every check declared at the merge-base, run or not: a run
-of fewer (`--checks`) is *partial*. It is recorded and its failures count, but it is never evidence of
-`verified`, and `check verify` decides nothing on a partial pass.
+of fewer (`--checks`) is *partial*. It is recorded and its failures count (a failing partial run refutes the claim),
+but a partial pass is never evidence of `verified`: it gets no `supports` link, so it is not a re-run in
+[the numbers](#the-numbers) either, and `check verify` decides nothing on it.
 
 The completion claim: statement `<piece> is complete at <sha12>`, tags `piece:<piece>` and `commit:<sha>`,
 payload `{"piece", "commit", "reported_checks"}` and, with `--report-file`, `"report": {"sha256", "bytes"}`.
@@ -368,7 +370,7 @@ FROM done d LEFT JOIN touched t USING (id)
 ```
 
 - `completions`: reported completions (one claim per piece, commit and reporter). `rerun`: those with at least one finished
-  re-run. `false_completions`: those with at least one re-run in which a check failed. The rate is over `rerun`;
+  re-run linked to them: a pass of every declared check, or a failure (a pass of only some checks is not linked). `false_completions`: those with at least one re-run in which a check failed. The rate is over `rerun`;
   invalidated attempts do not count (`v_claim_status` leaves them out).
 - `touched_guard` and `changed_checks`: completions whose commit changed a guarded path, or the `[checks]` table.
 - The guard columns read the attempts' metrics through `v_leaderboard`, which holds finished runs with a primary

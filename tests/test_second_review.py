@@ -169,14 +169,16 @@ def test_a_junit_check_needs_a_fresh_passing_report(tmp_path: Path) -> None:
     bare = match(f"{PY} -m pytest -q tests", tmp_path)
     assert bare is not None and bare.kind == "direct" and bare.junit and bare.report is None
     assert "wrote no JUnit report" in junit_outcome(bare, 1000)[2]
+    named = match(f"{PY} -m pytest -q tests --junitxml=r.xml", tmp_path)
+    assert named is not None and "gave no duration" in junit_outcome(named, None)[2]
     found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", tmp_path)
     assert found is not None and found.report == "r.xml"
     assert "no JUnit report at r.xml" in junit_outcome(found, 1000)[2]
     (tmp_path / "r.xml").write_text('<testsuite tests="0"></testsuite>')
-    part, _, why = junit_outcome(found, 1000)
+    part, _, why, _ = junit_outcome(found, 1000)
     assert part is not None and not why  # exit 0 and no test ran: a failure, as check run records it
     (tmp_path / "r.xml").write_text(PASSING_XML)
-    assert junit_outcome(found, 1000) == (None, [], "")
+    assert junit_outcome(found, 1000)[:3] == (None, [], "")
     old = time.time() - 3600
     os.utime(tmp_path / "r.xml", (old, old))
     assert "predates this run" in junit_outcome(found, 1000)[2]

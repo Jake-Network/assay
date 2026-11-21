@@ -64,6 +64,7 @@ CAPTURE_DOMAIN = b"assay:auto-captured\0"
 # Spool entries that are check attempts (benchbook check run, the Bash hook); attempts.record_spooled records them.
 ATTEMPT_EVENTS = frozenset({"check-run", "bash-result"})
 SPOOL_IDENTITY_DOMAIN = b"benchbook:spool-writer\0"
+WRITER_INFO = "writer.info"  # in a token's spool: the agent the ledger said that token is, per project
 
 
 def _state_dir() -> Path:
@@ -91,10 +92,7 @@ def writer_identity() -> str | None:
     return hashlib.sha256(SPOOL_IDENTITY_DOMAIN + token.encode()).hexdigest()[:32]
 
 
-def _spool_dir() -> Path:
-    # Different database targets must never pick up one another's pending writes, nor different tokens on one target
-    # (writer_identity). The key is built from the values, not the variable names, so entries queued under ASSAY_*
-    # variables are found; without a token it is the key spools had before tokens.
+def _target_parts() -> list[Any]:
     url = env("DATABASE_URL")
     data_dir = env("DATA_DIR")
     xdg_dir = os.environ.get("XDG_DATA_HOME")
@@ -102,11 +100,57 @@ def _spool_dir() -> Path:
         str(Path(d).expanduser().resolve()) if d else None
         for d in (data_dir, xdg_dir)
     ] if not url else []
-    parts: list[Any] = [url, *embedded]
+    return [url, *embedded]
+
+
+def _target_key() -> str:
+    """The database target alone: the spool key without a token."""
+    return hashlib.sha256(json.dumps(_target_parts()).encode()).hexdigest()
+
+
+def _spool_dir() -> Path:
+    # Different database targets must never pick up one another's pending writes, nor different tokens on one target
+    # (writer_identity). The key is built from the values, not the variable names, so entries queued under ASSAY_*
+    # variables are found; without a token it is the key spools had before tokens.
+    parts = _target_parts()
     if (writer := writer_identity()) is not None:
         parts.append({"writer": writer})
     key = hashlib.sha256(json.dumps(parts).encode()).hexdigest()
     return _state_dir() / "spool" / key
+
+
+def _read_info(path: Path) -> dict[str, Any] | None:
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(info, dict) or not isinstance(info.get("target"), str) or not isinstance(info.get("writer"), str)
+            or not isinstance(info.get("agents"), dict)):
+        return None
+    return info
+
+
+def remember_writer(project: str, agent: str) -> None:
+    """Note, in this token's spool, which agent the ledger said the token is in project (WRITER_INFO). Called once a
+    ledger has accepted the token. After the token is rotated, `hook replay` under the new token adopts the entries
+    queued under the old one when they are the same agent's (_adopt); the old token no longer authenticates, so
+    this note, written while it did, is what says whose they are. Best effort: a failure here loses nothing queued."""
+    writer = writer_identity()
+    if writer is None:
+        return
+    try:
+        spool = _spool_dir()
+        path = spool / WRITER_INFO
+        info = _read_info(path) or {"target": _target_key(), "writer": writer, "agents": {}}
+        if info["writer"] != writer or info["agents"].get(project) == agent:
+            return
+        info["agents"][project] = agent
+        spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = path.with_name(WRITER_INFO + ".tmp")
+        tmp.write_text(json.dumps(info, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
 
 
 def _log_notices() -> None:
@@ -121,6 +165,7 @@ class ReplaySummary:
     captured: int = 0
     cited: int = 0
     recorded: int = 0  # check attempts
+    adopted: int = 0  # entries moved here from the spool of this agent's earlier token
     skipped: int = 0
     dead: int = 0
     queued: int = 0
@@ -158,12 +203,13 @@ class ReplaySummary:
     def as_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "processed": self.processed, "captured": self.captured, "cited": self.cited,
                 "recorded": self.recorded, "skipped": self.skipped, "dead": self.dead, "queued": self.queued,
-                "requeued": self.requeued, "errors": self.errors}
+                "requeued": self.requeued, "adopted": self.adopted, "errors": self.errors}
 
     def __str__(self) -> str:
         head = (f"processed {self.processed} (captured {self.captured}, cited {self.cited}, recorded {self.recorded}, "
                 f"skipped {self.skipped});"
-                f" dead {self.dead}; still queued {self.queued}")
+                f" dead {self.dead}; still queued {self.queued}"
+                + (f"; adopted {self.adopted} from this agent's earlier token" if self.adopted else ""))
         return "\n".join([head, *self.errors])
 
 
@@ -589,6 +635,8 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     from .ledger import Ledger
 
     lg = Ledger.open(project=project, agent=default_agent("hook"), role="harness")
+    if lg.token is not None:
+        remember_writer(lg.project_id, lg.agent)
     when = datetime.fromtimestamp(fired_at, UTC) if fired_at else datetime.now(UTC)
     source = {"session_id": data.get("session_id"), "event": data.get("hook_event_name") or event,
               "agent_id": data.get("agent_id"), "agent_type": data.get("agent_type"),
@@ -699,7 +747,8 @@ def process_file(path: Path) -> str:
         # Queued under another token (or with none): recording it now would name this process's agent as the
         # author of another agent's report or run. It stays queued for a replay under the identity that queued it.
         return ("held:queued under " + ("another BENCHBOOK_TOKEN" if writer else "no BENCHBOOK_TOKEN")
-                + "; replay it with the environment it was queued in")
+                + "; replay it with the environment it was queued in (after a token rotation, `benchbook hook "
+                "replay` with the agent's new token adopts it)")
     if not accepted and not is_worker(agent_type, require_type=False):
         # Queued by a build that did not record its decision: the BENCHBOOK_HOOK_AGENTS that accepted it may differ
         # from the current one. Keep it rather than drop it, so a replay with the original setting captures it.
@@ -794,6 +843,7 @@ def replay_now(spool: Path) -> ReplaySummary:
     dead = spool / "dead"
     summary = ReplaySummary()
     with _lock(spool, blocking=True):
+        _adopt(spool, summary)
         if dead.is_dir():
             for p in dead.glob("*.json"):
                 p.replace(spool / p.name)
@@ -805,6 +855,61 @@ def replay_now(spool: Path) -> ReplaySummary:
             attempted.update(_drain(spool, (), summary, attempted))
     log(f"replay {spool}: {summary}")  # doctor reads which spool a clean replay settled
     return summary
+
+
+def _adopt(spool: Path, summary: ReplaySummary) -> None:
+    """Move here the entries queued under this agent's earlier token (rotated or replaced), so they are recorded
+    under its current one. An entry is the agent's when the old spool's WRITER_INFO, written while the old token
+    authenticated, names for the entry's project the same agent the ledger says the current token is. Other
+    agents' spools, other database targets and entries no processor ever confirmed stay where they are."""
+    me = writer_identity()
+    if me is None or not spool.parent.is_dir():
+        return
+    target = _target_key()
+    current: dict[str, str | None] = {}
+
+    def agent_in(project: str) -> str | None:
+        if project not in current:
+            try:
+                from .ledger import Ledger
+
+                lg = Ledger.open(project=project)  # the current token's agent, or an error
+                current[project] = lg.agent
+                remember_writer(project, lg.agent)
+            except Exception as e:  # noqa: BLE001 - not confirmed, so nothing is moved
+                log(f"replay: cannot confirm this token's agent in {project}: {type(e).__name__}: {e}")
+                current[project] = None
+        return current[project]
+
+    for old in sorted(p for p in spool.parent.iterdir() if p.is_dir() and p != spool):
+        info = _read_info(old / WRITER_INFO)
+        if info is None or info["target"] != target or info["writer"] == me:
+            continue
+        dead = old / "dead"
+        unconfirmed = 0
+        for path in [*old.glob("*.json"), *(dead.glob("*.json") if dead.is_dir() else [])]:
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+                project = entry["project"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if entry.get("writer") != info["writer"]:
+                continue  # not queued under the token that spool belongs to
+            known = info["agents"].get(project)
+            if not isinstance(known, str):
+                unconfirmed += 1
+                continue
+            if agent_in(project) != known:
+                continue  # another agent's
+            entry.pop("writer", None)
+            _write_spool(spool, entry)  # bound to the current token
+            path.unlink(missing_ok=True)
+            summary.adopted += 1
+            log(f"replay: adopted {path.name} from {old.name} ({known} in {project}, earlier token)")
+        if unconfirmed:
+            summary.errors.append(f"{old.name}: {unconfirmed} entr{'y' if unconfirmed == 1 else 'ies'} queued under "
+                                  "another token for a project in which no processor confirmed that token's agent; "
+                                  "left there")
 
 
 if __name__ == "__main__":

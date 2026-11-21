@@ -45,7 +45,9 @@ EVENT = "bash-result"
 VIA = "bash-hook"
 MAX_INPUT = 2_000_000
 OBSERVED = "observed.jsonl"
-REPORT_SLACK_S = 120  # how much older than the command's start a JUnit report may look (clock steps, mtime)
+REPORT_SLACK_S = 1.0  # file systems that keep mtime in coarse steps, and the hook's own start-up
+JUNIT_USED = "junit-used.jsonl"  # reports a recorded pass was read from: each proves one run only
+MAX_JUNIT_USED = 1000
 CONTROL = frozenset({"|", "||", "&&", ";", "&", "|&", ";;", "(", ")"})
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _EXIT = re.compile(r"Exit code (-?\d+)\s*$")
@@ -127,7 +129,8 @@ def _word_pattern(seg: list[str]) -> re.Pattern[str]:
             pre, _, post = w.partition("{junit}")
             one = re.escape("\0" + pre) + r"[^\0]+" + re.escape(post)
             if w == "{junit}" and parts and not parts[-1].startswith("(?:"):
-                parts[-1] = f"(?:{parts.pop()}{one})?"
+                option = parts.pop()  # the option word goes with the path: both or neither
+                parts.append(f"(?:{option}{one})?")
             else:
                 parts.append(f"(?:{one})?")
         else:
@@ -247,26 +250,56 @@ def junit_report(declared: str, segs: list[list[str]]) -> str | None:
     return None
 
 
-def junit_outcome(found: Match, duration_ms: int | None) -> tuple[str | None, list[tuple[str, str | None]], str]:
+def report_fingerprint(path: Path, st: os.stat_result) -> str:
+    return json.dumps([str(path.resolve()), st.st_ino, st.st_size, st.st_mtime_ns])
+
+
+def _used_reports(spool: Path) -> list[str]:
+    try:
+        return (spool / JUNIT_USED).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+
+def mark_report_used(spool: Path, fingerprint: str) -> None:
+    """Remember a report a recorded pass was read from (the newest MAX_JUNIT_USED)."""
+    lines = [*_used_reports(spool), fingerprint][-MAX_JUNIT_USED:]
+    tmp = spool / (JUNIT_USED + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(spool / JUNIT_USED)
+
+
+def junit_outcome(found: Match, duration_ms: int | None,
+                  spool: Path | None = None) -> tuple[str | None, list[tuple[str, str | None]], str, str | None]:
     """A junit = true check that exited 0 passes only as check run and check verify pass it: with a JUnit report of
-    this run in which a test ran and none failed. (part, failing tests, reason): part None and no reason is a pass;
-    a part is a failure (signature.junit_exit0); a reason alone means the run proves nothing either way (no report
-    of this run to read), so it is observed and not recorded."""
+    this run in which a test ran and none failed. (part, failing tests, reason, fingerprint): part None and no
+    reason is a pass; a part is a failure (signature.junit_exit0); a reason alone means the run proves nothing either
+    way (no report of this run to read), so it is observed and not recorded.
+
+    "Of this run": modified after the command started (the hook fires as it ends, so the start is now minus its
+    duration), and not a report an earlier recorded pass was read from (spool/JUNIT_USED). A harness that reports no
+    duration cannot show that, and its run is not recorded."""
     if found.report is None:
         return None, [], ("junit = true and the command wrote no JUnit report: exit 0 alone is not a pass "
-                          f"(benchbook check run {found.check} writes one)")
+                          f"(benchbook check run {found.check} writes one)"), None
+    if not duration_ms:
+        return None, [], ("junit = true and the harness gave no duration, so the JUnit report cannot be shown to be "
+                          f"this run's (benchbook check run {found.check} writes its own)"), None
     path = found.cwd / os.path.expanduser(found.report)
     try:
         st = path.stat()
     except OSError:
-        return None, [], f"junit = true and no JUnit report at {found.report}"
-    # Older than the command: a report left by an earlier run. The slack covers a coarse or stepping wall clock.
-    if st.st_mtime < time.time() - (duration_ms or 0) / 1000 - REPORT_SLACK_S:
-        return None, [], f"junit = true and the JUnit report at {found.report} predates this run"
+        return None, [], f"junit = true and no JUnit report at {found.report}", None
+    started = time.time() - duration_ms / 1000
+    if st.st_mtime < started - REPORT_SLACK_S:
+        return None, [], f"junit = true and the JUnit report at {found.report} predates this run", None
+    fingerprint = report_fingerprint(path, st)
+    if spool is not None and fingerprint in _used_reports(spool):
+        return None, [], f"junit = true and the JUnit report at {found.report} was read for an earlier run", None
     from .signature import junit_exit0
 
     part, failed = junit_exit0(path)
-    return part, failed, ""
+    return part, failed, "", fingerprint
 
 
 # ---------------------------------------------------------------------------------------------- the result
@@ -376,8 +409,11 @@ def _record(call: ShellCall, found: Match) -> None:
     state = None
     part: str | None = None
     failed: list[tuple[str, str | None]] = []
+    fingerprint: str | None = None
+    spool = _spool_dir()
+    spool.mkdir(parents=True, exist_ok=True, mode=0o700)
     if kind == "direct" and found.junit and res.status == "ok":
-        part, failed, why = junit_outcome(found, call.duration_ms)
+        part, failed, why, fingerprint = junit_outcome(found, call.duration_ms, spool)
         if why:
             kind, reason = "unrecordable", why
         elif part is not None:
@@ -393,8 +429,6 @@ def _record(call: ShellCall, found: Match) -> None:
             kind, reason = "unrecordable", "not run from the repository root, where a declared check runs"
         elif repo is None or (state := git_state(repo)) is None or state.sha is None:
             kind, reason = "unrecordable", "no commit at HEAD"
-    spool = _spool_dir()
-    spool.mkdir(parents=True, exist_ok=True, mode=0o700)
     line: dict[str, Any] = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "project": project, "piece": piece, "check": found.check,
         "kind": kind, "exit_code": res.exit_code, "reason": reason or None, "session_id": call.session_id,
@@ -417,6 +451,8 @@ def _record(call: ShellCall, found: Match) -> None:
     if call.harness != "claude-code":
         entry["harness"] = call.harness
     spool_attempt(EVENT, project, entry)
+    if fingerprint is not None:
+        mark_report_used(spool, fingerprint)  # the same file never stands for a second run
     _log(f"{EVENT}: queued {found.check} {res.status} (exit {res.exit_code}) for piece {piece} at {state.sha[:12]}")
 
 

@@ -113,6 +113,18 @@
   same paths again as a new piece, through the overlap check.
 - After a timeout or an interruption the runner waits for the command's whole process group, not only the shell,
   and sends SIGKILL to what is left after 10 s: a child that ignores SIGTERM no longer outlives the run.
+- The Bash hook takes a JUnit report only if it was modified after the command started (1 s of slack, down from
+  120 s), and only once: a report already read for a recorded run is not this run's. A harness that reports no
+  duration cannot record a passing JUnit check through the hook.
+- `heartbeat` takes the intent lock the overlap check holds and reads the expiry after it, so a renewal can no
+  longer commit next to a piece that took the paths meanwhile.
+- A partial pass gets no `supports` link: it no longer counts as a re-run in the false completion rate. A partial
+  run that fails still refutes.
+- `piece start` without `--paths` also restores a piece that a `next_task` marked failed when its lease ran out;
+  one released with `piece done` still needs `--paths`.
+- `hook replay` under an agent's new token (after `agent add --rotate`) adopts the entries queued under its
+  earlier token, when a processor had confirmed that token's agent (`writer.info` in the spool).
+- The Bash hook matches a check declared with a bare `--junitxml {junit}`: the word before the option was lost.
 
 ## Unreleased: core for the verification ledger
 

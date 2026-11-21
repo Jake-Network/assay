@@ -539,10 +539,11 @@ class Ledger:
         tid = self._rid(task_id, "task")
         with self._conn() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
-            # A live lease only: once it ran out, another agent may hold the same paths, and only a new intent
-            # (create_intent, which checks them) occupies them again.
+            # A live lease only, read after the lock (clock_timestamp, not the transaction's start): once it ran out,
+            # another agent may hold the same paths, and only a new intent (create_intent, which checks them)
+            # occupies them again.
             cur = conn.execute("SELECT * FROM benchbook.tasks WHERE id=%s AND status='claimed' AND lease_owner=%s"
-                               " AND lease_expires_at > now() AND 'intent' = ANY(tags) FOR UPDATE",
+                               " AND lease_expires_at > clock_timestamp() AND 'intent' = ANY(tags) FOR UPDATE",
                                (tid, self.agent)).fetchone()
             if cur is None:
                 raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
@@ -617,10 +618,15 @@ class Ledger:
         with self._conn() as conn:
             if lease_seconds is None:
                 lease_seconds = self._read_lease_default(conn)
+            # The lock create_intent and update_intent hold while they check for overlapping paths: a renewal
+            # either commits before such a check reads this lease, or reads its expiry after that check committed.
+            # Expiry is read after the lock (clock_timestamp): now() is when this transaction began, which can be
+            # before the lease ran out and before another piece took the paths.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
             r = conn.execute(
-                "UPDATE benchbook.tasks SET lease_expires_at = now() + make_interval(secs => %s), updated_at=now()"
-                " WHERE id=%s AND status='claimed' AND lease_owner=%s AND lease_expires_at > now()"
-                " RETURNING lease_expires_at",
+                "UPDATE benchbook.tasks SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),"
+                " updated_at=now() WHERE id=%s AND status='claimed' AND lease_owner=%s"
+                " AND lease_expires_at > clock_timestamp() RETURNING lease_expires_at",
                 (lease_seconds, tid, self.agent),
             ).fetchone()
             if r is None:

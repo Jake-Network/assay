@@ -485,7 +485,10 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
     rec = Recorded(r.id, lg.agent, duplicate_of=r.duplicate_of, notice=r.notice, reported_by=reported_by)
     if claim is not None:
         rec.claim_id, rec.claim_existed = claim
-        if v.run_status == "ok":
+        # A failure refutes whatever else was run. A pass supports only when every declared check ran: a partial
+        # pass is recorded beside the claim, unlinked, so it neither verifies nor counts as a re-run in the false
+        # completion rate (docs/code.md, "The numbers").
+        if v.run_status == "ok" and (not v.all_passed or v.complete):
             rec.relation = "supports" if v.all_passed else "refutes"
             lg.link(r.id, rec.relation, rec.claim_id)
     _discard(lg, v, rec)

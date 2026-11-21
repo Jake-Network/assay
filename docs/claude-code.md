@@ -140,8 +140,11 @@ nothing else (no database module is imported), and compares the command with eac
 - A word with `{junit}` in the declaration matches a word of that shape or nothing. For a `junit = true` check
   that exits 0, that word is where the hook reads the report: the run is recorded as passed only when that file
   was written by this run and shows a test that ran and none that failed (a report with no test run is recorded as
-  a failure, as `check run` records it). Without the word, or with no such file, the run is `unrecordable`: exit 0
-  alone proves nothing for a JUnit check, and the completion gate asks for `benchbook check run`.
+  a failure, as `check run` records it). "Written by this run": modified after the command started (the hook's
+  input gives its duration; a harness that gives none cannot show it) and not read before for an earlier
+  recorded run (`junit-used.jsonl` in the spool). Without the word, or with no such file, the run is
+  `unrecordable`: exit 0 alone proves nothing for a JUnit check, and the completion gate asks for
+  `benchbook check run`.
 - The remaining words must be equal. Extra arguments (`-k upload`, `-x`) are a different command and do not
   match.
 
@@ -198,7 +201,12 @@ Both hooks work the same with `BENCHBOOK_TOKEN`. The Bash hook only writes the s
 records the attempt as the token's agent (no name is given, so it never claims to be someone else). Each token
 has its own spool directory, and each entry carries a digest of the token it was queued with: a processor or
 `benchbook hook replay` under another token (or none) leaves it queued, so agents that share a database URL and
-a state directory never record each other's entries. Replay an entry with the token it was queued under. An entry that
+a state directory never record each other's entries. Replay an entry with the token it was queued under. After
+a rotation (`benchbook agent add NAME --rotate`) the old token no longer authenticates, so the processor notes in
+each token's spool (`writer.info`) which agent the ledger said that token was; `benchbook hook replay` under the
+new token moves into its own spool the entries of the old one whose project names the same agent there, and records
+them. Entries of a token no processor ever confirmed (the ledger was unreachable for its whole life) stay, and
+replay says so. An entry that
 names an agent (`check run` with `--agent` or `BENCHBOOK_AGENT`) different from the token's is refused, moves to
 the spool's `dead/` and is recorded by `benchbook hook replay` run with that agent's token. On a
 `benchbook_writer` login without a token the processor cannot register `hook` and the entry goes to `dead/`, as

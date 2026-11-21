@@ -110,6 +110,10 @@ def record_spooled(event: str, data: dict[str, Any], project: str) -> str:
     agent = data.get("agent") or None
     # Without a name the attempt is the harness's (the hook's), or under BENCHBOOK_TOKEN the token's agent.
     lg = Ledger.open(project=project, agent=agent or default_agent("hook"), role=None if agent else "harness")
+    if lg.token is not None:
+        from .hooks import remember_writer
+
+        remember_writer(lg.project_id, lg.agent)
     if "completion" not in lg.pack.claim_kinds:
         raise BenchbookError(f"check attempts need the code pack (benchbook init --pack code); {project} uses "
                              f"{lg.pack.name}")

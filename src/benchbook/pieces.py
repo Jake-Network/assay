@@ -133,13 +133,19 @@ def _extra_tags(tags: Sequence[str], piece: str) -> list[str]:
 
 
 def _expired(lg: Ledger, piece: str) -> dict[str, Any] | None:
-    """lg's newest intent for PIECE whose lease ran out without a release: its declared globs and extra tags, so
-    `piece start` without --paths takes the paths again (through the overlap check) instead of failing."""
+    """lg's newest intent for PIECE, when its lease ran out without a release: its declared globs and extra tags, so
+    `piece start` without --paths takes the paths again (through the overlap check) instead of failing.
+
+    Ran out: still claimed past its expiry, or failed by expiry. next_task fails an exhausted intent whose lease ran
+    out and leaves lease_expires_at as it was; a release (piece done, done --failed, a lead's cancel) clears it. So a
+    failed intent that still has an expiry ran out, and one without was ended on purpose: nothing to restore."""
     rows = lg.sql_internal(
-        "SELECT spec -> 'declared' AS declared, tags FROM benchbook.tasks WHERE project_id=%s AND status='claimed'"
-        " AND lease_owner=%s AND lease_expires_at <= now() AND 'intent' = ANY(tags) AND %s = ANY(tags)"
-        " AND spec ->> 'piece' = %s ORDER BY created_at DESC LIMIT 1", (lg.project_id, lg.agent, PIECE_TAG, piece))
-    if not rows or not isinstance(rows[0]["declared"], list):
+        "SELECT spec -> 'declared' AS declared, tags,"
+        " (status = 'claimed' AND lease_expires_at <= now()) OR (status = 'failed' AND lease_expires_at IS NOT NULL)"
+        " AS ran_out FROM benchbook.tasks WHERE project_id=%s AND lease_owner=%s AND 'intent' = ANY(tags)"
+        " AND %s = ANY(tags) AND spec ->> 'piece' = %s ORDER BY created_at DESC LIMIT 1",
+        (lg.project_id, lg.agent, PIECE_TAG, piece))
+    if not rows or not rows[0]["ran_out"] or not isinstance(rows[0]["declared"], list):
         return None
     declared = [p for p in rows[0]["declared"] if isinstance(p, str)]
     return {"declared": declared, "tags": _extra_tags(rows[0]["tags"] or [], piece)} if declared else None

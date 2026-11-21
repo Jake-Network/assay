@@ -458,3 +458,28 @@ A second review reproduced six more holes (`tests/test_second_review.py`).
 - **The runner waits for the group.** Signal 0 to the group, reaping the shell meanwhile (its zombie keeps the group
   alive), then SIGKILL after the grace time. Only after a timeout or an interruption: background processes a
   command leaves behind after a normal exit are still not killed.
+
+## After the third review (2026-11-21)
+
+A third review found six gaps in the fixes above (`tests/test_third_review.py`).
+
+- **"This run's report" is mtime after the start, used once.** The hook fires after the command, so it cannot
+  compare before and after; a PreToolUse hook could, at the cost of a second hook on every shell call. The start is
+  the hook's time minus the duration the harness reports, with 1 s of slack for coarse mtimes; a report already
+  read for a recorded run is refused (fingerprint: path, inode, size, mtime in ns). Without a duration the run is
+  not recorded. A wall clock that steps backwards during the run can still let an older report through; one that
+  steps forwards refuses a fresh one (fail-safe).
+- **Renewal and occupation share one lock.** heartbeat now takes the intent advisory lock, and it and update_intent
+  read the expiry with `clock_timestamp()` after it: `now()` is the transaction's start, which can be before the
+  lease ran out. Every heartbeat takes the project-wide lock; it is held for one UPDATE.
+- **A partial pass is not linked.** Leaving it unlinked keeps the documented SQL unchanged and makes `rerun` mean
+  "has a linked re-run" as before; a failure is linked whatever was run.
+- **Expiry and release are told apart by `lease_expires_at`.** next_task fails an expired intent without touching
+  it; complete_task and cancel_task clear it. No new column or event is needed.
+- **Rotation is bridged by what the ledger said earlier.** A rotated token cannot authenticate, and the ledger keeps
+  only the current hash, so whose the old spool is comes from a note the processor wrote while the old token
+  worked (`writer.info`: target, writer digest, agent per project). It is a local file: like the entries
+  themselves, it guards against mix-ups between agents sharing a state directory, not against one of them editing
+  files. Entries of a token that never reached the ledger stay where they are.
+- **Matcher.** `parts.pop()` on the right-hand side ran before the assignment's index, so the word before the
+  option was replaced; the test now goes through `match()` with the declaration.
