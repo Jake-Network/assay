@@ -520,3 +520,10 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   config.toml and is not compared with it; a pin taken from config.toml is.
 - **T01 init keeps config.toml.** `write_config` used to overwrite the file; it now rewrites only the `project`
   line of an existing one, so `init --pack code` can pin the `[checks]` already declared there.
+- **T03 a suite that runs is the piece's.** The spec counts any check that fails the same way at the merge-base as
+  an environment failure. A JUnit check in which some test passes is narrowed out: a test written before the fix
+  fails at the base too, and a commit that leaves it failing is a false completion, not an environment. An
+  environment usually breaks the whole suite (no test passes) or a non-JUnit check, which keep the spec's rule.
+- **T03 "the same way" includes subsets.** Besides an equal signature element, a JUnit check whose failing tests all
+  fail at the merge-base too is the same failure (the base can fail more).
+- **T03 a commit equal to its merge-base is not compared** with itself.

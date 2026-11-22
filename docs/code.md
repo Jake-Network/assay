@@ -398,6 +398,21 @@ missing file or a tracked path fails the preparation. The attempt records the na
 an environment failure (`run_status = "error"`, `metrics.environment = true`), with no link to the completion and
 no discarded approach. `[verify]` comes from where the checks come from: the merge-base's config.toml, or the pin.
 
+### Environment failures
+
+A check can fail in the clean worktree for reasons that are not the commit's: a missing `.env`, a service that is
+down. When a check fails, `check verify` runs the failing checks once more at the merge-base (in their own clean
+worktree, with the same `[verify]` preparation). A failing check is an environment failure when it fails the same
+way there (the same signature element, or every failing JUnit test fails there too) and, for a JUnit check, no test
+of it passed here: a suite in which some tests still pass is running, and a test it leaves failing is the piece's.
+When every failing check is an environment failure, the attempt is `run_status = "error"` with
+`metrics.environment = true` and `baseline_signature`, and no refutes link or discarded approach is written; the
+command says "environment: unit fails the same way at the merge-base a1b2c3d4e5f6; not counted against the piece".
+A commit that is its own merge-base is not compared.
+
+The merge-base results are cached per repository in the state directory (`baseline/<hash>.json`), keyed by
+merge-base, check name and the check's definition, so pieces branched from the same commit run the base once.
+
 ## The numbers
 
 The false completion rate and the number of completions that touched guarded paths, in one `benchbook sql`

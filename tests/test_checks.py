@@ -701,3 +701,53 @@ def test_a_failed_preparation_is_an_environment_failure(tmp_path: Path, vtmp: Pa
 def test_bad_verify_tables(table: dict[str, Any], message: str) -> None:
     with pytest.raises(BenchbookError, match=message):
         config.parse_verify(table)
+
+
+# ------------------------------------------------------------------------------------------- environment failures (T03)
+
+def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_path: Path, vtmp: Path,
+                                                                           lead_lg: Ledger) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")  # no copy: the clean worktree has no .env, at the base either
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is not None and "secret fails the same way at the merge-base" in v.environment
+    assert v.run_status == "error" and v.results[0].environment
+    assert rec.relation is None and rec.discarded_id is None and not links_to(lead_lg, rec.claim_id)
+    m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
+    assert m["environment"] is True and m["baseline_signature"] == m["failure_signature"]
+    from benchbook.check_cli import render
+    assert "environment: secret fails the same way at the merge-base" in render(v, rec)
+
+
+def test_a_check_that_passes_at_the_merge_base_still_refutes(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    sha = piece(repo, "bad", {"value.txt": "no\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is None and rec.relation == "refutes" and rec.discarded_id is not None
+
+
+def test_a_test_left_failing_while_others_pass_is_the_pieces(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    """The base's test_fixed fails before the fix as well; test_extra passes, so the suite runs: a refutation."""
+    sha = piece(repo, "bad", {"impl.txt": "no\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is None and not v.results[0].environment and rec.relation == "refutes"
+
+
+def test_the_merge_base_run_is_cached(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
+                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    calls: list[str] = []
+    real = checks.run_checks
+
+    def counting(repo: Path, commit: str, *a: Any, **kw: Any) -> Any:
+        calls.append(commit)
+        return real(repo, commit, *a, **kw)
+
+    monkeypatch.setattr(checks, "run_checks", counting)
+    one = piece(repo, "one", {"impl.txt": "fixed\n"})
+    two = piece(repo, "two", {"impl.txt": "fixed too\n"})
+    checks.verify(lead_lg, "media", one, repo=repo, reported_by="impl")
+    v, _ = checks.verify(lead_lg, "other", two, repo=repo, reported_by="impl")
+    base = git(repo, "rev-parse", "main")
+    assert calls == [one, base, two] and v.environment is not None
+    assert list((tmp_path / "state" / "benchbook" / "baseline").glob("*.json"))

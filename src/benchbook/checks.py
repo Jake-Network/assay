@@ -82,6 +82,8 @@ class CheckResult:
     last_line_hash: str | None = None
     tail: str = ""  # the end of the output, shown to whoever runs verify and never recorded
     signature: str | None = None  # this check's part of the signature, made where the output was (signature.py)
+    tests: int | None = None  # JUnit testcases that ran (junit = true, readable report); T04 compares the counts
+    environment: bool = False  # it fails the same way at the merge-base (T03)
 
 
 @dataclass
@@ -147,6 +149,7 @@ class Verification:
     # check fails the same way at the merge-base. Such a run is an error: no link, no discarded approach.
     environment: str | None = None
     prepared: Prepared | None = None
+    baseline_signature: str | None = None  # how the failing checks failed at the merge-base (T03)
 
     @property
     def passed(self) -> int:
@@ -201,6 +204,7 @@ class Verification:
             "checks_changed": self.integrity.checks_changed,
             **({"prepared": prep} if self.prepared is not None and (prep := self.prepared.metrics()) else {}),
             **({"environment": True} if self.environment is not None else {}),
+            **({"baseline_signature": self.baseline_signature} if self.baseline_signature else {}),
         }
 
     def notes(self) -> str:
@@ -566,8 +570,103 @@ def _run_one(spec: CheckSpec, wt: Path, out: Path, env: dict[str, str] | None = 
         part, failed = signature.junit_exit0(junit)
         status = "ok" if part is None else "fail"
     detail = signature.detail(signature.read_log(log), wt) if status != "ok" else None
+    found = signature.junit_read(junit) if spec.junit and junit.is_file() else None
     return CheckResult(spec.name, status, r.exit_code, r.duration_ms, failed[:MAX_FAILED_SHOWN], detail, r.log_tail,
-                       part or signature.check_part(status, r.exit_code, failed, detail))
+                       part or signature.check_part(status, r.exit_code, failed, detail),
+                       found[0] if found else None)
+
+
+# ---------------------------------------------------------------------------------------------------- baseline (T03)
+
+@dataclass
+class BaseRun:
+    """One check's result at the merge-base, as the baseline cache keeps it."""
+    status: str
+    signature: str | None  # the check's part
+    failed: list[str]  # failing test ids (JUnit)
+    tests: int | None  # testcases that ran (JUnit)
+
+
+def _spec_key(spec: CheckSpec, prep: VerifyPrep) -> str:
+    body = {"cmd": spec.cmd, "junit": spec.junit, "timeout": spec.timeout, "verify": prep.table()}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def _baseline_file(repo: Path) -> Path:
+    key = hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()[:16]
+    return localcfg.state_dir() / "baseline" / f"{key}.json"
+
+
+def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
+             env: dict[str, str] | None = None) -> tuple[dict[str, BaseRun], BaseException | None]:
+    """The results of SPECS at the merge-base of b, from the cache (state_dir/baseline/<repo>.json, keyed by
+    merge-base, check name and the check's definition) or from one run of the missing ones in a clean worktree of the
+    merge-base. Returns them and the run's interruption, if any (nothing is cached then)."""
+    path = _baseline_file(repo)
+    try:
+        cache: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    out: dict[str, BaseRun] = {}
+    missing = []
+    for s in specs:
+        hit = cache.get(f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep)}")
+        if isinstance(hit, dict) and isinstance(hit.get("status"), str):
+            out[s.name] = BaseRun(hit["status"], hit.get("signature"), list(hit.get("failed") or []), hit.get("tests"))
+        else:
+            missing.append(s)
+    if not missing:
+        return out, None
+    prepared = Prepared()
+    results, interrupted = run_checks(repo, b.merge_base, missing, env, b.prep, prepared)
+    if interrupted is not None or prepared.error is not None:
+        return out, interrupted
+    for s, r in zip(missing, results, strict=True):
+        run = BaseRun(r.status, r.signature, [t for t, _ in r.failed_tests], r.tests)
+        out[s.name] = run
+        cache[f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep)}"] = run.__dict__
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(cache, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass  # a cache that cannot be written only costs a re-run next time
+    return out, None
+
+
+def same_failure(r: CheckResult, base: BaseRun) -> bool:
+    """Whether a failing check fails the same way at the merge-base: an equal signature element, or (JUnit) every
+    test failing here fails there too."""
+    if base.status not in ("fail", "timeout"):
+        return False
+    if r.signature and base.signature and r.signature == base.signature:
+        return True
+    mine = {t for t, _ in r.failed_tests}
+    return bool(mine) and len(r.failed_tests) < MAX_FAILED_SHOWN and mine <= set(base.failed)
+
+
+def classify_environment(repo: Path, b: Base, results: list[CheckResult],
+                         env: dict[str, str] | None) -> tuple[str | None, str | None, BaseException | None]:
+    """T03: re-run the failing checks at the merge-base. (the environment reason when every failing check fails the
+    same way there, the merge-base's signature of those checks, an interruption of the baseline run)."""
+    failing = [r for r in results if r.status in ("fail", "timeout")]
+    if not failing:
+        return None, None, None
+    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in failing], env)
+    for r in failing:
+        # A JUnit check in which some test still passes is a suite that runs: the commit left a failing test
+        # failing (a test written before the fix, say), which is the piece's, not the environment's.
+        runs_here = b.checks[r.name].junit and r.tests is not None and r.tests > len(r.failed_tests)
+        r.environment = not runs_here and r.name in runs and same_failure(r, runs[r.name])
+    if interrupted is not None or not all(r.environment for r in failing):
+        return None, None, interrupted
+    names = ", ".join(r.name for r in failing)
+    sig = signature.combine((r.name, runs[r.name].signature) for r in failing)
+    return (f"{names} {'fails' if len(failing) == 1 else 'fail'} the same way at the merge-base "
+            f"{b.merge_base[:12]}", sig, None)
 
 
 def check_env() -> dict[str, str]:
@@ -659,8 +758,11 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     t0 = time.monotonic()
     prepared = Prepared()
     results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env(), b.prep, prepared)
+    environment, base_sig = prepared.error, None
+    if interrupted is None and environment is None and sha != b.merge_base:  # the base can't tell a commit from itself
+        environment, base_sig, interrupted = classify_environment(repo, b, results, check_env())
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
-                     declared=list(b.checks), environment=prepared.error, prepared=prepared)
+                     declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig)
     found = None if given is None else given[0]
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match

@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- Environment failures: a failing check is run again at the merge-base (cached per merge-base and check definition
+  in the state directory). When every failing check fails the same way there, and no test of a failing JUnit check
+  passed, the attempt is an environment failure: `run_status` error, `metrics.environment` and
+  `baseline_signature`, no refutes link, no discarded approach.
 - `[verify] copy` and `prepare` (config.toml or the pin) prepare check verify's clean worktree: gitignored files are
   copied from the repository root (names recorded, never content) and a command runs first. A failed preparation
   runs no check and is recorded as an environment failure (`run_status` error, `metrics.environment`), with no link
