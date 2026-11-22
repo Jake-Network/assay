@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- `scripts/qa_boundary_hooks.sh` (MANUAL_QA.md, scenario 5) checks on real sessions what the boundary hooks rely on:
+  SessionStart sources and injected context before and after compaction, PreCompact's input and output, PostToolUse
+  on the Agent tool (foreground and background), repeated `--plugin-dir` and the `benchbook-mcp` tool prefix.
+  `--save-fixtures` replaces the documented fixtures in `tests/fixtures/hooks/` with what it saw.
 - The code brief puts verified completions first, then a new section "Reported done, not re-run" (proposed
   completions with no evidence, `checked: none`), then discarded approaches, findings and occupied paths. Verified
   lines say how they were checked (`checked: re-run`, `checked: person`). `brief --here` marks a verified piece whose

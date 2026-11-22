@@ -34,6 +34,30 @@ experiment count, duplicates blocked and the viewer URL.
 3. `~/.local/state/benchbook/hook.log` has a `captured:c:...` line. A worker who cites an ID from a successful write
    in its own transcript produces `cited`.
 
+## Scenario 5: what Claude Code does at the boundaries (T08)
+
+The boundary hooks (session start, compaction, the Agent tool's result) rely on Claude Code behaviour that its hook
+documentation states only in part. Check it on the installed version:
+
+```bash
+scripts/qa_boundary_hooks.sh --keep                 # haiku by default; --model sonnet to match a real lead
+scripts/qa_boundary_hooks.sh --save-fixtures        # also replace tests/fixtures/hooks/{session_start_*,pre_compact,
+                                                    #   post_tool_use_agent*,user_prompt_submit}.json with what it saw
+```
+
+It makes a throwaway repository, installs recorder hooks through `--settings` (nothing in your own settings changes),
+saves every hook input and runs five short `claude -p` sessions: a startup, `/compact` on that session and a resumed
+turn after it, a foreground and a background subagent, a Bash call, and one session started with both plugin
+directories. It prints a table (also `report.md` in the kept directory).
+
+Expected, from the hook documentation (2026-11-22): SessionStart sources include `startup` and `compact`, and the
+markers it injects are visible, after compaction too; PreCompact's input has `trigger` and `custom_instructions`, and
+its stdout reaches the compaction summary; PostToolUse fires with `tool_name` `Agent`, status `completed` for the
+foreground subagent and `async_launched` for the background one; the Bash marker is visible. Not documented, and the
+reason to run it: both plugins load from repeated `--plugin-dir` (bench/real.py relies on it), and the MCP tools of
+`benchbook-mcp` are named `mcp__plugin_benchbook-mcp_benchbook__*` (the worker's tool list relies on it). Copy the
+table, with the Claude Code version, into docs/claude-code.md "Boundary hooks: what Claude Code does".
+
 ## Benchmark (real)
 
 ```bash

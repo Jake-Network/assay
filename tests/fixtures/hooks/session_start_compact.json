@@ -1,0 +1,7 @@
+{
+  "session_id": "s-session-start-compact",
+  "transcript_path": "/home/user/.claude/projects/p/s-session-start-compact.jsonl",
+  "cwd": "{CWD}",
+  "hook_event_name": "SessionStart",
+  "source": "compact"
+}

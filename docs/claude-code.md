@@ -252,6 +252,27 @@ The same page warns that "Not every SubagentStop event comes from a subagent Cla
 **Not measured.** This answer is from the documentation only; confirming it needs a model run, which was not
 spent. The plugin does not gate on SubagentStop: the completion gate is the TaskCompleted hook above.
 
+## Boundary hooks: what Claude Code does
+
+The session-start, compaction and Agent-result hooks rely on the inputs and outputs below. The "documented" column is
+from the hook reference (code.claude.com/docs/en/hooks, read 2026-11-22); `scripts/qa_boundary_hooks.sh`
+(MANUAL_QA.md, scenario 5) checks them on a real session and fills the last column. Until it has run, the fixtures in
+`tests/fixtures/hooks/` (`session_start_startup.json`, `session_start_compact.json`, `pre_compact.json`,
+`post_tool_use_agent.json`, `post_tool_use_agent_async.json`, `user_prompt_submit.json`) are written from the
+documented examples.
+
+| question | documented | observed (Claude Code version) |
+|---|---|---|
+| SessionStart `source` values | `startup`, `resume`, `clear`, `compact`, `fork` | not yet run |
+| SessionStart `additionalContext` reaches the model, also after compaction | yes; `compact` is the documented way to re-inject | not yet run |
+| PreCompact input | `trigger` (`manual`/`auto`), `custom_instructions` (may be null) | not yet run |
+| PreCompact stdout | instructions for the compaction summary, cut at 10,000 characters | not yet run |
+| PostToolUse on the Agent tool | `tool_name` `Agent` (no `Task` alias); `tool_response.status` `completed` with `content`, or `async_launched` with `outputFile` | not yet run |
+| UserPromptSubmit when a background subagent reports | fires | not yet run |
+| PostToolUse (Bash) `additionalContext` reaches the model | yes | not yet run |
+| Both plugins load from repeated `--plugin-dir` | not documented | not yet run |
+| MCP tool prefix of the `benchbook-mcp` plugin | `mcp__plugin_<plugin>_<server>__`; a hyphen in the plugin name not addressed | not yet run |
+
 ## Installs from before the rename (assay)
 
 benchbook was called assay before v0.1.0. An install from then keeps working during 0.1.x with nothing changed,
