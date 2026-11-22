@@ -470,7 +470,8 @@ def _signal_name(e: BaseException | None) -> str | None:
 
 
 def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report | None,
-            trace_ref: dict[str, Any] | None = None, given: UUID | None = None) -> Recorded:
+            trace_ref: dict[str, Any] | None = None, given: UUID | None = None, *,
+            receipt_id: UUID | None = None) -> Recorded:
     """Step 4. The claim is the implementer's (proposed, never decided here); the attempt and the link are the
     verifier's, so the ledger shows two different agents. given: a claim already checked by given_claim."""
     claim: tuple[UUID, bool] | None = None
@@ -479,7 +480,7 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
     elif reported_by is not None:
         claim = _completion_claim(lg, v, reported_by, report)
     r = lg.record_experiment(v.config(), v.metrics(), run_status=v.run_status, code_ref=v.commit, notes=v.notes(),
-                             duration_ms=v.duration_ms, trace_ref=trace_ref)
+                             duration_ms=v.duration_ms, trace_ref=trace_ref, _receipt_id=receipt_id)
     if r.id is None:  # only a pack with dedup_mode "refuse" can get here
         raise BenchbookError(f"the verification was refused as a duplicate of {r.duplicate_of}")
     rec = Recorded(r.id, lg.agent, duplicate_of=r.duplicate_of, notice=r.notice, reported_by=reported_by)

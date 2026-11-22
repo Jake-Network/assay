@@ -1,7 +1,6 @@
 """The gaps a fourth review found in the third review's fixes (tests/test_third_review.py), each closed:
 
-1. A JUnit report written just before the command (within the hook's slack) passed as this run's, and two hooks
-   ending at once could both read one report: the check and the mark had no lock between them.
+1. Raw JUnit hooks could accept stale or shared reports supplied by another invocation.
 2. A piece created or renewed after waiting for the intent lock counted its lease from the transaction's start, so it
    could be over by the time the call returned.
 3. A renewal without --paths that lost to `piece done` took the release for an expiry and started the piece again.
@@ -21,10 +20,9 @@ import psycopg
 import pytest
 
 from benchbook import hooks, identity, pieces
-from benchbook.check_hooks import junit_outcome, match, remember_before
 from benchbook.errors import BenchbookError
-from tests.test_check_hooks import fixture, observed
-from tests.test_check_run import SCRIPT, cli_env, make_checkout, wait_attempts
+from tests.test_check_hooks import fixture, hook, observed
+from tests.test_check_run import SCRIPT, attempts, cli_env, make_checkout, spool_entries
 from tests.test_review_holes import code_project, make_repo, owner_rows, tok
 from tests.test_second_review import JUNIT_CONFIG, PASSING_XML, PY, _capture_entry
 from tests.writer import as_writer
@@ -32,18 +30,7 @@ from tests.writer import as_writer
 # ------------------------------------------------------------------------------------------- 1. before and after
 
 
-def test_a_report_from_just_before_the_command_is_not_this_runs(tmp_path: Path) -> None:
-    (tmp_path / ".benchbook").mkdir()
-    (tmp_path / ".benchbook" / "config.toml").write_text(JUNIT_CONFIG.format(project="p"))
-    found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", tmp_path)
-    assert found is not None
-    (tmp_path / "r.xml").write_text(PASSING_XML)  # 0.5 s before the command; the command writes none
-    time.sleep(0.5)
-    remember_before(tmp_path, "toolu_1", tmp_path / "r.xml")
-    assert "did not write the JUnit report" in junit_outcome(found, "toolu_1", tmp_path)[2]
-
-
-def test_two_hooks_ending_at_once_record_one_report_once(db_url: str, tmp_path: Path) -> None:
+def test_overlapping_raw_calls_cannot_share_junit_evidence(db_url: str, tmp_path: Path) -> None:
     from benchbook import Ledger
     from tests.conftest import make_project
 
@@ -54,22 +41,23 @@ def test_two_hooks_ending_at_once_record_one_report_once(db_url: str, tmp_path: 
     env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
     report = tmp_path / "report.xml"
     calls = [{**fixture("post_tool_use_bash.json", repo, f"{PY} -m pytest -q tests --junitxml={report}"),
-              "tool_use_id": f"toolu_{i}"} for i in range(4)]
-    for data in calls:
-        subprocess.run([SCRIPT, "hook", "bash-start"], input=json.dumps(data), text=True, cwd=repo, env=env,
-                       check=True, timeout=60)
-    report.write_text(PASSING_XML)  # one report, which every call could take for its own
+              "tool_use_id": f"toolu_{i}"} for i in range(2)]
+    for data in calls:  # previously installed manifests can still send the PreToolUse hook
+        assert hook("bash-start", data, env, repo).returncode == 0
+    report.write_text(PASSING_XML)  # only the second invocation produced the report
     procs = [subprocess.Popen([SCRIPT, "hook", "bash-result"], stdin=subprocess.PIPE, text=True, cwd=repo, env=env)
              for _ in calls]
-    for p, data in zip(procs, calls, strict=True):
-        assert p.stdin is not None
-        p.stdin.write(json.dumps(data))
-        p.stdin.close()
-    assert all(p.wait(60) == 0 for p in procs)
-    kinds = sorted(o["kind"] for o in observed(tmp_path))
-    assert kinds == ["direct", "unrecordable", "unrecordable", "unrecordable"]
-    time.sleep(1)
-    assert len(wait_attempts(lg, 2, timeout=3)) == 1
+    for proc, data in zip(procs, calls, strict=True):
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(data))
+        proc.stdin.close()
+    assert all(proc.wait(60) == 0 for proc in procs)
+    events = observed(tmp_path)
+    assert {e["tool_use_id"] for e in events} == {"toolu_0", "toolu_1"}
+    assert all(e["kind"] == "unrecordable" and "benchbook check run unit" in e["reason"] for e in events)
+    assert spool_entries(tmp_path / "state") == []
+    assert attempts(lg) == []
+    assert hook("task-completed", fixture("task_completed.json", repo), env, repo).returncode == 2
 
 
 # ------------------------------------------------------------------------------------------- 2. leases after the lock
@@ -133,31 +121,25 @@ def test_a_renewal_counts_its_lease_from_after_the_lock(db_url: str, tmp_path: P
 # ------------------------------------------------------------------------------------------- 3. renewal against done
 
 
-def test_a_renewal_that_loses_to_done_does_not_restart_the_piece(db_url: str, tmp_path: Path,
-                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_renewal_that_loses_to_done_does_not_restart_the_piece(db_url: str, tmp_path: Path) -> None:
     project = code_project(db_url)
     a, _ = tok(db_url, project, "impl-a", "worker")
     repo = make_repo(tmp_path / "repo")
     pieces.start(a, "media", ["src/media/*"], repo)
-    seen = a.my_intents()  # what the renewal read before piece done committed
     pieces.done(a, "media")
-    monkeypatch.setattr(a, "my_intents", lambda: seen)
-    with pytest.raises(BenchbookError, match="was released"):
+    with pytest.raises(BenchbookError, match="--paths"):
         pieces.start(a, "media", [], repo)
     assert not owner_rows(db_url, "SELECT id FROM benchbook.tasks WHERE project_id = %s AND status = 'claimed'",
                           (project,))
 
 
-def test_a_renewal_that_finds_its_lease_ran_out_starts_again(db_url: str, tmp_path: Path,
-                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_renewal_that_finds_its_lease_ran_out_starts_again(db_url: str, tmp_path: Path) -> None:
     project = code_project(db_url)
     a, _ = tok(db_url, project, "impl-a", "worker")
     repo = make_repo(tmp_path / "repo")
     held = pieces.start(a, "media", ["src/media/*"], repo).task
-    seen = a.my_intents()
     owner_rows(db_url, "UPDATE benchbook.tasks SET lease_expires_at = now() - interval '1 second' WHERE id = %s"
                        " RETURNING id", (held.id,))
-    monkeypatch.setattr(a, "my_intents", lambda: seen)
     again = pieces.start(a, "media", [], repo)
     assert not again.renewed and again.task.id != held.id and again.paths == ["src/media/*"]
 

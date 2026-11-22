@@ -10,8 +10,11 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -168,12 +171,78 @@ def test_the_same_agent_restarting_its_piece(db_url: str, code: str, repo: Path)
     with pytest.raises(Conflict, match="already working on this \\(piece\\)"):
         pieces.start(b, "media", ["docs/**"], repo)  # someone else's piece, whatever the paths
     with pytest.raises(Conflict, match=first.task.short_id):
-        pieces.start(a, "other", ["src/media/*"], repo)  # the same agent's other piece may not overlap either
+        pieces.start(a, "other", ["src/media/store.py"], repo)  # the same agent's other piece may not overlap either
     with pytest.raises(Conflict, match="upload"):
         pieces.start(a, "media", ["src/media/*"], repo)  # a restart is checked against the others too
     assert pieces.held(a)[0]["paths"] == ["src/media/store.py"]  # and the refused restart changed nothing
     with pytest.raises(BenchbookError, match="--paths"):
         pieces.start(a, "fresh", [], repo)  # a first start must declare its paths
+
+
+@pytest.mark.parametrize("start_first", [True, False])
+def test_restarting_an_expired_piece_serializes_with_release(
+        db_url: str, code: str, repo: Path, monkeypatch: pytest.MonkeyPatch, start_first: bool) -> None:
+    starter = agent(db_url, code, "a")
+    releaser = agent(db_url, code, "a")
+    old = pieces.start(starter, "media", ["src/media/store.py"], repo).task
+    run_out(db_url, old.id)
+    with_lock = threading.Event()
+    finish = threading.Event()
+    first = starter if start_first else releaser
+    mutation = "_create_intent" if start_first else "_complete_task"
+    original = getattr(first, mutation)
+    blocking_pid = None
+
+    def pause(conn: psycopg.Connection[Any], *args: Any) -> Any:
+        nonlocal blocking_pid
+        if blocking_pid is None:
+            blocking_pid = conn.info.backend_pid
+            with_lock.set()
+            assert finish.wait(10), "timed out waiting to finish the first operation"
+        return original(conn, *args)
+
+    monkeypatch.setattr(first, mutation, pause)
+    restart = partial(pieces.start, starter, "media", [], repo)
+    release = partial(pieces.done, releaser, "media")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(restart if start_first else release)
+        try:
+            assert with_lock.wait(10), "first operation did not reach its mutation"
+            b = pool.submit(release if start_first else restart)
+            with psycopg.connect(db_url, autocommit=True) as observer:
+                deadline = time.monotonic() + 8
+                while observer.execute(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND locktype = 'advisory'"
+                    " AND %s = ANY(pg_blocking_pids(pid)))", (blocking_pid,),
+                ).fetchone() != (True,):
+                    assert not b.done() and time.monotonic() < deadline, "second operation did not wait for the lock"
+                    time.sleep(0.01)
+        finally:
+            finish.set()
+        first_result = a.result(timeout=10)
+        if start_first:
+            assert first_result.task.id != old.id
+            assert b.result(timeout=10).id == first_result.task.id
+        else:
+            assert first_result.id == old.id
+            with pytest.raises(BenchbookError, match="--paths"):
+                b.result(timeout=10)
+    assert pieces.held(starter) == []
+
+
+def test_released_generation_wins_even_if_clock_steps_back(db_url: str, code: str, repo: Path) -> None:
+    a = agent(db_url, code, "a")
+    old = pieces.start(a, "media", ["src/media/store.py"], repo).task
+    run_out(db_url, old.id)
+    assert a.next_task() is None  # auto-failure keeps the old deadline
+    new = pieces.start(a, "media", [], repo).task
+    # Simulate chronology and timestamps disagreeing after system clock correction.
+    with psycopg.connect(db_url) as conn:
+        conn.execute("UPDATE benchbook.tasks SET created_at = clock_timestamp() + interval '1 day' WHERE id=%s",
+                     (old.id,))
+    assert pieces.done(a, "media").id == new.id
+    with pytest.raises(BenchbookError, match="--paths"):
+        pieces.start(a, "media", [], repo)
 
 
 def test_done_releases_and_a_lead_can_release_anyones(db_url: str, code: str, repo: Path) -> None:

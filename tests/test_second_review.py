@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import shlex
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,11 +23,10 @@ from typing import Any
 import pytest
 
 from benchbook import checks, hooks, pieces, pr, runner
-from benchbook.check_hooks import junit_outcome, junit_report, match, remember_before
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition, LeaseLost
 from benchbook.runner import run_command
 from tests.test_check_hooks import fixture, hook, observed
-from tests.test_check_run import SCRIPT, cli_env, make_checkout, wait_attempts
+from tests.test_check_run import SCRIPT, cli_env, git, make_checkout, wait_attempts
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok
 from tests.writer import as_writer
 
@@ -156,36 +156,7 @@ base = "main"
 '''
 
 
-def test_junit_report_is_read_from_the_command() -> None:
-    assert junit_report("pytest --junitxml={junit}", [["pytest", "--junitxml=out/r.xml"]]) == "out/r.xml"
-    assert junit_report("pytest --junitxml {junit}", [["pytest", "--junitxml", "r.xml"]]) == "r.xml"
-    assert junit_report("pytest --junitxml={junit}", [["pytest"]]) is None
-
-
-def test_a_junit_check_needs_a_fresh_passing_report(tmp_path: Path) -> None:
-    (tmp_path / ".benchbook").mkdir()
-    (tmp_path / ".benchbook" / "config.toml").write_text(JUNIT_CONFIG.format(project="p"))
-    bare = match(f"{PY} -m pytest -q tests", tmp_path)
-    assert bare is not None and bare.kind == "direct" and bare.junit and bare.report is None
-    spool = tmp_path / "spool"
-    spool.mkdir()
-    assert "wrote no JUnit report" in junit_outcome(bare, "toolu_1", spool)[2]
-    found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", tmp_path)
-    assert found is not None and found.report == "r.xml"
-    assert "gave no tool call id" in junit_outcome(found, None, spool)[2]
-    assert "nothing noted the JUnit report before" in junit_outcome(found, "toolu_1", spool)[2]
-    remember_before(spool, "toolu_2", tmp_path / "r.xml")
-    assert "no JUnit report at r.xml" in junit_outcome(found, "toolu_2", spool)[2]
-    remember_before(spool, "toolu_3", tmp_path / "r.xml")
-    (tmp_path / "r.xml").write_text('<testsuite tests="0"></testsuite>')
-    part, _, why, _ = junit_outcome(found, "toolu_3", spool)
-    assert part is not None and not why  # exit 0 and no test ran: a failure, as check run records it
-    remember_before(spool, "toolu_4", tmp_path / "r.xml")
-    (tmp_path / "r.xml").write_text(PASSING_XML)
-    assert junit_outcome(found, "toolu_4", spool)[:3] == (None, [], "")
-
-
-def test_the_gate_does_not_take_exit_0_of_a_junit_check_without_a_report(db_url: str, tmp_path: Path) -> None:
+def test_the_gate_requires_wrapper_evidence_for_junit(db_url: str, tmp_path: Path) -> None:
     from benchbook import Ledger
     from tests.conftest import make_project
 
@@ -199,19 +170,46 @@ def test_the_gate_does_not_take_exit_0_of_a_junit_check_without_a_report(db_url:
     p = hook("bash-result", fixture("post_tool_use_bash.json", repo, f"{PY} -m pytest -q tests"), env, repo)
     assert (p.returncode, p.stderr) == (0, "")
     [seen] = observed(tmp_path)
-    assert seen["kind"] == "unrecordable" and "no JUnit report" in seen["reason"]
+    assert seen["kind"] == "unrecordable" and "benchbook check run unit" in seen["reason"]
+    assert hook("task-completed", task, env, repo).returncode == 2
+    failed = fixture("post_tool_use_failure_bash.json", repo, f"{PY} -m pytest -q tests")
+    assert hook("bash-result", failed, env, repo).returncode == 0
+    [row] = wait_attempts(lg, 1)
+    assert row["metrics"]["checks"] == {"unit": "fail"} and row["metrics"]["via"] == "bash-hook"
     assert hook("task-completed", task, env, repo).returncode == 2
 
-    report = tmp_path / "report.xml"  # outside the checkout, as the command would write it
-    cmd = f"{PY} -m pytest -q tests --junitxml={report}"
-    assert hook("bash-start", fixture("post_tool_use_bash.json", repo, cmd), env, repo).returncode == 0
-    report.write_text(PASSING_XML)
-    assert hook("bash-result", fixture("post_tool_use_bash.json", repo, cmd), env, repo).returncode == 0
-    [row] = wait_attempts(lg, 1)
-    assert row["metrics"]["checks"] == {"unit": "ok"}
+    p = subprocess.run([SCRIPT, "check", "run", "unit"], cwd=repo, env=env, capture_output=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    rows = wait_attempts(lg, 2)
+    assert len(rows) == 2
+    [wrapped] = [row for row in rows if row["metrics"]["via"] == "check-run"]
+    assert wrapped["metrics"]["checks"] == {"unit": "ok"}
     p = hook("task-completed", task, env, repo)
     assert (p.returncode, p.stderr) == (0, "")
-    assert SCRIPT  # the hook ran as the installed command
+
+
+def test_older_raw_junit_passes_do_not_open_the_gate(db_url: str, tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    project = code_project(db_url)
+    lg = local(db_url, project, "lead", "orchestrator")
+    repo = make_checkout(tmp_path / "repo", project, cfg=JUNIT_CONFIG.format(project=project))
+    sha = git(repo, "rev-parse", "HEAD")
+    env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
+    monkeypatch.setenv("XDG_STATE_HOME", env["XDG_STATE_HOME"])
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
+    spool = hooks._spool_dir()
+    spool.mkdir(parents=True)
+    hooks._write_spool(spool, {
+        "event": "bash-result", "project": project, "accepted": True,
+        "data": {"piece": "media", "check": "unit", "sha": sha, "status": "ok", "dirty": False, "repo": str(repo)},
+    })
+
+    task = fixture("task_completed.json", repo)
+    assert hook("task-completed", task, env, repo).returncode == 2
+    assert hooks.replay_now(spool).recorded == 1
+    [recorded] = wait_attempts(lg, 1)
+    assert recorded["metrics"]["checks"] == {"unit": "ok"} and recorded["metrics"]["via"] == "bash-hook"
+    assert hook("task-completed", task, env, repo).returncode == 2
 
 
 # ------------------------------------------------------------------------------------------- 4. heartbeat

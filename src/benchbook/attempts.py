@@ -16,9 +16,11 @@ merge-base, the checkout is gone) they are left out and the notes say why; a mis
 """
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from . import checks
 from . import config as localcfg
@@ -99,7 +101,7 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
                     source_note=source)
 
 
-def record_spooled(event: str, data: dict[str, Any], project: str) -> str:
+def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: UUID) -> str:
     """The spool processor's step for an attempt entry: 'recorded:e:<id>'. Raises like any ledger write; the spool
     keeps transient failures queued and moves permanent ones to dead/."""
     from .config import default_agent
@@ -117,7 +119,7 @@ def record_spooled(event: str, data: dict[str, Any], project: str) -> str:
     if "completion" not in lg.pack.claim_kinds:
         raise BenchbookError(f"check attempts need the code pack (benchbook init --pack code); {project} uses "
                              f"{lg.pack.name}")
-    rec = checks._record(lg, run, None, None)
+    rec = checks._record(lg, run, None, None, receipt_id=receipt_id)
     out = f"recorded:{short('experiment', rec.experiment_id)}"
     if rec.discarded_id is not None:
         out += f" discarded:{short('claim', rec.discarded_id)}{'' if rec.discarded_new else ' (seen before)'}"
@@ -129,10 +131,12 @@ def record_spooled(event: str, data: dict[str, Any], project: str) -> str:
 # ---------------------------------------------------------------------------------------------- the gate
 
 
-def check_states(project: str, piece: str, sha: str) -> tuple[str | None, dict[str, bool]]:
+def check_states(project: str, piece: str, sha: str,
+                 junit_checks: Collection[str] = ()) -> tuple[str | None, dict[str, bool]]:
     """(the project's pack, or None when the project does not exist; {check name: passed}) over the valid,
     finished attempts of piece at sha whose checkout was clean. A check is passed when at least one such attempt
-    passed it. Read with a plain connection (no migration, no agent registration): the gate only reads, and must
+    passed it. Raw Bash records made by older versions cannot identify which run produced a JUnit report.
+    Read with a plain connection (no migration, no agent registration): the gate only reads, and must
     answer within the hook's timeout or fail open."""
     import psycopg
 
@@ -150,5 +154,7 @@ def check_states(project: str, piece: str, sha: str) -> tuple[str | None, dict[s
                                          THEN e.metrics -> 'checks' ELSE '{}'::jsonb END) AS c(key, value)
                WHERE e.project_id = %s AND e.config ->> 'piece' = %s AND e.code_ref = %s AND e.run_status = 'ok'
                  AND e.metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb
-               GROUP BY c.key""", (project, piece, sha)).fetchall()
+                 AND (c.value <> 'ok' OR c.key <> ALL(%s::text[])
+                      OR e.metrics ->> 'via' IS DISTINCT FROM 'bash-hook')
+               GROUP BY c.key""", (project, piece, sha, list(junit_checks))).fetchall()
     return str(row[0]), {str(k): bool(v) for k, v in rows}

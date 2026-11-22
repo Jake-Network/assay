@@ -105,17 +105,15 @@
   entry records a digest of the token it was queued with. A processor or `hook replay` under another token (or
   none) leaves it queued, so one agent can no longer record another's queued reports or runs in its own name.
   Without a token the spool is where it was.
-- The Bash hook records a `junit = true` check that exited 0 only with a JUnit report of that run, named on the
-  command line where the declaration has `{junit}`, in which a test ran and none failed. Without such a report the
-  run is observed as `unrecordable`, and the completion gate asks for `benchbook check run`.
+- A passing `junit = true` check needs an invocation-specific report from `benchbook check run` or
+  `benchbook check verify`. The Bash hook observes a raw exit 0 and records explicit failures. The completion
+  gate also excludes legacy raw Bash JUnit passes from its evidence. Claude Code plugin 0.1.5 drops the
+  `bash-start` hook. The command remains available for older manifests.
 - `heartbeat` and `update_intent` refuse a lease that has run out (`LeaseLost`), so an expired piece is never
   revived next to the piece that took its paths. `piece start` without `--paths` after its lease ran out takes the
   same paths again as a new piece, through the overlap check.
 - After a timeout or an interruption the runner waits for the command's whole process group, not only the shell,
   and sends SIGKILL to what is left after 10 s: a child that ignores SIGTERM no longer outlives the run.
-- The Bash hook takes a JUnit report only if it was modified after the command started (1 s of slack, down from
-  120 s), and only once: a report already read for a recorded run is not this run's. A harness that reports no
-  duration cannot record a passing JUnit check through the hook.
 - `heartbeat` takes the intent lock the overlap check holds and reads the expiry after it, so a renewal can no
   longer commit next to a piece that took the paths meanwhile.
 - A partial pass gets no `supports` link: it no longer counts as a re-run in the false completion rate. A partial
@@ -125,16 +123,13 @@
 - `hook replay` under an agent's new token (after `agent add --rotate`) adopts the entries queued under its
   earlier token, when a processor had confirmed that token's agent (`writer.info` in the spool).
 - The Bash hook matches a check declared with a bare `--junitxml {junit}`: the word before the option was lost.
-- New `benchbook hook bash-start` (PreToolUse on Bash; plugin 0.1.4 and the manual hooks add it): it notes a
-  JUnit report's state before a declared check runs, and the Bash hook records a passing JUnit run only when the
-  report differs from that note afterwards. No clock is compared any more. Reading a report and marking it used
-  happen under one lock. Harnesses other than Claude Code cannot record a passing JUnit run through the hook.
 - A new piece and a renewal count their lease from the database's clock after the intent lock, and the overlap
   checks read expiry with the same clock.
-- `piece start` without `--paths` no longer restarts a piece that `piece done` released while it was renewing it.
-- `hook replay` reports entries queued under a token no processor ever confirmed as `held` (and exits non-zero),
-  instead of a clean, empty replay. Adopting an earlier token's entries is idempotent: a retry after a failed
-  removal of the original records nothing twice.
+- Piece start, renewal, and release use one project transaction for state lookup and mutation. After explicit
+  release, a fresh start requires `--paths`.
+- `hook replay` reports entries queued under a token no processor ever confirmed as `held` and exits nonzero.
+  Queued checks reuse their experiment ID across retries and token rotations. A retry after a committed write
+  returns the existing experiment, including when local queue cleanup failed.
 
 ## Unreleased: core for the verification ledger
 

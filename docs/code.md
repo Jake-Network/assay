@@ -148,6 +148,8 @@ reserve a file you will create, name it (or a glob that matches no tracked file 
   `piece start <piece>` starts a new piece through the overlap check. Without `--paths` it takes the paths the
   expired piece declared, also when a `next_task` has since marked it failed; a piece released with `piece done`
   (even while a renewal was under way) needs `--paths` again.
+  Reading the current generation and renewing, restarting, or releasing it happen in the same transaction under the
+  project intent lock. If a restart acquires the lock first, `piece done` can see and release the new generation.
 - *Release:* `piece done <piece>` by the holder marks the task done (`--failed`: failed). A lead (orchestrator or
   human) running it on another agent's piece cancels that task, for instance after merging it. `check verify` does
   not release a piece: a refuted completion goes back to its implementer, who still needs the paths.
@@ -260,8 +262,8 @@ these hold; otherwise it is refused, and the message says why and that a person 
   (`config.piece`) at its commit (`code_ref`);
 - at least `min_runs` of them are by agents other than the implementer (see below), from at least
   `min_authors - 1` such agents, each with every name in `checks_declared` among its `checks` (not partial),
-  `checks_passed == checks_total`, `checks_total > 0`, and
-  `guard_touched` and `checks_changed` stored as `false`;
+  `checks_passed == checks_total`, `checks_total > 0`, and one `ok` result per counted check. Both
+  `guard_touched` and `checks_changed` must be stored as `false`;
 - no valid finished attempt of that piece at that commit, cited or not and by anyone, failed a check, touched a
   guarded path or changed `[checks]`. A clean re-run does not wash out another run's guard flag, and runs that
   disagree are a person's call. A lead who finds a run was broken (no network, wrong machine) invalidates it

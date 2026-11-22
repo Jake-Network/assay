@@ -374,4 +374,3 @@ def parse_fast_args(args: list[str]) -> tuple[str, str | None, str | None] | Non
             name = a
         i += 1
     return (name, opts["--piece"], opts["--approach"]) if name else None
-
