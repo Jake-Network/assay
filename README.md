@@ -82,11 +82,13 @@ The automatic re-run after a report is Claude Code only. Elsewhere, `benchbook c
 
 ## Measured so far
 
-How often "done" is not done has not been measured yet. Two pre-registered harnesses have model-free dry runs; the
-paid runs are pending. `bench/code/` measures the false completion rate on SWE-bench-style tasks (status:
-[bench/results/2026-11-21-phase1/report.md](bench/results/2026-11-21-phase1/report.md)). `bench/boundary/`
-measures what a lead still knows after compaction and restarts, across six arms
-([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
+**How often "done" is not done (SWE-bench Verified, 2026-11-23):** 7 of 39 completions that Claude Code
+(`claude-sonnet-5-5`) reported done failed a declared check when benchbook re-ran it: **17.9%, 95% CI 9.0% to 32.7%**
+(the hidden tests alone: 5 of 39, 12.8%). Only 3 of the 39 implementers ran a test before reporting done. The interval
+contains the 10% threshold of the plan; the point estimate is above it. Details, including two refutations caused by
+the visible check itself: [bench/results/2026-11-23-swe-verified/](bench/results/2026-11-23-swe-verified/README.md).
+`bench/code/` is the harness. `bench/boundary/` measures what a lead still knows after compaction and restarts, across
+six arms ([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
 
 ## Experiment swarms
 

@@ -133,5 +133,14 @@ uv run python -m bench.code.run --out ~/benchbook-bench/swe-run-1 --model claude
 uv run python -m bench.code.report ~/benchbook-bench/swe-run-1                        # 5. report.md
 ```
 
+## Amendments
+
+- **2026-11-23, after the batch `swe-run-1` ended (does not change it).** The preflight checks the base on visible and
+  hidden and the reference fix on hidden, not the reference fix on visible. For django-15315 and django-15569 the
+  reference fix fails visible on the same test the implementer failed (their test patch rewrites a PASS_TO_PASS test),
+  so a correct fix is refuted there. The batch's metric 1 stays as pre-registered; the report gives the count without
+  those two as a sensitivity. A later batch adds "reference fix passes visible" to the preflight, replacing instances
+  that fail it like any other preflight failure.
+
 Keep the batch directory outside the benchbook repository: the implementers' worktrees live in it, and a worktree
 inside another repository's folder is one `cd ..` away from that repository.

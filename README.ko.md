@@ -78,10 +78,13 @@ PR이 완료한 조각을 다시 돌리고, 독립 재실행이 확인한 완료
 
 ## 지금까지 잰 것
 
-"끝났다"가 실제로 끝나지 않은 비율은 아직 재지 않았다. 사전 등록한 측정 하네스 두 개가 모델 없는 dry run까지 되어
-있고, 유료 실행은 남아 있다. `bench/code/`는 SWE-bench 형식 과제에서 거짓 완료율을 재고(현재 상태:
-[bench/results/2026-11-21-phase1/report.md](bench/results/2026-11-21-phase1/report.md)), `bench/boundary/`는
-compaction과 재시작 뒤에 리드가 무엇을 아직 아는지 여섯 구성으로 잰다([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
+**"끝났다"가 실제로 끝나지 않은 비율(SWE-bench Verified, 2026-11-23):** Claude Code(`claude-sonnet-5-5`)가 끝났다고
+보고한 39건 중 7건이 benchbook의 재실행에서 선언된 체크를 통과하지 못했다. **17.9%, 95% 신뢰구간 9.0%~32.7%**다
+(숨은 테스트만 보면 39건 중 5건, 12.8%). 끝났다고 보고하기 전에 테스트를 돌린 구현자는 39명 중 3명뿐이었다. 신뢰구간이
+계획의 기준인 10%를 포함하지만, 점추정은 그 위다. visible 체크 자체 때문에 생긴 반박 2건을 포함한 자세한 내용은
+[bench/results/2026-11-23-swe-verified/](bench/results/2026-11-23-swe-verified/README.md)에 있다. 하네스는
+`bench/code/`다. `bench/boundary/`는 compaction과 재시작 뒤에 리드가 무엇을 아직 아는지 여섯 구성으로
+잰다([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
 
 ## 실험 swarm
 

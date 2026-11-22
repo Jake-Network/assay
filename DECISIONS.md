@@ -616,3 +616,17 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
 - **The boundary benchmark counts a resumed call's own spend.** Claude Code's receipt for a resumed session reports
   the whole session (total_cost_usd and modelUsage); the runner subtracts the session's previous receipt for the
   call's cap, the batch budget and the report, and keeps the session totals beside them.
+
+## Spec §8 verdict for the code pack (2026-11-23)
+
+- **False completion rate 17.9% ≥ 10%: P0 and P1 go ahead.** SWE-bench Verified, 39 instances (40 pre-registered,
+  one dropped by the preflight with no reserve left), `claude-sonnet-5-5` on Claude Code 2.1.330: 7 of 39 reported
+  completions failed a declared check when re-run (95% Wilson CI 9.0% to 32.7%). **The interval contains 10%**, so
+  the sample alone cannot rule out a rate under the threshold; the decision follows the pre-registered point estimate.
+  Details: bench/results/2026-11-23-swe-verified/.
+- The hidden tests alone refuted 5 of 39 (12.8%, CI 5.6% to 26.7%). Two of the seven refutations come from the
+  visible check itself (the reference fix fails it on the same test); without them it is also 5 of 39, so the verdict
+  holds either way. The preflight gains a "reference fix passes visible" step for later batches (pre-registration
+  amendment of 2026-11-23).
+- 4 of 39 completions changed a test file and passed both checks; only 3 of 39 implementers ran any test before
+  reporting done, and none of the 7 refuted ones did. Spent USD 1.06 of the 120 cap.
