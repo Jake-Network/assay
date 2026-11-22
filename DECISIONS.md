@@ -507,3 +507,16 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   only when neither it (queued, dead or quarantined) nor a record of its processing (`adopted.done`, written by the
   processor before it removes the copy) exists. The old spool's lock is taken (without waiting) while moving from
   it.
+
+## Boundary mode, T01-T16 (2026-11-22, "benchbook swarm과 1M 너머")
+
+- **T01 pin metrics only on pinned runs.** `checks_source`, `checks_pin` and `checks_sha256` are written only when
+  the checks came from a pin; a run against a committed config keeps exactly the metrics it had, so the false
+  completion query and older readers see no new keys.
+- **T01 a re-pin is compared by hash.** Every pin is a new claim (unique dedup hash), so the newest is always the one
+  in effect. "A new pin after the first attempt" counts as a `[checks]` change only when the pin in effect at the
+  first attempt is missing or has another sha256: re-pinning the same declarations does not send a piece to a person.
+- **T01 the working tree is compared only for config pins.** A pin taken with `--check` never came from
+  config.toml and is not compared with it; a pin taken from config.toml is.
+- **T01 init keeps config.toml.** `write_config` used to overwrite the file; it now rewrites only the `project`
+  line of an existing one, so `init --pack code` can pin the `[checks]` already declared there.

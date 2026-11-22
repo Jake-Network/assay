@@ -347,6 +347,39 @@ claim in the implementer's name: the verifier proposes it and puts `--reported-b
 which makes the reporter the implementer as described above. What tokens do not cover: an operator who issues one
 person two names, and the lead's role itself, which is trusted to record for others.
 
+## Checks pinned in the ledger
+
+`check verify` reads the `[checks]` committed at the merge-base when there are any: that is the team mode, and
+nothing below changes it. A person trying benchbook on a team repository should not have to commit a tool's config
+first, so the declarations can instead be **pinned in the ledger** before the work starts:
+
+```
+benchbook init --pack code              # .benchbook/ goes to .git/info/exclude; the [checks] of config.toml are pinned
+benchbook check pin                     # pin the working tree's [checks], [guard] and [verify] for the project again
+benchbook check pin media --check 'unit=uv run pytest tests/media --junitxml={junit}'   # one piece's own checks
+benchbook piece start media --paths 'media/**' --check 'unit=uv run pytest tests/media'  # the same, at the start
+```
+
+A pin is a `note` claim tagged `checks-pin` and `piece:<piece>` (`piece:*` for the project). Its payload holds the
+checks, the guard paths, the `[verify]` table and the sha256 of the three. Claims are append-only, so a pin is never
+edited: a new pin is a new claim, and pinning what the newest pin of that scope already holds records nothing.
+
+When the merge-base has no config, `check verify` uses the newest pin of the piece, else the newest pin of the
+project, leaving out pins written by any implementer of the piece at that commit. The integrity argument moves from
+"committed at the merge-base" to "declared, append-only, before the work, by someone other than the implementer". The
+attempt's metrics name the pin (`checks_source = "pin"`, `checks_pin`, `checks_sha256`), and `checks_changed` is
+true when:
+
+- the pin was taken from config.toml (`init`, `check pin` without `--check`) and the working tree's config.toml no
+  longer hashes to it (an implementer in a linked worktree reads the main checkout's config.toml, so editing it is
+  editing the checks), or
+- the piece's first attempt ran before the pin in effect now and under no pin or a pin with another hash. A lead may
+  re-pin after a failure, and a person then decides that piece once.
+
+A commit that adds its own config.toml still counts as a `[checks]` change, as before. In local mode the lead and
+the implementer are often the same person under two names, so a pin protects against an agent's mistake, not
+against its user; the team mode (a committed config, CI as the verifier) is the stronger one.
+
 ## The numbers
 
 The false completion rate and the number of completions that touched guarded paths, in one `benchbook sql`

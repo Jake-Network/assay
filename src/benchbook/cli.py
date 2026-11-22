@@ -148,11 +148,36 @@ def init(
     from .config import write_config
 
     cfg = write_config(root, p.id)
-    emit({"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack},
-         f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
-         f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
-         f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n"
-         f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   benchbook ui")
+    extra, out = "", {"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack}
+    if p.pack == "code":
+        extra = _init_code(root, p.id, out)
+    emit(out, f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
+              f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
+              f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n{extra}"
+              f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   "
+              "benchbook ui")
+
+
+def _init_code(root: Path, project: str, out: dict[str, Any]) -> str:
+    """code pack: keep .benchbook/ out of git (info/exclude) and pin the declared checks in the ledger, so a piece
+    can be verified without committing anything (T01)."""
+    from .checks import pin_checks
+    from .config import exclude_local_dir, load
+    from .ids import short
+    from .ledger import Ledger
+
+    lines = []
+    if exclude_local_dir(root):
+        out["excluded"] = True
+        lines.append("  git:    .benchbook/ added to .git/info/exclude (nothing to commit)")
+    cfg = load(root)
+    if cfg.checks:
+        name = STATE["agent"] or env("AGENT") or (None if env("TOKEN") else "lead")
+        p, _ = pin_checks(Ledger.open(project=project, agent=name), None, cfg.checks, cfg.guard_paths, None,
+                          source="config")
+        out["pin"] = short("claim", p.id)
+        lines.append(f"  checks: {', '.join(p.checks)} pinned ({out['pin']})")
+    return "".join(x + "\n" for x in lines)
 
 
 def _repo_root() -> Path:

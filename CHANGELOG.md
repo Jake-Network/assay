@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- Checks pinned in the ledger: `benchbook check pin [PIECE] [--check NAME=CMD]` and `piece start --check` record the
+  checks `check verify` runs when the merge-base has no committed config.toml (a `note` claim tagged `checks-pin`).
+  Pins by the piece's implementer are ignored; a pin that changed under the work sets `checks_changed`. The attempt
+  carries `checks_source`, `checks_pin` and `checks_sha256`. `init --pack code` adds `.benchbook/` to
+  `.git/info/exclude` when git does not track it, pins the declared checks, and keeps an existing config.toml's
+  tables (it rewrites only the `project` line). docs/code.md, "Checks pinned in the ledger".
 - `benchbook check verify <piece> <commit> [--reported-by NAME] [--report-file F] [--base REF] [--checks a,b]`
   re-runs the checks declared in `.benchbook/config.toml` `[checks]` on a reported commit in a clean worktree. It
   records the completion claim (the implementer's) and the attempt (the verifier's), linked supports/refutes, and

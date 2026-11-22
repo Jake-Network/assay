@@ -516,3 +516,119 @@ def test_verify_names_an_earlier_attempt_that_failed_the_same_way(repo: Path, vt
     good = piece(repo, "good", {"impl.txt": "fixed\n"})
     v4, r4 = checks.verify(verifier, "media", good, repo=repo, reported_by="impl")
     assert v4.all_passed and r4.seen_before == [] and r4.discarded_id is None
+
+
+# ------------------------------------------------------------------------------------ checks pinned in the ledger
+
+def make_pinned_repo(root: Path, cfg: str = CONFIG) -> Path:
+    """make_repo without the config committed: .benchbook/ is local and in .git/info/exclude (T01)."""
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        git(root, "config", k, v)
+    for path, text in {"tests/test_impl.py": TEST_IMPL, "tests/test_extra.py": TEST_EXTRA, "impl.txt": "todo\n",
+                       "value.txt": "ok\n"}.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    (root / ".benchbook").mkdir()
+    (root / ".benchbook" / "config.toml").write_text(cfg)
+    assert config.exclude_local_dir(root)
+    return root
+
+
+@pytest.fixture
+def lead_lg(db_url: str, code_project: str) -> Ledger:
+    return Ledger.open(project=code_project, agent="lead", role="orchestrator", database_url=db_url)
+
+
+def pin_from_config(lg: Ledger, repo: Path, piece_name: str | None = None) -> checks.Pin:
+    cfg = config.load(repo)
+    return checks.pin_checks(lg, piece_name, cfg.checks, cfg.guard_paths, None, source="config")[0]
+
+
+def test_pinned_checks_verify_without_a_committed_config(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    p = pin_from_config(lead_lg, repo)
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    assert git(repo, "show", "--name-only", "--format=", sha) == "impl.txt"  # nothing of .benchbook/ committed
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.base.source == "pin" and v.base.pin_id == p.id
+    m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
+    assert m["checks_source"] == "pin" and m["checks_sha256"] == p.sha256 and m["checks_changed"] is False
+    assert rec.outcome is not None and rec.outcome.decision == "verified"
+    # pinning the same declarations again records nothing
+    assert checks.pin_checks(lead_lg, None, p.checks, p.guard_paths, None, source="config") == (p, False)
+
+
+def test_a_pin_changed_under_the_work_goes_to_a_person(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    pin_from_config(lead_lg, repo)
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    cfg = repo / ".benchbook" / "config.toml"
+    cfg.write_text(cfg.read_text().replace("grep -qx ok value.txt", "true"))  # the working tree's [checks] moved
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.integrity.checks_changed
+    assert rec.outcome is not None and rec.outcome.decision is None and rec.outcome.person
+
+
+def test_a_new_pin_after_the_first_attempt_goes_to_a_person(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    pin_from_config(lead_lg, repo, "media")
+    bad = piece(repo, "bad", {"impl.txt": "no\n"})
+    checks.verify(lead_lg, "media", bad, repo=repo, reported_by="impl")  # the first attempt, under the first pin
+    checks.pin_checks(lead_lg, "media", checks.parse_check_options(["value=grep -qx ok value.txt"]), [])
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", good, repo=repo, reported_by="impl")
+    assert v.all_passed and v.integrity.checks_changed and [r.name for r in v.results] == ["value"]
+    assert rec.outcome is not None and rec.outcome.person
+
+
+def test_a_pin_by_the_implementer_is_ignored(tmp_path: Path, vtmp: Path, db_url: str, code_project: str,
+                                             lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    impl = Ledger.open(project=code_project, agent="impl", database_url=db_url)
+    pin_from_config(impl, repo, "media")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    with pytest.raises(BenchbookError, match="no checks pinned"):
+        checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    lead_pin = pin_from_config(lead_lg, repo)  # the project's pin, by the lead, is used
+    v, _ = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.base.pin_id == lead_pin.id
+
+
+def test_a_committed_config_wins_over_a_pin(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    checks.pin_checks(lead_lg, None, checks.parse_check_options(["broken=false"]), [])
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.base.source == "merge-base" and [r.name for r in v.results] == ["unit", "value"]
+    assert set(row(lead_lg, "experiments", rec.experiment_id)["metrics"]) == METRIC_KEYS
+
+
+@pytest.mark.parametrize(("items", "message"), [(["unit"], "expected NAME=CMD"), (["a=x", "a=y"], "given twice"),
+                                                (["bad name=x"], "a check name is")])
+def test_bad_check_options(items: list[str], message: str) -> None:
+    with pytest.raises(BenchbookError, match=message):
+        checks.parse_check_options(items)
+
+
+def test_cli_init_pins_and_verify_needs_no_commit(tmp_path: Path, vtmp: Path, cli_env: dict[str, str]) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    (repo / ".git" / "info" / "exclude").write_text("")  # init adds it back
+    pid = f"t-{uuid.uuid4().hex[:10]}"
+    r = run_cli(repo, cli_env, "--json", "init", "--project", pid, "--pack", "code")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["excluded"] is True and out["pin"].startswith("c:")
+    assert "/.benchbook/" in (repo / ".git" / "info" / "exclude").read_text()
+    assert "[checks.unit]" in (repo / ".benchbook" / "config.toml").read_text()  # init kept the declarations
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    assert git(repo, "log", "--format=%H", "-1", "main") != sha and git(repo, "status", "--porcelain") == ""
+    r = run_cli(repo, cli_env, "--agent", "lead", "--json", "check", "verify", "media", sha, "--reported-by", "impl")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["decision"] == "verified"
+    r = run_cli(repo, cli_env, "--agent", "lead", "--json", "piece", "start", "other", "--paths", "value.txt",
+                "--check", "value=grep -qx ok value.txt")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["pin"].startswith("c:")

@@ -1,5 +1,55 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "code note payload",
-  "type": "object"
+  "description": "A note. A checks pin (tag checks-pin) holds the declarations check verify runs when the merge-base has no committed config.toml: piece (or * for the project), checks, guard_paths, verify and their sha256.",
+  "type": "object",
+  "properties": {
+    "piece": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "cmd"
+        ],
+        "properties": {
+          "cmd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "junit": {
+            "type": "boolean"
+          },
+          "timeout": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "guard_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100
+    },
+    "verify": {
+      "type": "object"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source": {
+      "enum": [
+        "config",
+        "cli"
+      ]
+    }
+  }
 }
