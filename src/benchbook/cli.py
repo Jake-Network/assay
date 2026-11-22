@@ -236,8 +236,14 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
 
 @app.command()
 def get(id: str) -> None:
-    """Show one record with its links."""
-    emit(ledger(read_only=True).get(id))
+    """Show one record: status, how it was checked, statement, up to 5 links each way and the last 3 decisions,
+    within 400 tokens. --json prints the whole record."""
+    from .lookup import log_lookup, render
+
+    lg = ledger(read_only=True)
+    got = lg.get(id)
+    log_lookup(lg.project_id, str(got.get("id") or id))
+    emit(got, render(got, labels=lg.pack.brief_labels))
 
 
 @app.command()

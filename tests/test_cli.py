@@ -80,3 +80,27 @@ def test_module_entry_shares_global_options(tmp_path: Path) -> None:
         r = subprocess.run([sys.executable, "-m", mod, "--json", "ar", "status"], cwd=tmp_path,
                            capture_output=True, text=True)
         assert r.stdout.startswith("{"), (mod, r.stdout, r.stderr)
+
+
+# ------------------------------------------------------------------------------------- get within 400 tokens (T12)
+
+def test_get_text_is_bounded_and_json_is_whole(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchbook import Ledger, lookup
+    from benchbook.tokens import estimate_tokens
+    from tests.conftest import make_project
+
+    pid = make_project(db_url)
+    lg = Ledger.open(project=pid, agent="w", database_url=db_url)
+    c = lg.propose_claim("observation", "a claim with many links " + "x" * 200).id
+    for i in range(50):
+        e = lg.record_experiment({"i": i}, {"score": float(i)}).id
+        lg.link(e, "supports", c)
+    got = lg.get(c)
+    text = lookup.render(got)
+    assert estimate_tokens(text) <= lookup.LIMIT_TOKENS
+    assert "links in (50):" in text and "more (--json)" in text and "checked: none" in text
+    assert len(got["links_in"]) == 50  # the record itself is whole
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    lookup.log_lookup(pid, got["id"])
+    [line] = (tmp_path / "state" / "benchbook" / "lookups.jsonl").read_text().splitlines()
+    assert json.loads(line)["id"] == got["id"]

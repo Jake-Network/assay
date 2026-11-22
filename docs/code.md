@@ -634,6 +634,13 @@ ignore it; their briefs are unchanged.
 
 ## Reads that changed a plan
 
+**Looking an id up.** Every brief line carries an id; `benchbook get <id>` prints that record in at most 400 tokens:
+its kind and id, status and how it was checked (`checked: re-run`, `person`, `none`; pack.toml `[brief.labels]`),
+its statement or signature and the payload keys that matter, up to five links each way and the last three decisions,
+with what was cut counted ("… 45 more (--json)"). `--json` prints the whole record. Each lookup appends one line to
+`lookups.jsonl` in the state directory (time, project, id): an id a brief carried that was then looked up is the
+cheapest sign that the brief was read.
+
 The spec's unit for "a read that changed a plan" is a claim id cited by a plan document. Two things are recorded:
 the claims themselves (with their ids, tags and times) and `brief_log` (one row per brief compiled: project, agent,
 task, tokens and time; not what it showed). The count, for one plan document:
