@@ -31,8 +31,9 @@ def write_report(out: Path) -> Path:
                   "> validate the harness pipeline; they are not evidence about benchbook."
                   " Real runs: `MANUAL_QA.md`.", ""]
     lines += ["| configuration | runs | evaluations | duplicate ratio | lost results | lead context max (tokens) |"
-              " tokens total | API cost (USD) | final best | best per 1k tokens |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+              " tokens total | API cost (USD) | final best | best per 1k tokens |"
+              " lead report tokens (estimated) | delivered worker reports |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for m in modes:
         rs = [r for r in runs if r["config"] == m]
         best_per_1k = [1000 * r["final_best"] / r["tokens_total"] for r in rs
@@ -41,7 +42,8 @@ def write_report(out: Path) -> Path:
                      f"{_ms([r['duplicate_ratio'] for r in rs])} | {_ms([r['lost_results'] for r in rs])} | "
                      f"{_ms([r['lead_context_max'] for r in rs])} | {_ms([r['tokens_total'] for r in rs])} | "
                      f"{_ms([r.get('cost_usd') for r in rs])} | {_ms([r['final_best'] for r in rs])} | "
-                     f"{_ms(best_per_1k)} |")
+                     f"{_ms(best_per_1k)} | {_ms([r.get('lead_report_tokens') for r in rs])} | "
+                     f"{_ms([r.get('delivered_worker_reports') for r in rs])} |")
     lines += ["", "Values are mean ± sample standard deviation over runs.", ""]
     png = _plot(out, runs, modes)
     if png:
@@ -61,6 +63,8 @@ def write_report(out: Path) -> Path:
               "  status and evaluation data.",
               "- lead context max: largest prompt the lead saw (dry: simulated; real: max input+cache tokens of",
               "  a top-level assistant turn)", "",
+              "- lead report tokens: token estimate of Agent/Task result payloads in the lead stream,",
+              "  once per successful tool result. Compare delivered report counts with workers × rounds.", "",
               "## Conditions", "", "```json", json.dumps(cond, indent=2), "```", ""]
     p = out / "report.md"
     p.write_text("\n".join(lines))

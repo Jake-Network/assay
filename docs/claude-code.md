@@ -282,6 +282,10 @@ the database layer; nothing goes to stderr and every hook exits 0 (failures are 
 
 ## Boundary hooks: what Claude Code does
 
+The boundary benchmark exercises its report pipeline with scripted inputs using
+`uv run python -m bench.boundary.run --dry`. Collecting evidence from real Claude Code sessions requires the
+conditions in the [benchmark preregistration](../bench/boundary/PREREGISTRATION.md).
+
 The session-start, compaction and Agent-result hooks rely on the inputs and outputs below. The "documented" column is
 from the hook reference (code.claude.com/docs/en/hooks, read 2026-11-22); `scripts/qa_boundary_hooks.sh`
 (MANUAL_QA.md, scenario 5) checks them on a real session and fills the last column. Until it has run, the fixtures in
