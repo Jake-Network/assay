@@ -90,4 +90,32 @@ fi
 
 echo "== benchbook doctor (after init)"
 bb doctor
+
+echo "== benchbook install --dry-run"
+out="$(bb install --dry-run)"
+printf '%s\n' "$out"
+if ! grep -q "would run: claude plugin install benchbook@benchbook" <<<"$out"; then
+    echo "smoke: install --dry-run does not install the hook plugin" >&2
+    exit 1
+fi
+
+echo "== benchbook init --yes (a git repository: code pack, proposed checks, nothing to commit)"
+mkdir -p "$WORK/repo"
+cd "$WORK/repo"
+git init -q
+printf '[project]\nname = "smoke"\n\n[dependency-groups]\ndev = ["pytest"]\n' >pyproject.toml
+bb init --yes
+grep -q '^\[checks.unit\]' .benchbook/config.toml || { echo "smoke: init --yes proposed no unit check" >&2; exit 1; }
+grep -qx '/.benchbook/' .git/info/exclude || { echo "smoke: init did not exclude .benchbook/" >&2; exit 1; }
+if [[ -n "$(git status --porcelain --untracked-files=all -- .benchbook)" ]]; then
+    echo "smoke: .benchbook/ shows up in git status" >&2
+    exit 1
+fi
+
+echo "== benchbook uninstall"
+bb uninstall
+if [[ -e .benchbook ]] || grep -q benchbook .git/info/exclude; then
+    echo "smoke: uninstall left .benchbook/ or its exclude line" >&2
+    exit 1
+fi
 echo "smoke ok: benchbook $VERSION"

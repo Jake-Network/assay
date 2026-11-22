@@ -1,0 +1,13 @@
+{
+  "name": "benchbook-mcp",
+  "version": "0.2.0",
+  "description": "The benchbook MCP server, the benchbook-worker subagent and the lead skill, for research loops that call the ledger as tools. Install with the benchbook hook plugin.",
+  "license": "Apache-2.0",
+  "keywords": [
+    "research",
+    "experiments",
+    "subagents",
+    "ledger",
+    "mcp"
+  ]
+}

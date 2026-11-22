@@ -128,9 +128,17 @@ def init(
     epsilon: Annotated[float, typer.Option(help="Minimum change that counts as improved")] = 0.0,
     config_schema: Annotated[str | None, typer.Option("--config-schema",
                                                       help="JSON Schema for experiment configs (@file)")] = None,
-    pack: Annotated[str, typer.Option(help="core, ml-research or code (coding pieces and their checks)")] = "core",
+    pack: Annotated[str | None, typer.Option(
+        help="core, ml-research or code (coding pieces and their checks; the default without --metric)")] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="code pack: write the proposed checks without asking")]
+    = False,
 ) -> None:
-    """Create a project and write .benchbook/config.toml in the repository root."""
+    """Create a project and write .benchbook/config.toml in the repository root.
+
+    Without --metric and --pack the project is a code project: init proposes the test and lint commands the
+    repository declares as its checks (asking first on a terminal), keeps .benchbook/ out of git and pins them."""
+    if pack is None:
+        pack = "core" if metric is not None else "code"
     import re
 
     root = _repo_root()
@@ -150,7 +158,7 @@ def init(
     cfg = write_config(root, p.id)
     extra, out = "", {"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack}
     if p.pack == "code":
-        extra = _init_code(root, p.id, out)
+        extra = _init_code(root, p.id, out, yes)
     emit(out, f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
               f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
               f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n{extra}"
@@ -158,7 +166,7 @@ def init(
               "benchbook ui")
 
 
-def _init_code(root: Path, project: str, out: dict[str, Any]) -> str:
+def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:
     """code pack: keep .benchbook/ out of git (info/exclude) and pin the declared checks in the ledger, so a piece
     can be verified without committing anything (T01)."""
     from .checks import pin_checks
@@ -171,6 +179,21 @@ def _init_code(root: Path, project: str, out: dict[str, Any]) -> str:
         out["excluded"] = True
         lines.append("  git:    .benchbook/ added to .git/info/exclude (nothing to commit)")
     cfg = load(root)
+    if cfg.path is not None and not cfg.checks:
+        from .proposals import propose
+
+        prop = propose(root)
+        if prop.checks:
+            text = prop.toml()
+            ok = yes or not sys.stdin.isatty() or typer.confirm(
+                f"benchbook: checks found in {', '.join(prop.found_in)}:\n{text}\nWrite them to {cfg.path}?",
+                default=True)
+            if ok:
+                with cfg.path.open("a", encoding="utf-8") as f:
+                    f.write("\n" + text)
+                out["proposed"] = prop.checks
+                lines.append(f"  checks: {', '.join(prop.checks)} from {', '.join(prop.found_in)} (edit config.toml)")
+            cfg = load(root)
     if cfg.path is not None and cfg.out_of_scope_heading is None and "[report]" not in cfg.path.read_text("utf-8"):
         # T05: every subagent's report is read for an out-of-scope section (findings only, no note)
         with cfg.path.open("a", encoding="utf-8") as f:
@@ -184,6 +207,35 @@ def _init_code(root: Path, project: str, out: dict[str, Any]) -> str:
         out["pin"] = short("claim", p.id)
         lines.append(f"  checks: {', '.join(p.checks)} pinned ({out['pin']})")
     return "".join(x + "\n" for x in lines)
+
+
+@app.command("install")
+def install_cmd(
+    harness: Annotated[str, typer.Option(help="claude-code, codex or cursor")] = "claude-code",
+    mcp: Annotated[bool, typer.Option("--mcp", help="also the benchbook-mcp plugin (MCP server, worker agent)")]
+    = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="print the steps, run nothing")] = False,
+    no_cli: Annotated[bool, typer.Option("--no-cli", help="skip uv tool install")] = False,
+) -> None:
+    """Install the CLI at this version and the hooks: the benchbook plugin for Claude Code (hooks only), or the
+    Codex or Cursor manifest. Then run benchbook init in your repository."""
+    from .install import install
+
+    plan = install(harness, dry_run=dry_run, mcp=mcp, cli=not no_cli)
+    emit({"ok": True, "steps": plan.done}, "\n".join(plan.done))
+
+
+@app.command("uninstall")
+def uninstall_cmd(
+    purge: Annotated[bool, typer.Option("--purge", help="also remove the embedded database")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="print the steps, remove nothing")] = False,
+) -> None:
+    """Remove the plugins, the hook manifests' benchbook entries, the state directory and this checkout's untracked
+    .benchbook/ (with its .git/info/exclude line). The embedded database stays unless --purge."""
+    from .install import uninstall
+
+    plan = uninstall(_repo_root(), dry_run=dry_run, purge=purge)
+    emit({"ok": True, "steps": plan.done}, "\n".join(plan.done))
 
 
 def _repo_root() -> Path:

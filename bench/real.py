@@ -48,7 +48,7 @@ LEAD = {
         "receipt to results/<eval_id>.json right after the evaluation. Read results/ to plan the next round."
     ),
     "C": (
-        "/benchbook:benchbook-lead {task} Run {rounds} rounds with {workers} workers per round and about {evals} "
+        "/benchbook-mcp:benchbook-lead {task} Run {rounds} rounds with {workers} workers per round and about {evals} "
         "evaluations per task. Include the wrapper command and these recording instructions in the task specs. "
         'Workers must pass code_ref both when checking and recording. Copy each receipt ID into trace_ref as '
         '{{"system":"benchbook-bench","trace_id":"<eval_id>"}}. Copy config, seed and run_status verbatim and,'
@@ -152,8 +152,10 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
         env["XDG_STATE_HOME"] = str(out / "state")
         init = ["benchbook", "init", "--project", project_id, "--goal", GOAL, "--metric", "sum_radii",
                 "--direction", "max"]
-        cmd.extend(["--plugin-dir", str(ROOT / "integrations" / "claude-code")])
-        tools += ",mcp__plugin_benchbook_benchbook__*"
+        # 0.2: hooks in one plugin, the MCP server, worker and lead skill in benchbook-mcp
+        cmd.extend(["--plugin-dir", str(ROOT / "integrations" / "claude-code"),
+                    "--plugin-dir", str(ROOT / "integrations" / "claude-code-mcp")])
+        tools += ",mcp__plugin_benchbook-mcp_benchbook__*"
     else:
         cmd.append("--strict-mcp-config")
     if mode == "B":
@@ -214,7 +216,8 @@ def _flush_hooks(prepared: PreparedRun) -> None:
             raise BenchRunError("hook receipts are still queued after replay")
 
 
-PLUGIN_MCP_SERVER = "plugin:benchbook:benchbook"
+PLUGIN_MCP_SERVER = "plugin:benchbook-mcp:benchbook"
+OWN_SERVERS = (PLUGIN_MCP_SERVER, "plugin:benchbook:benchbook")  # the second: runs from before the plugin split
 
 
 def session_mcp_servers(out: Path) -> dict[str, Any]:
@@ -239,7 +242,7 @@ def session_mcp_servers(out: Path) -> dict[str, Any]:
                     break
     except OSError:
         pass
-    return {"servers": names, "foreign": [n for n in names if n != PLUGIN_MCP_SERVER], "tools": tools}
+    return {"servers": names, "foreign": [n for n in names if n not in OWN_SERVERS], "tools": tools}
 
 
 def claude_config_dir(env: Mapping[str, str]) -> Path:

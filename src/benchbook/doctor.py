@@ -36,6 +36,9 @@ SPOOL_KEY = re.compile(r"/spool/([0-9a-f]{64})\b")
 STUCK_SECONDS = 300
 # hook commands the plugin runs since 0.1.3 (check_hooks.py); an installed copy without them is older
 CHECK_HOOKS = ("benchbook hook bash-result", "benchbook hook task-completed")
+# 0.2 plugins run every hook through a shim in the plugin root; read as `benchbook hook EVENT`
+SHIM = re.compile(r'^"?\$\{CLAUDE_PLUGIN_ROOT\}/bin/benchbook-hook"?\s+')
+MISSING_CLI = "missing-cli"  # written by the shim when no benchbook command is on PATH
 
 
 @dataclass
@@ -364,8 +367,24 @@ def _hook_commands(hooks: dict[str, Any]) -> set[str]:
             for h in e.get("hooks", []) if isinstance(e, dict) else []:
                 cmd = h.get("command") if isinstance(h, dict) else None
                 if isinstance(cmd, str):
-                    out.add(re.sub(rf"^{config.LEGACY_NAME} ", f"{config.NAME} ", cmd.strip()))
+                    cmd = SHIM.sub(f"{config.NAME} hook ", cmd.strip())  # 0.2: the plugin runs bin/benchbook-hook
+                    out.add(re.sub(rf"^{config.LEGACY_NAME} ", f"{config.NAME} ", cmd))
     return out
+
+
+def check_hook_cli() -> Check | None:
+    """The plugin's shim (bin/benchbook-hook) notes in missing-cli each hook it skipped because no benchbook command
+    was on PATH: the hooks ran, and recorded nothing."""
+    from .config import state_dir
+
+    found = [p for p in (state_dir() / MISSING_CLI, *(claude_dir() / "plugins" / "data").glob(f"*/{MISSING_CLI}"))
+             if p.is_file()]
+    if not found:
+        return None
+    lines = [x for p in found for x in p.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
+    return Check("hook cli", False, f"{len(lines)} hook run(s) found no benchbook command on PATH ({found[0]}); "
+                                    "nothing was recorded for them",
+                 f"uv tool install benchbook (then remove {found[0]})")
 
 
 def check_plugin_hooks() -> Check | None:
@@ -413,6 +432,7 @@ def claude_code_checks(root: Path) -> list[Check]:
         checks += _guarded("benchbook on PATH", check_path, root)
         checks += _guarded("claude code plugin", check_plugin, root)
         checks += _guarded("plugin hooks", check_plugin_hooks)
+        checks += _guarded("hook cli", check_hook_cli)
         checks += _guarded("claude code env", check_env, root)
     else:
         checks.append(Check("claude code", True, f"{claude_dir()} not found; connection checks skipped"))

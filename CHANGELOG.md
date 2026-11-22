@@ -2,6 +2,16 @@
 
 ## Unreleased: code pack
 
+- Two Claude Code plugins: `benchbook` (`integrations/claude-code/`, hooks only, plugin 0.2.0) and `benchbook-mcp`
+  (`integrations/claude-code-mcp/`: the MCP server, the worker subagent, the skills; the lead skill is now
+  `/benchbook-mcp:benchbook-lead` and the worker's tools `mcp__plugin_benchbook-mcp_benchbook__*`). Every hook runs
+  `"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT`, a shim that notes a missing CLI in `missing-cli` (reported
+  by `doctor`) instead of failing.
+- `benchbook install [--harness claude-code|codex|cursor] [--mcp] [--dry-run]` and `benchbook uninstall [--purge]
+  [--dry-run]`. The wheel ships the Codex and Cursor manifests for install to merge.
+- `benchbook init` without `--metric` and `--pack` makes a code project: it proposes the test and lint commands
+  found in pyproject.toml, package.json, a Makefile, go.mod or Cargo.toml as `[checks]` with guard paths and the
+  base branch (asking on a terminal; `--yes` does not ask).
 - `benchbook get <id>` prints at most 400 tokens of text (status, `checked:` label, statement, five links each way, the
   last three decisions, cut items counted); `--json` is unchanged. Lookups are logged to `lookups.jsonl` in the
   state directory. Pack.toml `[brief.labels]` names the oracles ("re-run", "person", ...).

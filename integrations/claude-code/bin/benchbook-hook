@@ -1,0 +1,18 @@
+#!/bin/sh
+# benchbook's Claude Code plugin runs every hook through this file: "${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT.
+# It runs `benchbook hook EVENT` from PATH (`assay hook EVENT`, the pre-rename command, when only that is there).
+# Without either it notes one line in ${CLAUDE_PLUGIN_DATA}/missing-cli, reads its input and exits 0: a hook must
+# never block the session, and `benchbook doctor` reports the note.
+if command -v benchbook >/dev/null 2>&1; then
+    exec benchbook hook "$@"
+fi
+if command -v assay >/dev/null 2>&1; then
+    exec assay hook "$@"
+fi
+dir="${CLAUDE_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/benchbook}"
+if mkdir -p "$dir" 2>/dev/null; then
+    printf '%s benchbook is not on PATH; hook %s skipped (install: uv tool install benchbook)\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$dir/missing-cli" 2>/dev/null
+fi
+cat >/dev/null 2>&1
+exit 0
