@@ -262,6 +262,12 @@ The `benchbook` plugin also gives the model what the ledger says at the points w
 | `benchbook hook session-start` | SessionStart (every source: startup, resume, clear, compact) | the brief scoped by what this branch changed (`brief --here`), at most 1,500 tokens and 6,000 characters, as `additionalContext`; nothing when every section is empty |
 | `benchbook hook pre-compact` | PreCompact | one paragraph of at most 1,000 characters, "Keep these ids and statuses verbatim in the summary: ...", three lines per section, on plain stdout (instructions for the compaction summary) |
 | `benchbook hook notes` | UserPromptSubmit | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once; they move to `delivered/` |
+| `benchbook hook agent-result` | PostToolUse (Agent or Task) | queues a re-run when a foreground report identifies its commit and piece; delivers any results already waiting for this session |
+
+The detached processor verifies the reported commit using the project's declared checks. It stores the report's
+hash and structured identifiers. Repeated reports for the same project, piece and commit share one completed
+re-run within the database and writer's spool. SessionStart, UserPromptSubmit, and subsequent Agent or Bash
+results can deliver the pending note once. The initial asynchronous launch payload does not queue a check.
 
 Each brief is also written to `.benchbook/STATE.md` (first line: when and at which HEAD), for harnesses without
 hooks and for people; when the benchbook folder is tracked, STATE.md is added to `.git/info/exclude`. The ledger

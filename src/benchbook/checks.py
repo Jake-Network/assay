@@ -850,7 +850,8 @@ def read_report(path: Path, declared: Sequence[str]) -> Report:
 def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None = None,
            only: Sequence[str] | None = None, reported_by: str | None = None,
            report_file: Path | None = None, trace_ref: dict[str, Any] | None = None,
-           decide: bool = True, claim: str | None = None) -> tuple[Verification, Recorded]:
+           decide: bool = True, claim: str | None = None,
+           receipt_id: UUID | None = None) -> tuple[Verification, Recorded]:
     """Steps 1 to 4 (the CLI prints step 5). `lg` acts as the verifier. Raises the interruption, after cleaning up
     and recording, when the run was interrupted. trace_ref is stored on the attempt as given (a CI run's URL, say);
     decide=False records without deciding, even with lead authority. claim: the completion claim the run is evidence
@@ -912,7 +913,7 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         except Exception as e:  # noqa: BLE001 - the interruption is what the caller must see
             interrupted.add_note(f"the interrupted attempt was not recorded: {e}")
         raise interrupted
-    rec = _record(lg, v, reported_by, report, trace_ref, found)
+    rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
     rec.seen_before = seen
     rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
     return v, rec

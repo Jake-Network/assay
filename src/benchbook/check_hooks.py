@@ -297,8 +297,17 @@ def bash_result(harness: str = "claude-code") -> int:
     config.hold_notices()  # the harness runs this: nothing may reach stderr
     from .harnesses import answer, shell_call
 
+    output = ""
     try:
-        call = shell_call(harness, _read_input())
+        data = _read_input()
+        if harness == "claude-code" and data.get("session_id"):
+            from .boundary_hooks import deliver_notes
+
+            event = "PostToolUseFailure" if data.get("hook_event_name") == "PostToolUseFailure" else "PostToolUse"
+            if notes := deliver_notes(data):
+                output = json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": notes}},
+                                    ensure_ascii=False) + "\n"
+        call = shell_call(harness, data)
         if call is None:
             return 0
         found = match(call.command, call.cwd)
@@ -310,7 +319,7 @@ def bash_result(harness: str = "claude-code") -> int:
 
         _log(f"{EVENT} failed ({harness}): " + traceback.format_exc())
     finally:
-        sys.stdout.write(answer(harness))
+        sys.stdout.write(output or answer(harness))
     return 0
 
 
