@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- Code project status shows piece outcomes, open findings and hook queue health. The brief surfaces recording
+  failures, and `benchbook statusline` reads a compact summary cached by the spool processor.
 - Claude Code's Agent/Task result hook queues an independent check run from a completion report. The next
   supported hook in that session delivers its result once, with the completion ID and any review requirement.
 - Boundary hooks in the `benchbook` plugin: `benchbook hook session-start` (SessionStart) gives the branch's brief

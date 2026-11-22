@@ -856,6 +856,10 @@ def process_file(path: Path) -> str:
                 f.flush()
                 os.fsync(f.fileno())
         path.unlink(missing_ok=True)
+        if result.startswith(("captured", "recorded")) and isinstance(project := spooled.get("project"), str):
+            from .code_status import refresh_cache
+
+            refresh_cache(path.parent.parent if path.parent.name == "dead" else path.parent, project)
     except Exception as e:  # noqa: BLE001
         reason = f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
         if _permanent(e):

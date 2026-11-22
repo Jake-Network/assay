@@ -598,6 +598,11 @@ benchbook search --all-tags discarded,piece:media-upload      # one piece's disc
 
 ## The brief
 
+`benchbook status` counts each piece at its latest active reported commit, open out-of-scope findings, pending
+and dead reports, and recent hook failures. If recording needs attention, the brief leads with the reason and
+the `benchbook hook replay` command. The spool and the cached `benchbook statusline` refer to the selected
+database and writer.
+
 In a code project `benchbook brief` (MCP `benchbook_brief`) is the code pack's
 (`benchbook.packs.code.brief:compile_brief`, `brief_compiler` in pack.toml). Narrowed to a module:
 

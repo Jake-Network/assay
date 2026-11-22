@@ -29,6 +29,9 @@ SECRET_KEYS = {"BENCHBOOK_DATABASE_URL"}
 RECENT_SECONDS = 24 * 3600
 # hook.log lines that mean a report did not reach the ledger (see hooks.py)
 FAILURE_MARKERS = ("failed", "not captured", "moved to", "quarantined", "cannot read")
+INFORMATIONAL_HOOK_LOG = re.compile(
+    r"^[\w-]+: (?:queued |observed |blocked piece |allowed: |out-of-scope findings: |recorded: |adopted )"
+)
 # hook.log lines of the last 24 hours can come from the build before the rename
 NO_PROJECT = re.compile(r"no (?:benchbook|assay) project for (.+?)(?: \(|$)")
 SPOOL_KEY = re.compile(r"/spool/([0-9a-f]{64})\b")
@@ -47,6 +50,17 @@ class Check:
     ok: bool
     detail: str
     fix: str | None = None
+
+
+@dataclass(frozen=True)
+class HookHealth:
+    spool: Path
+    log: Path
+    pending: int
+    dead: int
+    stuck: int
+    failures: int
+    last_failure: str | None
 
 
 def claude_dir() -> Path:
@@ -231,7 +245,7 @@ def _parse_ts(line: str) -> float | None:
 def _counts(msg: str, root: Path) -> bool:
     """A "no benchbook project" line from another repository is expected when the plugin is installed for the user and
     Claude Code runs elsewhere; only one from this repository means a report was lost here."""
-    if not any(m in msg for m in FAILURE_MARKERS):
+    if INFORMATIONAL_HOOK_LOG.match(msg) or not any(m in msg for m in FAILURE_MARKERS):
         return False
     if m := NO_PROJECT.search(msg):
         where = Path(m.group(1))
@@ -246,7 +260,7 @@ def _spool_key(msg: str) -> str | None:
     return m.group(1) if m else None
 
 
-def check_hook_log(root: Path) -> Check:
+def hook_health(root: Path) -> HookHealth:
     """For this shell's database: failure lines in hook.log since the later of 24 hours ago and the last clean
     replay of its spool, and the reports still waiting in that spool (dead/, or queued and not drained). hook.log
     is shared by every database: a line about another database's spool does not count, and a replay of another
@@ -279,19 +293,25 @@ def check_hook_log(root: Path) -> Check:
     dead = spool / "dead"
     n_dead = len(list(dead.glob("*.json"))) if dead.is_dir() else 0
     now = time.time()
-    n_stuck = 0
+    n_pending = n_stuck = 0
     for p in spool.glob("*.json") if spool.is_dir() else []:
         try:
             n_stuck += now - p.stat().st_mtime > STUCK_SECONDS
         except OSError:
             continue
-    if not failures and not n_dead and not n_stuck:
-        return Check("hook failures", True, f"none in the last 24h; nothing waiting in {spool} ({log})")
-    detail = (f"{len(failures)} failure line(s) in the last 24h, {n_dead} report(s) in {dead}, "
-              f"{n_stuck} report(s) queued for over {STUCK_SECONDS // 60} min in {spool}")
-    if failures:
-        detail += f"\n      last: {failures[-1][1][:200]}"
-    return Check("hook failures", False, detail, f"read {log}, fix the cause, then run: benchbook hook replay")
+        n_pending += 1
+    return HookHealth(spool, log, n_pending, n_dead, n_stuck, len(failures), failures[-1][1] if failures else None)
+
+
+def check_hook_log(root: Path) -> Check:
+    h = hook_health(root)
+    if not h.failures and not h.dead and not h.stuck:
+        return Check("hook failures", True, f"none in the last 24h; nothing overdue in {h.spool} ({h.log})")
+    detail = (f"{h.failures} failure line(s) in the last 24h, {h.dead} report(s) in {h.spool / 'dead'}, "
+              f"{h.stuck} report(s) queued for over {STUCK_SECONDS // 60} min in {h.spool}")
+    if h.last_failure:
+        detail += f"\n      last: {h.last_failure[:200]}"
+    return Check("hook failures", False, detail, f"read {h.log}, fix the cause, then run: benchbook hook replay")
 
 
 def _observed_since(path: Path, since: float) -> list[dict[str, Any]]:
