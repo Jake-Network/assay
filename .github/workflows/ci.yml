@@ -1,12 +1,38 @@
 name: ci
-on: [push, pull_request]
+# One run per change: pull requests, and pushes to main (a push to a PR branch is covered by its pull_request run).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  # a newer push to the same branch or pull request cancels the run it replaces
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the package version is derived from git history and tags
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-groups
+      - run: uv run ruff check src tests bench examples
+      - run: uv run mypy src/benchbook
+
   test:
+    # The oldest and newest supported Python on Linux, and the newest on macOS (Apple silicon). release.yml smoke-tests
+    # the built wheel on both OSes again before publishing.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel]
-        python: ["3.11", "3.12", "3.13"]
+        include:
+          - {os: ubuntu-latest, python: "3.11"}
+          - {os: ubuntu-latest, python: "3.13"}
+          - {os: macos-latest, python: "3.13"}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -16,8 +42,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-groups
-      - run: uv run ruff check src tests bench examples
-      - run: uv run mypy src/benchbook
       - run: uv run pytest -q
       # first run from an empty directory; its data dir contains a space, like macOS's default
       - run: bash scripts/qa_first_experiment.sh
