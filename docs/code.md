@@ -380,6 +380,24 @@ A commit that adds its own config.toml still counts as a `[checks]` change, as b
 the implementer are often the same person under two names, so a pin protects against an agent's mistake, not
 against its user; the team mode (a committed config, CI as the verifier) is the stronger one.
 
+## The verification worktree
+
+`check verify` runs the checks in a fresh detached worktree of the commit, so files git ignores (`.env`,
+`.venv`, `node_modules`) are not there. `[verify]` says what the worktree needs first:
+
+```toml
+[verify]
+copy = [".env"]                 # copied from the repository root to the same place in the worktree
+prepare = "uv sync --frozen"    # run in the worktree before the first check
+prepare_timeout = 600           # seconds (default 600)
+```
+
+`copy` takes regular files inside the repository that the commit does not track; a path outside it, a symlink, a
+missing file or a tracked path fails the preparation. The attempt records the names of the copied files and whether
+`prepare` ran (`metrics.prepared`), never their content. When the preparation fails, no check runs: the attempt is
+an environment failure (`run_status = "error"`, `metrics.environment = true`), with no link to the completion and
+no discarded approach. `[verify]` comes from where the checks come from: the merge-base's config.toml, or the pin.
+
 ## The numbers
 
 The false completion rate and the number of completions that touched guarded paths, in one `benchbook sql`

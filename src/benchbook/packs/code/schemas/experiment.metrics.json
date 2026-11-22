@@ -50,6 +50,27 @@
     },
     "checks_changed": {
       "type": "boolean"
+    },
+    "prepared": {
+      "description": "What the verification worktree got before the checks ([verify]): the names of the copied files and whether prepare ran. Never their content.",
+      "type": "object",
+      "properties": {
+        "copied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100
+        },
+        "prepare": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "description": "The run says nothing about the commit: the worktree could not be prepared, or every failing check failed the same way at the merge-base. run_status is error.",
+      "type": "boolean"
     }
   },
   "additionalProperties": {

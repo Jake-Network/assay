@@ -41,7 +41,7 @@ from uuid import UUID, uuid4
 
 from . import config as localcfg
 from . import failures, signature
-from .config import CheckSpec, parse_checks, parse_guard
+from .config import CheckSpec, VerifyPrep, parse_checks, parse_guard, parse_verify
 from .errors import BenchbookError, InvalidTransition
 from .globs import matching
 from .runner import Interrupted, _trap_signals, run_command
@@ -96,6 +96,19 @@ class Base:
     source: str = "merge-base"  # merge-base: committed config.toml; pin: checks pinned in the ledger (T01)
     pin_id: UUID | None = None
     checks_sha256: str | None = None  # the pin's hash of its checks, guard paths and verify table
+    prep: VerifyPrep = field(default_factory=VerifyPrep)  # [verify]: what the worktree needs first (T02)
+
+
+@dataclass
+class Prepared:
+    """What run_checks did to the worktree before the checks (T02): the names of the copied files, whether prepare
+    ran, and why the preparation failed (an environment failure: no check runs)."""
+    copied: list[str] = field(default_factory=list)
+    prepare: bool = False
+    error: str | None = None
+
+    def metrics(self) -> dict[str, Any] | None:
+        return {"copied": list(self.copied), "prepare": self.prepare} if self.copied or self.prepare else None
 
 
 @dataclass
@@ -130,6 +143,10 @@ class Verification:
     # Every check declared at the merge-base, whether this run ran it or not (--checks runs some). Stored as
     # metrics.checks_declared: a run that left one out is partial, and the all_pass rule never counts it as evidence.
     declared: list[str] = field(default_factory=list)
+    # Why the run says nothing about the commit (T02, T03): the worktree could not be prepared, or every failing
+    # check fails the same way at the merge-base. Such a run is an error: no link, no discarded approach.
+    environment: str | None = None
+    prepared: Prepared | None = None
 
     @property
     def passed(self) -> int:
@@ -157,7 +174,7 @@ class Verification:
     @property
     def run_status(self) -> str:
         """Whether the checks ran to the end. A failing check is a result, not a failed run."""
-        return "ok" if self.interrupted is None else "error"
+        return "ok" if self.interrupted is None and self.environment is None else "error"
 
     def config(self) -> dict[str, Any]:
         c: dict[str, Any] = {"piece": self.piece, "checks": [r.name for r in self.results]}
@@ -182,6 +199,8 @@ class Verification:
             "guard_touched": self.integrity.guard_touched,
             "guard_files": self.integrity.guard_files[:MAX_GUARD_FILES],
             "checks_changed": self.integrity.checks_changed,
+            **({"prepared": prep} if self.prepared is not None and (prep := self.prepared.metrics()) else {}),
+            **({"environment": True} if self.environment is not None else {}),
         }
 
     def notes(self) -> str:
@@ -198,6 +217,8 @@ class Verification:
         if self.interrupted:
             done = sum(r.status != "not_run" for r in self.results)
             n += f"; interrupted ({self.interrupted}) after {done} of {self.total} checks"
+        if self.environment:
+            n += f"; environment: {self.environment}; not counted against the piece"
         return n
 
 
@@ -352,10 +373,11 @@ def _pins(lg: Ledger, scope: str, *, only: UUID | None = None) -> list[Pin]:
         try:
             specs = parse_checks(p.get("checks"), f"pin {r['id']}")
             guard, _ = parse_guard({"paths": p.get("guard_paths") or []}, f"pin {r['id']}")
+            raw = p.get("verify")
+            verify: dict[str, Any] = raw if isinstance(raw, dict) else {}
+            parse_verify(verify, f"pin {r['id']}")
         except BenchbookError:
             continue
-        raw = p.get("verify")
-        verify: dict[str, Any] = raw if isinstance(raw, dict) else {}
         out.append(Pin(r["id"], str(r["author"]), scope, specs, guard, verify, str(p.get("sha256") or ""),
                        str(p.get("source") or "cli"), r["created_at"]))
     return out
@@ -380,7 +402,7 @@ def pin_changed(lg: Ledger, pin: Pin, piece: str, repo: Path, exclude: set[str] 
     taken from it, or the piece's first attempt ran under another pin (or none) than the one in effect now."""
     if pin.source == "config":
         cfg = localcfg.load(repo)
-        if pin_hash(cfg.checks, cfg.guard_paths, pin.verify) != pin.sha256:
+        if pin_hash(cfg.checks, cfg.guard_paths, cfg.verify.table()) != pin.sha256:
             return True
     first = lg.sql_internal(_FIRST_ATTEMPT, (lg.project_id, piece))[0]["t"]
     if first is None or pin.created_at is None or pin.created_at <= first:
@@ -415,7 +437,7 @@ def read_base(repo: Path, ref: str, commit: str, pin: Callable[[], Pin | None] |
         from .ids import short
 
         return Base(ref, sha, mb, f"pin {short('claim', p.id)}", p.checks, p.guard_paths or list(DEFAULT_GUARD_PATHS),
-                    bool(p.guard_paths), "pin", p.id, p.sha256)
+                    bool(p.guard_paths), "pin", p.id, p.sha256, parse_verify(p.verify, f"pin {short('claim', p.id)}"))
     if found is None:
         raise BenchbookError(f"no .benchbook/config.toml at the merge-base {mb[:12]} of {ref} and {commit[:12]}, and "
                              f"no checks pinned in the ledger: commit the [checks] declarations to {ref}, or pin them "
@@ -426,7 +448,8 @@ def read_base(repo: Path, ref: str, commit: str, pin: Callable[[], Pin | None] |
     if not checks:
         raise BenchbookError(f"{where} declares no [checks.<name>]: commit the declarations to {ref} first")
     paths, _ = parse_guard(data.get("guard"), where)
-    return Base(ref, sha, mb, rel, checks, paths or list(DEFAULT_GUARD_PATHS), bool(paths))
+    return Base(ref, sha, mb, rel, checks, paths or list(DEFAULT_GUARD_PATHS), bool(paths),
+                prep=parse_verify(data.get("verify"), where))
 
 
 def integrity(repo: Path, base: Base, commit: str, pin_moved: bool = False) -> Integrity:
@@ -444,8 +467,9 @@ def integrity(repo: Path, base: Base, commit: str, pin_moved: bool = False) -> I
 
 # ---------------------------------------------------------------------------------------------------- running
 
-def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec],
-               env: dict[str, str] | None = None) -> tuple[list[CheckResult], BaseException | None]:
+def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec], env: dict[str, str] | None = None,
+               prep: VerifyPrep | None = None,
+               prepared: Prepared | None = None) -> tuple[list[CheckResult], BaseException | None]:
     """Step 3. Returns the results and, when the run was interrupted (Ctrl-C, SIGTERM, SIGHUP), the interruption
     for the caller to re-raise after recording. The worktree and its git metadata are gone when this returns. env:
     the checks' environment (None: this process's)."""
@@ -458,8 +482,12 @@ def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec],
     try:
         try:
             _git(repo, "worktree", "add", "--detach", "--quiet", str(wt), commit)
-            for i, spec in enumerate(specs):
-                results[i] = _run_one(spec, wt, out, env)
+            done = prepared if prepared is not None else Prepared()
+            if prep is not None and (prep.copy or prep.prepare):
+                _prepare(repo, commit, wt, out, prep, env, done)
+            if done.error is None:
+                for i, spec in enumerate(specs):
+                    results[i] = _run_one(spec, wt, out, env)
         except (Interrupted, KeyboardInterrupt) as e:
             interrupted = e
         finally:
@@ -470,6 +498,38 @@ def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec],
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     return results, interrupted
+
+
+def _prepare(repo: Path, commit: str, wt: Path, out: Path, prep: VerifyPrep, env: dict[str, str] | None,
+             done: Prepared) -> None:
+    """T02: copy prep.copy from the repository root into the worktree (regular files inside the repository that the
+    commit does not track), then run prep.prepare there. A failure is written to done.error, and no check runs."""
+    root = repo.resolve()
+    for rel in prep.copy:
+        src = repo / rel
+        try:
+            inside = src.resolve().is_relative_to(root)
+        except OSError:
+            inside = False
+        if not inside:
+            done.error = f"[verify] copy: {rel} is outside the repository"
+            return
+        if _git(repo, "ls-tree", "--name-only", commit, "--", rel, check=False).stdout.strip():
+            done.error = f"[verify] copy: {rel} is tracked at {commit[:12]}; only untracked files are copied"
+            return
+        if src.is_symlink() or not src.is_file():
+            done.error = f"[verify] copy: {rel} is not a regular file in {repo}"
+            return
+        dst = wt / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        done.copied.append(rel)
+    if prep.prepare is not None:
+        done.prepare = True
+        r = run_command(prep.prepare, wt, out / "prepare.log", prep.prepare_timeout, metric=None, env=env, tee=False)
+        if r.run_status != "ok":
+            what = "timed out" if r.run_status == "timeout" else f"exit {r.exit_code}"
+            done.error = f"[verify] prepare ({prep.prepare}) {what}"
 
 
 @contextmanager
@@ -597,9 +657,10 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         moved = pin is not None and pin_changed(lg, pin, piece, repo, impl)
     integ = integrity(repo, b, sha, moved)
     t0 = time.monotonic()
-    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env())
+    prepared = Prepared()
+    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env(), b.prep, prepared)
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
-                     declared=list(b.checks))
+                     declared=list(b.checks), environment=prepared.error, prepared=prepared)
     found = None if given is None else given[0]
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match

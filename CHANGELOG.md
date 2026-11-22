@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- `[verify] copy` and `prepare` (config.toml or the pin) prepare check verify's clean worktree: gitignored files are
+  copied from the repository root (names recorded, never content) and a command runs first. A failed preparation
+  runs no check and is recorded as an environment failure (`run_status` error, `metrics.environment`), with no link
+  and no discarded approach.
 - Checks pinned in the ledger: `benchbook check pin [PIECE] [--check NAME=CMD]` and `piece start --check` record the
   checks `check verify` runs when the merge-base has no committed config.toml (a `note` claim tagged `checks-pin`).
   Pins by the piece's implementer are ignored; a pin that changed under the work sets `checks_changed`. The attempt

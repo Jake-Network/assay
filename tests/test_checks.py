@@ -632,3 +632,72 @@ def test_cli_init_pins_and_verify_needs_no_commit(tmp_path: Path, vtmp: Path, cl
                 "--check", "value=grep -qx ok value.txt")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["pin"].startswith("c:")
+
+
+# ------------------------------------------------------------------------------------------- verify worktree (T02)
+
+ENV_CONFIG = """project = "ignored"
+
+[checks.secret]
+cmd = "grep -qx s3cret .env"
+
+[guard]
+base = "main"
+"""
+
+
+def make_env_repo(root: Path, verify: str) -> Path:
+    r = make_repo(root, ENV_CONFIG + verify)
+    (r / ".gitignore").write_text(".env\nprepared.txt\n")
+    git(r, "add", ".gitignore")
+    git(r, "commit", "-q", "-m", "ignore .env")
+    (r / ".env").write_text("s3cret\n")
+    return r
+
+
+def test_verify_copies_declared_files_into_the_worktree(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_env_repo(tmp_path / "repo", '\n[verify]\ncopy = [".env"]\nprepare = "touch prepared.txt"\n')
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.run_status == "ok"
+    m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
+    assert m["prepared"] == {"copied": [".env"], "prepare": True} and "environment" not in m
+    assert "s3cret" not in json.dumps(row(lead_lg, "experiments", rec.experiment_id), default=str)
+    assert_clean(repo, vtmp)
+
+
+def test_without_copy_the_check_fails(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, _ = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert [r.status for r in v.results] == ["fail"]
+
+
+@pytest.mark.parametrize(("verify", "error"), [
+    ('copy = ["missing.env"]', "missing.env is not a regular file"),
+    ('copy = ["impl.txt"]', "impl.txt is tracked"),
+    ('prepare = "exit 3"', "exit 3"),
+])
+def test_a_failed_preparation_is_an_environment_failure(tmp_path: Path, vtmp: Path, lead_lg: Ledger, verify: str,
+                                                        error: str) -> None:
+    repo = make_env_repo(tmp_path / "repo", f"\n[verify]\n{verify}\n")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is not None and error in v.environment
+    assert v.run_status == "error" and [r.status for r in v.results] == ["not_run"]
+    assert rec.relation is None and rec.discarded_id is None and not links_to(lead_lg, rec.claim_id)
+    assert row(lead_lg, "experiments", rec.experiment_id)["metrics"]["environment"] is True
+    assert_clean(repo, vtmp)
+
+
+@pytest.mark.parametrize(("table", "message"), [
+    ({"copy": ["/etc/passwd"]}, "inside the repository"),
+    ({"copy": ["../x"]}, "inside the repository"),
+    ({"copy": ".env"}, "list of paths"),
+    ({"prepare": ""}, "non-empty"),
+    ({"prepare_timeout": 0}, "prepare_timeout"),
+    ({"cpy": [".env"]}, "unknown key cpy"),
+])
+def test_bad_verify_tables(table: dict[str, Any], message: str) -> None:
+    with pytest.raises(BenchbookError, match=message):
+        config.parse_verify(table)
