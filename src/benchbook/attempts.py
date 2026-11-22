@@ -27,7 +27,8 @@ from . import config as localcfg
 from .checks import Base, CheckResult, Integrity, Verification
 from .errors import BenchbookError
 
-GUARD_KEYS = ("guard_touched", "guard_files", "checks_changed")
+GUARD_KEYS = ("guard_touched", "guard_files", "checks_changed", "guard_weakened", "guard_weakened_files",
+              "guard_added_files", "tests_before", "tests_after")
 STATUSES = {"ok": "ok", "fail": "fail", "timeout": "timeout", "interrupted": "not_run"}
 SOURCES = {"check-run": "check run", "bash-result": "Bash hook"}
 CONNECT_TIMEOUT = 5  # seconds; the gate fails open after that
@@ -47,7 +48,7 @@ class LocalRun(Verification):
         m = super().metrics()
         if self.integrity_note is not None:
             for k in GUARD_KEYS:
-                m.pop(k)
+                m.pop(k, None)
         m["via"] = self.via
         m["worktree_dirty"] = self.dirty
         return m

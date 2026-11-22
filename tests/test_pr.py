@@ -155,7 +155,7 @@ def test_summary_distinguishes_the_states(tmp_path: Path, db_url: str, code_proj
     assert states["beta"].state == pr.DISAGREES and states["beta"].failed == 1
     assert states["gamma"].state == pr.CLAIMED and states["gamma"].guard_files == ["tests/test_a.py"]
     assert states["delta"].state == pr.UNREPORTED and states["delta"].passed == 1
-    assert pr._tests(states["alpha"]) == "no" and pr._tests(states["gamma"]).startswith("yes: 1 guarded file")
+    assert pr._tests(states["alpha"]) == "no" and pr._tests(states["gamma"]).startswith("weakened: 1 file")
 
     # the failed re-run of beta left one discarded approach by itself; alpha has none yet
     assert (states["alpha"].discarded, states["beta"].discarded) == (0, 1)

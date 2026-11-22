@@ -71,6 +71,33 @@
     "environment": {
       "description": "The run says nothing about the commit: the worktree could not be prepared, or every failing check failed the same way at the merge-base. run_status is error.",
       "type": "boolean"
+    },
+    "guard_weakened": {
+      "description": "A guarded file was weakened (lines deleted or changed, a skip marker added, a conftest.py changed) or fewer JUnit tests ran than at the merge-base. Tests only added are not.",
+      "type": "boolean"
+    },
+    "guard_weakened_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100
+    },
+    "guard_added_files": {
+      "description": "Guarded files that were added or only appended to.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100
+    },
+    "tests_before": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tests_after": {
+      "type": "integer",
+      "minimum": 0
     }
   },
   "additionalProperties": {

@@ -19,7 +19,7 @@ from tests.conftest import make_project
 PY = shlex.quote(sys.executable)
 SCRIPT = str(Path(sys.executable).parent / "benchbook")
 METRIC_KEYS = {"checks_passed", "checks_total", "checks", "checks_declared", "failure_signature", "guard_touched",
-               "guard_files", "checks_changed", "via", "worktree_dirty"}
+               "guard_files", "checks_changed", "guard_weakened", "via", "worktree_dirty"}
 CHECK_OK = r"""import sys
 sys.stdout.write("out line 1\n"); sys.stdout.flush()
 sys.stderr.write("err line 2\n"); sys.stderr.flush()
@@ -144,7 +144,8 @@ def test_output_is_the_commands_byte_for_byte_and_the_run_is_recorded(repo: Path
     assert exp["metrics"] == {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"},
                               "checks_declared": ["unit", "fails", "slow", "quick"], "failure_signature": None,
                               "guard_touched": False, "guard_files": [],
-                              "checks_changed": False, "via": "check-run", "worktree_dirty": False}
+                              "checks_changed": False, "guard_weakened": False, "via": "check-run",
+                              "worktree_dirty": False}
     assert exp["notes"].startswith("check run: unit in ")
     assert not spool_entries(tmp_path / "state")  # drained
 

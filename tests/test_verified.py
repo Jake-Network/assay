@@ -17,8 +17,7 @@ import pytest
 from benchbook import Ledger, checks
 from benchbook.errors import BenchbookError, InvalidTransition
 from benchbook.packs import VerifyPolicy, load_pack, read_verify
-from tests.conftest import make_project
-from tests.test_checks import make_repo, piece
+from tests.conftest import make_project, make_repo, piece
 from tests.writer import as_writer, issue
 
 SHA = "a" * 40
@@ -201,7 +200,7 @@ def test_guard_or_checks_changes_block_rerun_but_not_a_person(db_url: str, code_
     lead = open_as(db_url, code_project, "lead")
     v1, v2 = open_as(db_url, code_project, "v1", "harness"), open_as(db_url, code_project, "v2", "harness")
     for sha, flags, match in (("d" * 40, {"guard_touched": True, "guard_files": ["tests/test_x.py"]},
-                               r"changed guarded files \(tests/test_x.py\)"),
+                               r"changed guarded files in a way that can weaken them \(tests/test_x.py\)"),
                               ("e" * 40, {"checks_changed": True}, r"changed \[checks\]")):
         claim = completion(open_as(db_url, code_project, "impl"), sha)
         flagged = attempt(v1, {**PASS, **flags}, sha)
