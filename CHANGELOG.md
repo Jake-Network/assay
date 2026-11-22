@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- Claude Code's Agent/Task result hook queues an independent check run from a completion report. The next
+  supported hook in that session delivers its result once, with the completion ID and any review requirement.
 - Boundary hooks in the `benchbook` plugin: `benchbook hook session-start` (SessionStart) gives the branch's brief
   (1,500 tokens, 6,000 characters) as additionalContext and writes it to `.benchbook/STATE.md`, which it gives instead
   when the ledger does not answer within 5 seconds; `pre-compact` (PreCompact) gives a 1,000-character paragraph of

@@ -15,7 +15,8 @@ import pytest
 from benchbook import boundary_hooks, harnesses
 from benchbook.entry import hook_args
 from benchbook.ids import short
-from tests.conftest import make_project
+from benchbook.verify_requests import reported_ref
+from tests.conftest import CONFIG, make_project, make_repo, piece
 from tests.test_code_brief import _finding, agent, attempt, git
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -213,6 +214,7 @@ def test_notes_are_given_once(env: Path, capsys: pytest.CaptureFixture[str], mon
 
 @pytest.mark.parametrize(("event", "name"), [("session-start", "session_start_startup.json"),
                                              ("pre-compact", "pre_compact.json"),
+                                             ("agent-result", "post_tool_use_agent_async.json"),
                                              ("notes", "user_prompt_submit.json")])
 def test_outside_a_project_the_hook_leaves_within_50ms(event: str, name: str, tmp_path: Path) -> None:
     """Timed like the Bash hook's acceptance test: from the console script's entry point to its exit, in a fresh
@@ -249,6 +251,9 @@ def test_the_plugin_runs_the_boundary_hooks() -> None:
             [entry] = h[name]
             assert "matcher" not in entry and [x["command"] for x in entry["hooks"]] == [prefix + event], f
             assert hook_args(["hook", event]) == (event, None)
+        [agent_hook] = [entry for entry in h["PostToolUse"] if entry["matcher"] == "Agent|Task"]
+        assert [x["command"] for x in agent_hook["hooks"]] == [prefix + "agent-result"]
+        assert hook_args(["hook", "agent-result"]) == ("agent-result", None)
 
 
 def test_context_answer_per_harness() -> None:
@@ -260,3 +265,63 @@ def test_context_answer_per_harness() -> None:
     assert harnesses.context_answer("claude-code", "session-start", "") == ""
     assert harnesses.context_answer("cursor", "session-start", "brief") == "{}\n"  # T16
     assert harnesses.context_answer("codex", "session-start", "brief") == ""
+
+
+def test_report_commit_priority() -> None:
+    sha = "a" * 40
+    assert reported_ref(f"commit: {sha}\nDONE abcdef1") == "abcdef1"
+    assert reported_ref(f"Investigated {sha}\n커밋: abcdef2") == "abcdef2"
+    assert reported_ref(f"Finished {sha}, previously {sha}.") == sha
+    assert reported_ref(f"Compared {sha} to {'b' * 40}.") is None
+
+
+@pytest.mark.parametrize(("case", "expected"), [
+    ("pass", "re-run passed (2 checks"),
+    ("weak", "tests weakened"),
+    ("environment", "environment failure"),
+])
+def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: str, env: Path, db_url: str,
+                                                capsys: pytest.CaptureFixture[str],
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchbook import check_hooks, hooks
+
+    cfg = CONFIG.replace('project = "ignored"', f'project = "{code}"')
+    if case == "environment":
+        cfg += '\n[verify]\nprepare = "false"\n'
+    repo = make_repo(env / "repo", cfg)
+    changes = {"impl.txt": "fixed\n"}
+    if case == "weak":
+        changes["tests/test_extra.py"] = "def test_extra():\n    assert 1 == 1\n"
+    sha = piece(repo, "media-upload", changes)
+    data = fixture("post_tool_use_agent.json", repo)
+    data["tool_response"]["content"][0]["text"] = f"private report text\npiece: media-upload\nDONE {sha[:9]}"
+    assert not run("agent-result", fixture("post_tool_use_agent_async.json", repo), capsys, monkeypatch)
+    monkeypatch.setattr(hooks, "start_processor", lambda spool: None)
+    for _ in range(2):
+        out = run("agent-result", data, capsys, monkeypatch)
+        assert "re-running the checks of media-upload" in context(out, "PostToolUse")
+    spool = hooks._spool_dir()
+    assert len(list(spool.glob("*.json"))) == 2
+    assert all("private report text" not in path.read_text() for path in spool.glob("*.json"))
+    assert hooks.replay_now(spool).recorded == 2
+    lg = agent(db_url, code, "lead")
+    [attempt] = lg.sql_internal("SELECT id FROM benchbook.experiments WHERE project_id=%s AND code_ref=%s",
+                                (code, sha))
+    [claim] = lg.sql_internal("SELECT id FROM benchbook.claims WHERE project_id=%s AND kind='completion'",
+                              (code,))
+    assert attempt["id"]
+    completion = lg.completion_attempts(claim["id"])
+    assert completion is not None
+    assert (completion["status"] == "verified") == (case == "pass")
+    bash = {"session_id": data["session_id"], "cwd": str(repo), "tool_name": "Bash",
+            "tool_input": {"command": "true"}, "hook_event_name": "PostToolUse"}
+    for delivery in range(2):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(bash)))
+        assert check_hooks.bash_result() == 0
+        out, err = capsys.readouterr()
+        assert not err
+        if delivery == 0:
+            result = context(out, "PostToolUse")
+            assert expected in result and short("claim", claim["id"]) in result
+        else:
+            assert not out

@@ -46,6 +46,16 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook agent-result",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "SubagentHandback",
         "hooks": [
           {

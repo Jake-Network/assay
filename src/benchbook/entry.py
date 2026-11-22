@@ -13,7 +13,7 @@ import sys
 # check_hooks.py: their exit code is the hook's answer
 CHECK_HOOK_EVENTS = ("bash-start", "bash-result", "task-completed")
 # boundary_hooks.py: they print context for the model (session start, compaction, notes at a prompt)
-BOUNDARY_HOOK_EVENTS = ("session-start", "pre-compact", "notes")
+BOUNDARY_HOOK_EVENTS = ("session-start", "pre-compact", "notes", "agent-result")
 HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS, *BOUNDARY_HOOK_EVENTS)
 LEGACY_NOTICE = ("the `assay` command is now `benchbook` (same arguments); `assay` keeps working during 0.1.x. "
                  "Update the scripts, hooks and plugin that still call it: `benchbook doctor` lists what it finds")

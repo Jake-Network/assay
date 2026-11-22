@@ -54,6 +54,12 @@ is a conftest.py at any depth, the root included). Without `[guard] paths` the t
 
 ## The lead's line
 
+With the Claude Code hook plugin, a foreground coding agent can report its commit with a final `DONE <sha>`
+line, a `commit: <sha>` or `커밋: <sha>` line, or a single unambiguous full SHA. Benchbook takes the piece
+from the commit's `Benchbook-Piece:` trailer, the report's `piece:` line, or a unique local branch pointing to
+that commit, in that order. The processor runs the same declared checks in a clean worktree and sends the
+result back to the parent session. A completion that needs human review includes that information in the note.
+
 In the integration step, for each piece an implementer reported done:
 
 ```bash

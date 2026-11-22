@@ -838,6 +838,11 @@ def process_file(path: Path) -> str:
             from .attempts import record_spooled
 
             result = record_spooled(event, data, spooled["project"], _entry_receipt(path, spooled))
+        elif event == "verify-request":
+            from .verify_requests import process as verify_request
+
+            spool = path.parent.parent if path.parent.name == "dead" else path.parent
+            result = verify_request(data, spooled["project"], _entry_receipt(path, spooled), spool)
         else:
             heading = spooled.get("out_of_scope_heading")
             result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),

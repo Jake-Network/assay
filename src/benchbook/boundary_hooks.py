@@ -40,7 +40,6 @@ NONE_LINE = "- none recorded"
 PRECOMPACT_HEAD = "Keep these ids and statuses verbatim in the summary: "
 _SESSION = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _COUNT = re.compile(r"\s*\([^()]*\)\s*$")
-EVENTS = ("session-start", "pre-compact", "notes")
 T = TypeVar("T")
 
 # Set when the ledger call was left running past TIMEOUT: the entry point then ends the process without waiting for it.
@@ -77,6 +76,15 @@ def main(event: str, harness: str | None = None) -> None:
             text = session_start(data)
         elif event == "pre-compact":
             text = pre_compact(data)
+        elif event == "agent-result":
+            from .verify_requests import enqueue
+
+            text = enqueue(data)
+        response = data.get("tool_response")
+        async_launch = isinstance(response, dict) and response.get("status") == "async_launched"
+        if event == "session-start" or (event == "agent-result" and not async_launch):
+            notes = deliver_notes(data, min(MAX_CHARS, 10_000 - len(text) - 2))
+            text = "\n\n".join(part for part in (text, notes) if part)
     except Exception:  # noqa: BLE001 - a hook must not fail the session
         import traceback
 
@@ -299,18 +307,38 @@ def notes_dir(session_id: str) -> Path | None:
     return config.state_dir() / NOTES_DIR / session_id
 
 
-def deliver_notes(data: dict[str, Any]) -> str:
+def write_note(path: Path, line: str) -> None:
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, encoding="utf-8", delete=False) as f:
+        tmp = Path(f.name)
+        try:
+            f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+
+def deliver_notes(data: dict[str, Any], limit: int = MAX_CHARS) -> str:
     """Every note waiting for this session, oldest first, up to MAX_CHARS; each is moved to delivered/ before it is
     read, so two hooks running at once never give the same note twice."""
     d = notes_dir(data.get("session_id", ""))
-    if d is None or not d.is_dir():
+    if d is None:
+        return ""
+    try:
+        with os.scandir(d) as entries:
+            files = sorted(Path(entry.path) for entry in entries
+                           if entry.name.endswith((".md", ".txt")) and entry.is_file(follow_symlinks=False))
+    except FileNotFoundError:
         return ""
     done = d / DELIVERED
     texts: list[str] = []
     size = 0
-    for f in sorted(p for p in d.iterdir() if p.is_file() and p.suffix in (".md", ".txt")):
+    for f in files:
         try:
-            if size and size + f.stat().st_size > MAX_CHARS:
+            if size and size + f.stat().st_size > limit:
                 break
             done.mkdir(exist_ok=True)
             target = done / f.name
@@ -321,5 +349,5 @@ def deliver_notes(data: dict[str, Any]) -> str:
         if text:
             texts.append(text)
             size += len(text) + 2
-    return clip("\n\n".join(texts), MAX_CHARS)
+    return clip("\n\n".join(texts), limit)
 

@@ -561,3 +561,7 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
 - **T09 STATE.md is written even when the brief is empty;** only the injection is skipped.
 - **T09 notes move before they are read,** so two hooks at once never deliver one note twice. Other harnesses get
   the empty answer from `context_answer` until T16 reads their documentation.
+- **T11 verification deduplication follows the existing spool's database and writer boundary.** Verification
+  results are cached there by project, piece and commit. A different authenticated writer has its own processor
+  and may run the same piece independently. A reported commit with multiple matching local branches requires an
+  explicit piece in the commit or report. The completion report's hash is saved as attempt trace metadata.
