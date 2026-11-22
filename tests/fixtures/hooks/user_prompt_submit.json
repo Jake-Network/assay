@@ -1,0 +1,8 @@
+{
+  "session_id": "s-user-prompt-submit",
+  "transcript_path": "/home/user/.claude/projects/p/s-user-prompt-submit.jsonl",
+  "cwd": "{CWD}",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Carry on with the next piece."
+}
