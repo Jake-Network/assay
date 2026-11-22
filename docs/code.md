@@ -447,6 +447,10 @@ above). The PR summary's "tests changed" column says "added" and "weakened" apar
 
 ## The numbers
 
+Run `uv run python -m bench.boundary.run --dry` to generate a synthetic H1–H6 report for the boundary
+benchmark. For the fan-in experiment, the circle-packing runner accepts `--workers 8,16,30`.
+[Boundary benchmark preregistration](../bench/boundary/PREREGISTRATION.md)
+
 The false completion rate and the number of completions that touched guarded paths, in one `benchbook sql`
 statement over the reader's views:
 

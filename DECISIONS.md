@@ -568,3 +568,7 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
 - **T13 status groups reports by the latest active commit of each piece.** The queue and last 24 hours of hook
   failures use the same database/writer health checks as doctor. A report overdue for processing also triggers
   the replay warning.
+- **T15 live trials take a preregistered local task and oracle manifest.** The dry run exercises the capture
+  and scoring pipeline on scripted inputs. Compaction counts only when the SDK stream contains its boundary
+  event. The report separates immediate and delayed probes. H5 estimates report tokens from observed Agent
+  and Task result payloads.

@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- Added a six-arm boundary benchmark with a model-free dry run and H1–H6 reporting. Circle-packing accepts a
+  worker-count sweep and reports delivered subagent reports and estimated report tokens.
 - Code project status shows piece outcomes, open findings and hook queue health. The brief surfaces recording
   failures, and `benchbook statusline` reads a compact summary cached by the spool processor.
 - Claude Code's Agent/Task result hook queues an independent check run from a completion report. The next
