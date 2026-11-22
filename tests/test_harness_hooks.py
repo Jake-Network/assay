@@ -306,10 +306,9 @@ def _context(out: str, harness: str, event: str) -> str:
     if harness == "cursor":
         return parsed["additional_context"]
     data = parsed["hookSpecificOutput"]
-    if harness in ("claude-code", "codex"):
-        assert data["hookEventName"] == event
-    else:
-        assert set(data) == {"additionalContext"}
+    if harness == "gemini":  # Gemini CLI names its after-tool event AfterTool
+        event = {"PostToolUse": "AfterTool"}.get(event, event)
+    assert data["hookEventName"] == event
     return data["additionalContext"]
 
 

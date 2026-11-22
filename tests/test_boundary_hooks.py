@@ -263,6 +263,9 @@ def test_context_answer_per_harness() -> None:
     assert ups["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert harnesses.context_answer("claude-code", "pre-compact", "keep c:1") == "keep c:1\n"
     assert harnesses.context_answer("claude-code", "session-start", "") == ""
+    gemini = json.loads(harnesses.context_answer("gemini", "notes", "n"))
+    assert gemini == {"hookSpecificOutput": {"hookEventName": "AfterTool", "additionalContext": "n"}}
+    assert json.loads(harnesses.context_answer("cursor", "session-start", "b")) == {"additional_context": "b"}
 
 
 def test_report_commit_priority() -> None:
@@ -271,6 +274,37 @@ def test_report_commit_priority() -> None:
     assert reported_ref(f"Investigated {sha}\n커밋: abcdef2") == "abcdef2"
     assert reported_ref(f"Finished {sha}, previously {sha}.") == sha
     assert reported_ref(f"Compared {sha} to {'b' * 40}.") is None
+
+
+def test_a_background_agent_report_is_re_run_from_subagent_stop(code: str, env: Path, db_url: str,
+                                                                capsys: pytest.CaptureFixture[str],
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code 2.1.330 launches every Agent call in the background (T08): the report comes with SubagentStop,
+    which gives the lead no context. The queued line and the result wait as notes for the next hook that does."""
+    from benchbook import hooks
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    monkeypatch.setattr(hooks, "start_processor", lambda spool: None)
+    compaction = fixture("subagent_stop_compaction.json", repo)
+    compaction["last_assistant_message"] = f"<summary>piece: media-upload\nDONE {sha}</summary>"
+    assert not run("agent-result", compaction, capsys, monkeypatch)
+    assert not list(hooks._spool_dir().glob("*.json"))
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["last_assistant_message"] = f"Implemented.\nDONE {sha[:9]}"
+    for _ in range(2):
+        assert not run("agent-result", stop, capsys, monkeypatch)
+    spool = hooks._spool_dir()
+    [request] = [json.loads(p.read_text()) for p in spool.glob("*.json")][:1]
+    assert request["event"] == "verify-request" and request["data"]["agent_type"] == "general-purpose"
+    assert hooks.replay_now(spool).recorded == 2
+    notification = fixture("user_prompt_submit_task_notification.json", repo)
+    notification["session_id"] = stop["session_id"]
+    given = context(run("notes", notification, capsys, monkeypatch), "UserPromptSubmit")
+    lines = given.splitlines()
+    assert lines[0] == f"benchbook: re-running the checks of media-upload at {sha[:7]} in the background"
+    assert "re-run passed (2 checks" in given and len(lines) == 3  # queued, blank, result: each once
+    assert not run("notes", notification, capsys, monkeypatch)
 
 
 @pytest.mark.parametrize(("case", "expected"), [

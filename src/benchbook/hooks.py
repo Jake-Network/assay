@@ -253,6 +253,11 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
             from .harnesses import report_input
 
             data = report_input(harness, data)
+        if data.get("hook_event_name") == "SubagentStop" and data.get("agent_type") == "":
+            # Claude Code runs compaction as a subagent whose SubagentStop has an empty agent_type (observed on
+            # 2.1.330, scripts/qa_boundary_hooks.sh). Its summary repeats the conversation and is nobody's report,
+            # so not even BENCHBOOK_HOOK_AGENTS=* or [report] agents = ["*"] captures it.
+            return None
         findings_only = False
         if not is_worker(_agent_type(data)):
             # The plugin hook fires for every subagent; BENCHBOOK_HOOK_AGENTS decides which ones are captured. Leave

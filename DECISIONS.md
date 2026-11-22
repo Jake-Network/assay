@@ -565,6 +565,16 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   results are cached there by project, piece and commit. A different authenticated writer has its own processor
   and may run the same piece independently. A reported commit with multiple matching local branches requires an
   explicit piece in the commit or report. The completion report's hash is saved as attempt trace metadata.
+- **T11 also re-runs from SubagentStop (T08 run on Claude Code 2.1.330).** Every Agent call came back
+  `async_launched`, the one without `run_in_background` too, so the PostToolUse result the document relies on never
+  carries a report. SubagentStop does (`agent_type`, `last_assistant_message`), and it is the event with the
+  reporter's type, which `check verify` needs for `reported_by`; the task notification's UserPromptSubmit holds the
+  same text but no type. SubagentStop gives the lead no context, so the "re-running" line is written as a note
+  (`queued-<hash>.txt`, sorted before the result's `verify-<hash>.txt`) and nothing else is delivered there. When
+  both events carry the same report (a foreground run), the spool's cached result makes it one re-run.
+- **Compaction's SubagentStop is never a report.** Claude Code runs compaction as a subagent whose SubagentStop has
+  `agent_type: ""` and the summary as `last_assistant_message`. The capture hook drops it before the wildcard
+  settings are read, since the summary repeats the conversation's findings.
 - **T13 status groups reports by the latest active commit of each piece.** The queue and last 24 hours of hook
   failures use the same database/writer health checks as doctor. A report overdue for processing also triggers
   the replay warning.

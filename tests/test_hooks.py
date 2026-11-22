@@ -429,6 +429,20 @@ def test_untyped_events_are_not_captured_unless_wildcard(repo: Path, worker: Led
     assert _notes(worker)[0]["payload"]["text"] == "Untyped report."
 
 
+def test_the_compaction_summary_is_never_captured(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code's compaction ends with a SubagentStop whose agent_type is "" (T08): the wildcard skips it too."""
+    import io
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
+    monkeypatch.setenv("BENCHBOOK_HOOK_AGENTS", "*")
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
+    event = {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "", "agent_id": "a1",
+             "last_assistant_message": "<analysis>The conversation so far.</analysis>\n<summary>...</summary>"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    hooks.main("subagent-stop")
+    assert not list(hooks._spool_dir().glob("*.json"))
+
+
 def test_hook_help_is_not_read_as_an_event() -> None:
     script = str(Path(sys.executable).parent / "benchbook")
     p = subprocess.run([script, "hook", "--help"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)

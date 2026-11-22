@@ -76,12 +76,14 @@ run 1-startup --session-id "$A" "$ASK"
 run 2-compact --resume "$A" "/compact"
 run 2-after --resume "$A" "$ASK Then, on its own line, say whether your conversation summary contains the phrase BB-MARKER-PreCompact (yes or no)."
 # 3. PostToolUse on Agent, foreground and background, and when the background one fires
-run 3-agents --allowedTools "Agent" "Use the Agent tool twice with subagent_type general-purpose. First in the foreground with the prompt: Reply with exactly: DONE 0123456789abcdef0123456789abcdef01234567. Then the same prompt with run_in_background set to true. Wait for the background agent to report, then reply OK."
+run 3-agents --allowedTools "Agent" -- "Use the Agent tool twice with subagent_type general-purpose. First in the foreground with the prompt: Reply with exactly: DONE 0123456789abcdef0123456789abcdef01234567. Then the same prompt with run_in_background set to true. Wait for the background agent to report, then reply OK."
 # 4. PostToolUse on Bash: its additionalContext
-run 4-bash --allowedTools "Bash(echo:*)" "Run the shell command: echo bb-qa. Then: $ASK"
-# 5. both plugins from repeated --plugin-dir, and the MCP tool prefix of the hyphenated plugin
-PATH="$ROOT/.venv/bin:$PATH" run 5-plugins --max-turns 1 --plugin-dir "$ROOT/integrations/claude-code" \
-    --plugin-dir "$ROOT/integrations/claude-code-mcp" "Reply OK."
+run 4-bash --allowedTools "Bash(echo:*)" -- "Run the shell command: echo bb-qa. Then: $ASK"
+# 5. both plugins from repeated --plugin-dir, and the MCP tool prefix of the hyphenated plugin. The MCP server is
+#    still connecting at init, so the session waits once with Bash and then names the tools it can call.
+PATH="$ROOT/.venv/bin:$PATH" run 5-plugins --max-turns 3 --plugin-dir "$ROOT/integrations/claude-code" \
+    --plugin-dir "$ROOT/integrations/claude-code-mcp" --allowedTools "Bash(sleep:*)" -- \
+    "Run the shell command: sleep 8. Then reply with the full name of every tool you can call whose name starts with mcp__plugin, one per line. Nothing else."
 
 python3 - "$WORK" "$(claude --version 2>/dev/null || echo unknown)" "$SAVE" "$ROOT" <<'PY'
 import json, pathlib, re, sys
@@ -125,7 +127,8 @@ order = [i.get("hook_event_name") + (f":{i.get('tool_name')}" if i.get("tool_nam
 post = of("PostCompact")
 summary = str(post[0].get("compact_summary", "")) if post else ""
 ini = init("5-plugins")
-prefixes = sorted({t.rsplit("__", 1)[0] + "__" for t in ini.get("tools", []) if t.startswith("mcp__")})
+named = ini.get("tools", []) + re.findall(r"mcp__plugin[\w-]*__\w+", answer("5-plugins"))
+prefixes = sorted({t.rsplit("__", 1)[0] + "__" for t in named if t.startswith("mcp__plugin")})
 plugins = [p.get("name") if isinstance(p, dict) else p for p in ini.get("plugins", [])]
 rows = [
     ("SessionStart sources seen", ", ".join(sorted({str(i.get("source")) for i in of("SessionStart")})) or "none"),

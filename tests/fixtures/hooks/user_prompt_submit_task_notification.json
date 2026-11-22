@@ -1,0 +1,9 @@
+{
+  "session_id": "s-user-prompt-submit-task-notification",
+  "transcript_path": "/home/user/.claude/projects/p/s-user-prompt-submit-task-notification.jsonl",
+  "cwd": "{CWD}",
+  "prompt_id": "3477a33f-2d24-4208-8825-54060c35bcdc",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "<task-notification>\n<task-id>ae785e1382aca2ff8</task-id>\n<tool-use-id>toolu_01FxzGLp9zqU42GTDHvTeRU9</tool-use-id>\n<output-file>/tmp/claude/tasks/agent.output</output-file>\n<status>completed</status>\n<summary>Agent \"Foreground marker reply\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>DONE 0123456789abcdef0123456789abcdef01234567</result>\n<usage><subagent_tokens>9931</subagent_tokens><tool_uses>0</tool_uses><duration_ms>1719</duration_ms></usage>\n</task-notification>"
+}

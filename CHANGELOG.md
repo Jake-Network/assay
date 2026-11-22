@@ -2,6 +2,18 @@
 
 ## Unreleased: code pack
 
+- The automatic re-run also takes a report from SubagentStop. Claude Code 2.1.330 returns `async_launched` for
+  every Agent call, background or not, so the foreground PostToolUse result never came and no report was re-run.
+  The "re-running" line and the result are delivered as notes at the next hook that can give context (the task
+  notification's UserPromptSubmit follows right after). Compaction's SubagentStop (empty `agent_type`) is never
+  captured or re-run, not even with `BENCHBOOK_HOOK_AGENTS=*` or `[report] agents = ["*"]`.
+- docs/claude-code.md's "Boundary hooks: what Claude Code does" has the column observed on Claude Code 2.1.330, and
+  the Claude Code boundary fixtures are the inputs a real session sent (new: `subagent_stop_background.json`,
+  `subagent_stop_compaction.json`, `user_prompt_submit_task_notification.json`). `scripts/qa_boundary_hooks.sh` no
+  longer passes its prompts as `--allowedTools` values, and it reads the MCP tool prefix after the server connects.
+- The Gemini CLI context answer names its event (`SessionStart`, `AfterTool`) as Gemini's output types declare.
+- Two test expectations brought up to date: the `file:` tag a discarded approach now carries (T06) and the second
+  `init` of the wheel smoke test (T07).
 - Codex, Cursor and Gemini CLI hooks inject the scoped startup brief and deliver notes after tools. OpenCode V2
   and Pi support the same boundary context and shell recording through project extensions.
 - Added a six-arm boundary benchmark with a model-free dry run and H1–H6 reporting. Circle-packing accepts a

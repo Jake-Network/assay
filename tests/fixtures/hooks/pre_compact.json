@@ -2,7 +2,8 @@
   "session_id": "s-pre-compact",
   "transcript_path": "/home/user/.claude/projects/p/s-pre-compact.jsonl",
   "cwd": "{CWD}",
+  "prompt_id": "34a032d1-500b-49b2-aa8d-96e394bd4b34",
   "hook_event_name": "PreCompact",
-  "trigger": "auto",
+  "trigger": "manual",
   "custom_instructions": null
 }

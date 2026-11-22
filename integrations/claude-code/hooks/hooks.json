@@ -40,6 +40,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" subagent-stop",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" agent-result",
+            "timeout": 5
           }
         ]
       }
