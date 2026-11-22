@@ -1,0 +1,8 @@
+{
+  "cwd": "{CWD}",
+  "session_id": "gemini-session-1",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "transcript_path": "/home/user/.gemini/tmp/session.json",
+  "timestamp": "2026-11-21T09:00:00.000Z"
+}

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from . import boundary_hooks, config, hooks
+from . import boundary_hooks, config, hooks, session_notes
 from .check_run import PIECE
 from .pr import TRAILER
 
@@ -53,7 +53,7 @@ def enqueue(data: dict[str, Any]) -> str:
     session = data.get("session_id", "")
     report = hooks.extract_text(data)
     ref = reported_ref(report)
-    if ref is None or boundary_hooks.notes_dir(session) is None:
+    if ref is None or session_notes.notes_dir(session) is None:
         return ""
     where = boundary_hooks.where(data)
     if where is None or where.repo is None:
@@ -99,7 +99,7 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     from .ledger import Ledger
 
     piece, commit, reporter = data["piece"], data["commit"], data["agent_type"]
-    notes = boundary_hooks.notes_dir(data["session_id"])
+    notes = session_notes.notes_dir(data["session_id"])
     if notes is None or not PIECE.fullmatch(piece) or not _SHA.fullmatch(commit):
         raise ValueError("invalid verification request")
     # Authenticate even for a cached result: a token may have been revoked since it queued this request.
@@ -123,6 +123,6 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     notes.mkdir(parents=True, exist_ok=True, mode=0o700)
     name = f"verify-{key}.txt"
     with hooks._lock(notes, blocking=True):
-        if not (notes / name).exists() and not (notes / boundary_hooks.DELIVERED / name).exists():
-            boundary_hooks.write_note(notes / name, line)
+        if not (notes / name).exists() and not (notes / session_notes.DELIVERED / name).exists():
+            session_notes.write_note(notes / name, line)
     return "recorded:verification"

@@ -1,0 +1,14 @@
+{
+  "cwd": "{CWD}",
+  "session_id": "pi-session-1",
+  "toolName": "bash",
+  "toolCallId": "call_pi_0",
+  "input": {
+    "command": "{COMMAND}"
+  },
+  "isError": false,
+  "structuredContent": {
+    "output": "2 passed in 0.31s",
+    "exit_code": 0
+  }
+}

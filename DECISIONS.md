@@ -572,3 +572,8 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   and scoring pipeline on scripted inputs. Compaction counts only when the SDK stream contains its boundary
   event. The report separates immediate and delayed probes. H5 estimates report tokens from observed Agent
   and Task result payloads.
+- **T16 uses the documented context hooks for each harness.** Codex re-injects on SessionStart after compaction.
+  Gemini CLI injects at SessionStart and AfterTool because PreCompress cannot modify the summary. OpenCode V2
+  uses the first outgoing model-context hook and later continuations for notes. Pi injects the startup brief
+  before the first agent turn and adds pending notes to tool results. The two native extensions are installed
+  per project.

@@ -263,8 +263,6 @@ def test_context_answer_per_harness() -> None:
     assert ups["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert harnesses.context_answer("claude-code", "pre-compact", "keep c:1") == "keep c:1\n"
     assert harnesses.context_answer("claude-code", "session-start", "") == ""
-    assert harnesses.context_answer("cursor", "session-start", "brief") == "{}\n"  # T16
-    assert harnesses.context_answer("codex", "session-start", "brief") == ""
 
 
 def test_report_commit_priority() -> None:

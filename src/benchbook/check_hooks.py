@@ -301,10 +301,10 @@ def bash_result(harness: str = "claude-code") -> int:
     try:
         data = _read_input()
         if harness == "claude-code" and data.get("session_id"):
-            from .boundary_hooks import deliver_notes
+            from .session_notes import deliver
 
             event = "PostToolUseFailure" if data.get("hook_event_name") == "PostToolUseFailure" else "PostToolUse"
-            if notes := deliver_notes(data):
+            if notes := deliver(data["session_id"]):
                 output = json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": notes}},
                                     ensure_ascii=False) + "\n"
         call = shell_call(harness, data)

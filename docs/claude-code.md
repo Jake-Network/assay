@@ -254,6 +254,9 @@ spent. The plugin does not gate on SubagentStop: the completion gate is the Task
 
 ## The boundary hooks
 
+The same startup brief and pending notes are available on Codex, Cursor, Gemini CLI, OpenCode V2 and Pi through
+their own hook or extension APIs. [Harness setup and event support](harnesses.md)
+
 When there are dead or overdue spool entries or recent hook failures, the code brief opens with a recording
 warning and the replay command. `benchbook statusline` reads a one-line summary of verified pieces and open
 findings from the processor's cache. Output is empty until the processor records its first entry for this project.

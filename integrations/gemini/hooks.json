@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "benchbook hook session-start --harness gemini",
+            "timeout": 7000,
+            "type": "command",
+            "name": "benchbook-session-start"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "command": "benchbook hook bash-result --harness gemini",
+            "timeout": 5000,
+            "type": "command",
+            "name": "benchbook-bash-result"
+          }
+        ],
+        "matcher": "^run_shell_command$"
+      },
+      {
+        "hooks": [
+          {
+            "command": "benchbook hook notes --harness gemini",
+            "timeout": 5000,
+            "type": "command",
+            "name": "benchbook-notes"
+          }
+        ]
+      }
+    ]
+  }
+}

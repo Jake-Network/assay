@@ -90,7 +90,7 @@ def test_wheel_ships_the_whole_package_and_nothing_local(dists: tuple[Path, Path
     # New files not added yet may ship; files that only git's local or global excludes hide (hatch reads .gitignore
     # alone) may not.
     known = {f.removeprefix("src/") for f in _git_files("--cached", "--others", "--exclude-standard", "src/benchbook")}
-    manifests = {"benchbook/manifests/codex/hooks.json", "benchbook/manifests/cursor/hooks.json"}  # force-include
+    manifests = {f"benchbook/manifests/{harness}/hooks.json" for harness in ("codex", "cursor", "gemini")}
     assert manifests <= package
     _between(package, tracked, known | {"benchbook/_version.py"} | manifests)
     # nothing beside the package: no tests, bench or examples in site-packages

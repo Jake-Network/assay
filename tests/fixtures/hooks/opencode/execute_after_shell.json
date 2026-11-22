@@ -1,0 +1,18 @@
+{
+  "cwd": "{CWD}",
+  "sessionID": "ses_opencode_1",
+  "tool": "shell",
+  "agent": "build",
+  "id": "call_open_0",
+  "status": "completed",
+  "input": {
+    "command": "{COMMAND}",
+    "workdir": "."
+  },
+  "result": {
+    "output": {
+      "output": "2 passed in 0.31s",
+      "exitCode": 0
+    }
+  }
+}

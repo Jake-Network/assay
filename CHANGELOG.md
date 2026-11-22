@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- Codex, Cursor and Gemini CLI hooks inject the scoped startup brief and deliver notes after tools. OpenCode V2
+  and Pi support the same boundary context and shell recording through project extensions.
 - Added a six-arm boundary benchmark with a model-free dry run and H1–H6 reporting. Circle-packing accepts a
   worker-count sweep and reports delivered subagent reports and estimated report tokens.
 - Code project status shows piece outcomes, open findings and hook queue health. The brief surfaces recording

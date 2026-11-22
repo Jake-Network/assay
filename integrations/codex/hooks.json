@@ -1,5 +1,5 @@
 {
-  "description": "benchbook: record declared check runs (benchbook hook bash-result) and capture worker reports (benchbook hook subagent-stop). See integrations/codex/README.md.",
+  "description": "benchbook check recording, worker reports and boundary context. See integrations/codex/README.md.",
   "hooks": {
     "PostToolUse": [
       {
@@ -11,6 +11,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "benchbook hook notes --harness codex",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -20,6 +29,17 @@
             "type": "command",
             "command": "benchbook hook subagent-stop --harness codex",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "benchbook hook session-start --harness codex",
+            "timeout": 7,
+            "type": "command"
           }
         ]
       }

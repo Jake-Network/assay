@@ -607,6 +607,9 @@ and dead reports, and recent hook failures. If recording needs attention, the br
 the `benchbook hook replay` command. The spool and the cached `benchbook statusline` refer to the selected
 database and writer.
 
+Codex, Cursor, Gemini CLI, OpenCode V2 and Pi can load the same scoped brief when a session starts and deliver
+pending notes after tool use. [Harness setup and event support](harnesses.md)
+
 In a code project `benchbook brief` (MCP `benchbook_brief`) is the code pack's
 (`benchbook.packs.code.brief:compile_brief`, `brief_compiler` in pack.toml). Narrowed to a module:
 

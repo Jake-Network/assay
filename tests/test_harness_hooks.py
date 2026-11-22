@@ -1,4 +1,4 @@
-"""Codex and Cursor manifests and the per-harness shell-result parsers (PR 2-P1d).
+"""Cross-harness hook manifests, shell results and boundary context.
 
 Fixtures (tests/fixtures/hooks/<harness>/, the sources are in docs/harnesses.md, "Fixtures"): the command and the
 output of the Claude Code fixtures (post_tool_use_bash.json, post_tool_use_failure_bash.json) in each harness's
@@ -22,13 +22,16 @@ from benchbook.harnesses import shell_call
 from tests.conftest import make_project
 from tests.test_check_hooks import FX, GATE_CONFIG, ROOT, fixture, hook_log, observed
 from tests.test_check_run import PY, SCRIPT, attempts, cli_env, make_checkout, wait_attempts
+from tests.test_code_brief import _finding
 
 # the last error line of the failing fixture: the result count after it ("1 failed, 1 passed in 0.42s") is not one
 PASS_LINE, FAIL_LINE = "2 passed in 0.31s", "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
 # harness: (passing run, failing run) of the same commands as the Claude Code fixtures
 RUNS = {"codex": ("codex/post_tool_use_bash.json", "codex/post_tool_use_bash_failure.json"),
         "cursor": ("cursor/post_tool_use_shell.json", "cursor/post_tool_use_shell_failure.json"),
-        "gemini": ("gemini/after_tool_shell.json", "gemini/after_tool_shell_failure.json")}
+        "gemini": ("gemini/after_tool_shell.json", "gemini/after_tool_shell_failure.json"),
+        "opencode": ("opencode/execute_after_shell.json", "opencode/execute_after_shell_failure.json"),
+        "pi": ("pi/tool_result_bash.json", "pi/tool_result_bash_failure.json")}
 
 
 @pytest.fixture
@@ -81,11 +84,12 @@ def test_each_harness_reads_the_command_and_the_outcome_of_its_fixture(harness: 
 
 
 def test_a_harness_reads_only_its_own_shell_tool() -> None:
-    readers = {"codex": {"codex", "claude-code"}, "cursor": {"cursor"}, "gemini": {"gemini"}}  # Bash, Shell, ...
+    readers = {harness: {harness} for harness in RUNS}
+    readers["codex"].add("claude-code")  # both report Bash
     for harness, (name, _) in RUNS.items():
         data = load(name)
         assert {h for h in harnesses.HARNESSES if shell_call(h, data) is not None} == readers[harness]
-        assert shell_call(harness, {**data, "tool_name": "Read"}) is None
+        assert shell_call(harness, {**data, "tool_name": "Read", "tool": "read", "toolName": "read"}) is None
     with pytest.raises(ValueError, match="unknown harness"):
         shell_call("vscode", {})
 
@@ -144,6 +148,19 @@ def test_the_fixture_version_doctor_names_is_the_fixtures() -> None:
     assert versions == {harnesses.FIXTURE_VERSIONS["cursor"]}
 
 
+def test_native_shell_events_require_an_integer_exit_code() -> None:
+    open_ = load(RUNS["opencode"][0])
+    pi = load(RUNS["pi"][0])
+    missing = (
+        harnesses.opencode_outcome({**open_, "result": {"output": {"exitCode": None}}}),
+        harnesses.opencode_outcome({**open_, "status": "error"}),
+        harnesses.opencode_outcome({**open_, "result": {"output": {"exitCode": True}}}),
+        harnesses.pi_outcome({**pi, "structuredContent": None, "isError": True}),
+        harnesses.pi_outcome({**pi, "structuredContent": {"exit_code": True}}),
+    )
+    assert all(o.status is None and o.exit_code is None for o in missing)
+
+
 # ------------------------------------------------------------------------------------------- the same attempt
 
 def _shape(row: dict[str, Any]) -> dict[str, Any]:
@@ -162,7 +179,7 @@ def test_the_same_attempt_comes_out_of_every_harness(harness: str, gate_repo: Pa
     claude = wait_attempts(lg, 2)
     assert len(claude) == 2
     ok_name, bad_name = RUNS[harness]
-    answer = "" if harness == "codex" else "{}\n"
+    answer = harnesses.answer(harness)
     for name, cmd in ((ok_name, unit), (bad_name, quick), (ok_name, "ls -la")):
         p = run_hook("bash-result", harness, load(name, gate_repo, cmd), env, gate_repo)
         assert (p.returncode, p.stdout, p.stderr) == (0, answer, ""), p.stderr
@@ -178,7 +195,7 @@ def test_the_same_attempt_comes_out_of_every_harness(harness: str, gate_repo: Pa
     assert failed["failure_signature"] == f"quick:exit 1:{last_line_hash(FAIL_LINE)}" and failed["via"] == "bash-hook"
     assert "SECRET-OUTPUT" not in json.dumps(rows, default=str)
     assert all(f"harness {harness}" in r["notes"] for r in theirs)
-    if harness == "cursor":  # the only one of the three that documents a duration
+    if harness == "cursor":
         assert sorted(r["duration_ms"] for r in theirs) == [1234, 4187]
     # `ls -la` is not a declared check: no observation; the four runs that are each left one, with their harness
     assert [(o["harness"], o["kind"]) for o in observed(tmp_path)] == [("claude-code", "direct")] * 2 + [
@@ -282,30 +299,89 @@ def test_doctor_names_the_harness_version_whose_input_it_cannot_read(gate_repo: 
 
 # ------------------------------------------------------------------------------------------- wiring
 
+def _context(out: str, harness: str, event: str) -> str:
+    if harness in ("opencode", "pi"):
+        return out
+    parsed = json.loads(out)
+    if harness == "cursor":
+        return parsed["additional_context"]
+    data = parsed["hookSpecificOutput"]
+    if harness in ("claude-code", "codex"):
+        assert data["hookEventName"] == event
+    else:
+        assert set(data) == {"additionalContext"}
+    return data["additionalContext"]
+
+
+@pytest.mark.parametrize("harness", sorted(RUNS))
+def test_same_boundary_brief_and_one_shot_notes(harness: str, gate_repo: Path, tmp_path: Path, lg: Ledger,
+                                              db_url: str) -> None:
+    env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
+    finding = "The media cache misses invalidation on rename."
+    _finding(lg, finding, ["piece:media"])
+    original = run_hook("session-start", None, fixture("session_start_startup.json", gate_repo), env, tmp_path)
+    assert original.returncode == 0 and original.stderr == ""
+    expected = _context(original.stdout, "claude-code", "SessionStart")
+    assert finding in expected
+    start = load(f"{harness}/session_start.json", gate_repo)
+    got = run_hook("session-start", harness, start, env, tmp_path)
+    assert got.returncode == 0 and got.stderr == ""
+    head, body = _context(got.stdout, harness, "SessionStart").split("\n", 1)
+    expected_head, expected_body = expected.split("\n", 1)
+    assert head.rsplit(" · ", 1)[0] == expected_head.rsplit(" · ", 1)[0]
+    assert body == expected_body
+
+    tool = start if harness == "opencode" else load(RUNS[harness][0], gate_repo)
+    session_id = harnesses.boundary_input(harness, start)["session_id"]
+    assert harnesses.boundary_input(harness, tool)["session_id"] == session_id
+    notes = tmp_path / "state" / "benchbook" / "notes" / session_id
+    notes.mkdir(parents=True)
+    (notes / "note.md").write_text("benchbook: rerun passed.")
+    delivered = run_hook("notes", harness, tool, env, tmp_path)
+    assert delivered.returncode == 0 and delivered.stderr == ""
+    assert _context(delivered.stdout, harness, "PostToolUse").rstrip("\n") == "benchbook: rerun passed."
+    empty = run_hook("notes", harness, tool, env, tmp_path)
+    assert (empty.returncode, empty.stderr, empty.stdout) == (0, "", harnesses.answer(harness))
+    assert (notes / "delivered" / "note.md").is_file()
+
 def _commands(entries: list[dict[str, Any]]) -> list[str]:
     return [h["command"] for e in entries for h in e.get("hooks", [e])]
 
 
 def test_the_manifests_run_the_hooks_with_their_harness() -> None:
     codex = json.loads((ROOT / "integrations" / "codex" / "hooks.json").read_text())["hooks"]
-    assert set(codex) == {"PostToolUse", "SubagentStop"}  # no completion gate: none is documented
-    [post] = codex["PostToolUse"]
+    assert set(codex) == {"SessionStart", "PostToolUse", "SubagentStop"}
+    post, notes = codex["PostToolUse"]
     assert post["matcher"] == "^Bash$" and _commands([post]) == ["benchbook hook bash-result --harness codex"]
+    assert "matcher" not in notes and _commands([notes]) == ["benchbook hook notes --harness codex"]
+    assert _commands(codex["SessionStart"]) == ["benchbook hook session-start --harness codex"]
+    assert "matcher" not in codex["SessionStart"][0]
     assert "matcher" not in codex["SubagentStop"][0]
     assert _commands(codex["SubagentStop"]) == ["benchbook hook subagent-stop --harness codex"]
-    assert all(h["type"] == "command" and h["timeout"] == 5 for e in codex.values() for g in e for h in g["hooks"])
+    assert all(h["type"] == "command" and h["timeout"] >= 5 for e in codex.values() for g in e for h in g["hooks"])
     cursor = json.loads((ROOT / "integrations" / "cursor" / "hooks.json").read_text())
     assert cursor["version"] == 1
     h = cursor["hooks"]
-    assert set(h) == {"postToolUse", "postToolUseFailure", "subagentStop"}
+    assert set(h) == {"sessionStart", "postToolUse", "postToolUseFailure", "subagentStop"}
     for event in ("postToolUse", "postToolUseFailure"):
-        [e] = h[event]
+        e, notes = h[event]
         assert e == {"command": "benchbook hook bash-result --harness cursor", "matcher": "Shell", "timeout": 5}
+        assert notes == {"command": "benchbook hook notes --harness cursor", "timeout": 5}
+    assert _commands(h["sessionStart"]) == ["benchbook hook session-start --harness cursor"]
     assert h["subagentStop"] == [{"command": "benchbook hook subagent-stop --harness cursor", "timeout": 5}]
-    for cmd in _commands(codex["PostToolUse"] + codex["SubagentStop"]) + [e["command"] for v in h.values() for e in v]:
-        argv = cmd.split()
-        assert argv[0] == "benchbook" and (parsed := hook_args(argv[1:])) is not None
-        assert parsed[1] in harnesses.HARNESSES
+    gemini = json.loads((ROOT / "integrations" / "gemini" / "hooks.json").read_text())["hooks"]
+    assert set(gemini) == {"SessionStart", "AfterTool"}
+    assert _commands(gemini["SessionStart"]) == ["benchbook hook session-start --harness gemini"]
+    assert _commands(gemini["AfterTool"]) == ["benchbook hook bash-result --harness gemini",
+                                            "benchbook hook notes --harness gemini"]
+    assert gemini["AfterTool"][0]["matcher"] == "^run_shell_command$"
+    assert all(x["timeout"] >= 5000 for e in gemini.values() for g in e for x in g["hooks"])
+    for manifest in (codex, h, gemini):
+        for entries in manifest.values():
+            for cmd in _commands(entries):
+                argv = cmd.split()
+                assert argv[0] == "benchbook" and (parsed := hook_args(argv[1:])) is not None
+                assert parsed[1] in harnesses.HARNESSES
     for name in ("codex", "cursor"):
         readme = (ROOT / "integrations" / name / "README.md").read_text()
         assert "completion gate" in readme and "not wired" in readme and "docs/harnesses.md" in readme

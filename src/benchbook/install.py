@@ -2,11 +2,11 @@
 
 install, for Claude Code (the default): the CLI at this version (`uv tool install benchbook==<version>`), the
 marketplace and the hook plugin (`benchbook@benchbook`; the MCP server is the separate `benchbook-mcp` plugin,
-installed only with --mcp). Without a `claude` command the Claude Code steps are printed instead of run. For Codex
-and Cursor (--harness) it merges the packaged hooks.json into the user's manifest, keeping the hooks already there.
+installed only with --mcp). Without a `claude` command the Claude Code steps are printed instead of run. For Codex,
+Cursor and Gemini CLI, it merges the packaged hooks into the user's settings.
 
 uninstall removes the plugins (or prints how), the state directory's spool and logs, this checkout's .benchbook/ when
-git does not track it and its .git/info/exclude line, and benchbook's entries in the Codex and Cursor manifests. The
+git does not track it and its .git/info/exclude line, and benchbook's entries in installed hook manifests. The
 embedded database is removed only with --purge. Every step is listed as it is done; --dry-run lists them only."""
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from .errors import BenchbookError
 MARKETPLACE = "Jake-Network/benchbook"
 PLUGINS = ("benchbook@benchbook", "benchbook-mcp@benchbook")
 LEGACY_PLUGIN = "assay@assay"
-HARNESSES = ("claude-code", "codex", "cursor")
+HARNESSES = ("claude-code", "codex", "cursor", "gemini")
 
 
 @dataclass
@@ -83,18 +83,19 @@ def manifest(harness: str) -> dict[str, Any]:
 def manifest_target(harness: str) -> Path:
     if harness == "codex":
         return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "hooks.json"
+    if harness == "gemini":
+        return Path(os.environ.get("GEMINI_CLI_HOME") or Path.home()) / ".gemini" / "settings.json"
     return Path.home() / ".cursor" / "hooks.json"
 
 
 def _ours(entry: Any) -> bool:
-    return isinstance(entry, dict) and any(isinstance(h, dict) and "benchbook hook" in str(h.get("command", ""))
-                                           for h in entry.get("hooks", []) or [entry])
+    return isinstance(entry, dict) and "benchbook hook" in str(entry.get("command", ""))
 
 
 def merge_manifest(current: dict[str, Any], ours: dict[str, Any]) -> dict[str, Any]:
     """current with benchbook's entries replaced by ours; everyone else's hooks stay as they are."""
     out = {**current, **{k: v for k, v in ours.items() if k not in ("hooks", "description")}}
-    hooks = {k: [e for e in v if not _ours(e)] for k, v in (current.get("hooks") or {}).items() if isinstance(v, list)}
+    hooks = strip_manifest(current)["hooks"]
     for event, entries in (ours.get("hooks") or {}).items():
         hooks.setdefault(event, []).extend(entries)
     out["hooks"] = hooks
@@ -102,8 +103,23 @@ def merge_manifest(current: dict[str, Any], ours: dict[str, Any]) -> dict[str, A
 
 
 def strip_manifest(current: dict[str, Any]) -> dict[str, Any]:
-    hooks = {k: [e for e in v if not _ours(e)] for k, v in (current.get("hooks") or {}).items() if isinstance(v, list)}
-    return {**current, "hooks": {k: v for k, v in hooks.items() if v}}
+    hooks = {}
+    for event, entries in (current.get("hooks") or {}).items():
+        if not isinstance(entries, list):
+            hooks[event] = entries
+            continue
+        keep = []
+        for entry in entries:
+            handlers = entry.get("hooks") if isinstance(entry, dict) else None
+            if isinstance(handlers, list):
+                other = [handler for handler in handlers if not _ours(handler)]
+                if other or not handlers:
+                    keep.append({**entry, "hooks": other})
+            elif not _ours(entry):
+                keep.append(entry)
+        if keep or not entries:
+            hooks[event] = keep
+    return {**current, "hooks": hooks}
 
 
 def _write_json(plan: Plan, path: Path, data: dict[str, Any], what: str) -> None:
@@ -144,15 +160,15 @@ def uninstall(root: Path | None, *, dry_run: bool = False, purge: bool = False) 
             plan.run(["claude", "plugin", "uninstall", plugin], optional=True)
     else:
         plan.done.append(f"run yourself: claude plugin uninstall {PLUGINS[0]} (and {PLUGINS[1]} if installed)")
-    for harness in ("codex", "cursor"):
+    for harness in HARNESSES[1:]:
         target = manifest_target(harness)
         if target.is_file():
             try:
                 current = json.loads(target.read_text(encoding="utf-8"))
             except ValueError:
                 continue
-            if any(_ours(e) for v in (current.get("hooks") or {}).values() if isinstance(v, list) for e in v):
-                _write_json(plan, target, strip_manifest(current), f"{harness} hooks without benchbook")
+            if current.get("hooks") and (other := strip_manifest(current)) != current:
+                _write_json(plan, target, other, f"{harness} hooks without benchbook")
     plan.remove(config.state_dir(), "the state directory (spool, hook log, notes)")
     if root is not None:
         local = config.local_dir(root)

@@ -84,10 +84,11 @@ only-include = [".claude-plugin", ".github", ".gitignore", "CHANGELOG.md", "DECI
 [tool.hatch.build.targets.wheel]
 packages = ["src/benchbook"]
 
-# `benchbook install --harness codex|cursor` copies these manifests from the installed package (install.py)
+# `benchbook install --harness codex|cursor|gemini` copies these manifests from the installed package.
 [tool.hatch.build.targets.wheel.force-include]
 "integrations/codex/hooks.json" = "benchbook/manifests/codex/hooks.json"
 "integrations/cursor/hooks.json" = "benchbook/manifests/cursor/hooks.json"
+"integrations/gemini/hooks.json" = "benchbook/manifests/gemini/hooks.json"
 
 [tool.ruff]
 line-length = 120
