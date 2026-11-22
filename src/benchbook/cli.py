@@ -211,14 +211,14 @@ def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False)
 
 @app.command("install")
 def install_cmd(
-    harness: Annotated[str, typer.Option(help="claude-code, codex or cursor")] = "claude-code",
+    harness: Annotated[str, typer.Option(help="claude-code, codex, cursor or gemini")] = "claude-code",
     mcp: Annotated[bool, typer.Option("--mcp", help="also the benchbook-mcp plugin (MCP server, worker agent)")]
     = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="print the steps, run nothing")] = False,
     no_cli: Annotated[bool, typer.Option("--no-cli", help="skip uv tool install")] = False,
 ) -> None:
     """Install the CLI at this version and the hooks: the benchbook plugin for Claude Code (hooks only), or the
-    Codex or Cursor manifest. Then run benchbook init in your repository."""
+    Codex, Cursor or Gemini CLI manifest. Then run benchbook init in your repository."""
     from .install import install
 
     plan = install(harness, dry_run=dry_run, mcp=mcp, cli=not no_cli)
@@ -605,7 +605,7 @@ def ui(port: Annotated[int, typer.Option()] = 7466) -> None:
     emit({"url": url}, url)
 
 
-HARNESS_HELP = "The harness running the hook: claude-code (default), codex, cursor or gemini (docs/harnesses.md)"
+HARNESS_HELP = "The harness running the hook: claude-code (default), codex, cursor, gemini, opencode or pi"
 
 
 @app.command()

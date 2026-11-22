@@ -12,7 +12,7 @@ mkdir -p .cursor && cp integrations/cursor/hooks.json .cursor/hooks.json    # th
 # or for every project: cp integrations/cursor/hooks.json ~/.cursor/hooks.json
 ```
 
-If the file already exists, add the three entries under `hooks` to it instead. Cursor reloads `hooks.json` on save;
+If the file already exists, merge the entries under `hooks`. Cursor reloads `hooks.json` on save;
 the Hooks tab in Customize and the Hooks output channel show what ran.
 
 The project needs `.benchbook/config.toml` with `[checks]` (docs/code.md) for check runs, and the hook must reach the
@@ -29,6 +29,7 @@ Windows Cursor runs hook commands through PowerShell, where that prefix does not
 
 | | Claude Code | Cursor |
 |---|---|---|
+| boundary context | `SessionStart` brief, including after compaction | `sessionStart` brief and pending notes on `postToolUse` or `postToolUseFailure` |
 | check runs | `PostToolUse` and `PostToolUseFailure` on Bash; the exit code from `Exit code N` | `postToolUse` on Shell: `tool_output` is a JSON string with `exitCode` and `stdout`, recorded like Claude Code's run. `postToolUseFailure` has no exit code: a timeout is recorded as one, an error or a denied command is observed as `unrecordable` |
 | reports | `SubagentStop` and `SubagentHandback`; a report citing the run's own records is not captured again | `subagentStop` (`summary`). No handback, and the subagent transcript is a different format, so every report is captured as a note and out-of-scope findings get no piece. `modified_files` is not recorded |
 | completion gate | `TaskCompleted` exits 2 | not wired. Cursor documents no task-completed event; `stop` and `subagentStop` can return `followup_message`, which continues the agent with a new message (up to `loop_limit`). Whether that can serve as a gate is to be confirmed, so the manifest does not use it |

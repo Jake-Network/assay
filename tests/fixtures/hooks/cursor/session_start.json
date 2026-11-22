@@ -1,0 +1,11 @@
+{
+  "workspace_roots": [
+    "{CWD}"
+  ],
+  "conversation_id": "conv-456",
+  "session_id": "conv-456",
+  "hook_event_name": "sessionStart",
+  "cursor_version": "1.7.2",
+  "composer_mode": "agent",
+  "is_background_agent": false
+}

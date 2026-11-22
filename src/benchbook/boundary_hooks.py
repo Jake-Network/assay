@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from . import config
+from . import config, session_notes
 
 BRIEF_TOKENS = 1500
 MAX_CHARS = 6000  # Claude Code replaces a longer additionalContext with a file path and a 2,000-character preview
@@ -32,13 +32,10 @@ PRECOMPACT_CHARS = 1000
 PER_SECTION = 3  # lines per section in the pre-compact paragraph
 TIMEOUT = 5.0  # seconds for the ledger to answer: connection, queries and the brief's git calls
 STATE_FILE = "STATE.md"
-NOTES_DIR = "notes"
-DELIVERED = "delivered"
 MAX_INPUT = 2_000_000
 GIT_TIMEOUT = 2.0
 NONE_LINE = "- none recorded"
 PRECOMPACT_HEAD = "Keep these ids and statuses verbatim in the summary: "
-_SESSION = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _COUNT = re.compile(r"\s*\([^()]*\)\s*$")
 T = TypeVar("T")
 
@@ -70,8 +67,16 @@ def main(event: str, harness: str | None = None) -> None:
     text = ""
     try:
         data = read_input()
+        if harness != "claude-code":
+            from .harnesses import boundary_input
+
+            data = boundary_input(harness, data)
+        if event == "agent-result":
+            response = data.get("tool_response")
+            if isinstance(response, dict) and response.get("status") == "async_launched":
+                return  # The launch has no report; leave pending notes for the next hook.
         if event == "notes":
-            text = deliver_notes(data)
+            text = session_notes.deliver(data.get("session_id"))
         elif event == "session-start":
             text = session_start(data)
         elif event == "pre-compact":
@@ -80,10 +85,8 @@ def main(event: str, harness: str | None = None) -> None:
             from .verify_requests import enqueue
 
             text = enqueue(data)
-        response = data.get("tool_response")
-        async_launch = isinstance(response, dict) and response.get("status") == "async_launched"
-        if event == "session-start" or (event == "agent-result" and not async_launch):
-            notes = deliver_notes(data, min(MAX_CHARS, 10_000 - len(text) - 2))
+        if event in ("session-start", "agent-result"):
+            notes = session_notes.deliver(data.get("session_id"), min(MAX_CHARS, 10_000 - len(text) - 2))
             text = "\n\n".join(part for part in (text, notes) if part)
     except Exception:  # noqa: BLE001 - a hook must not fail the session
         import traceback
@@ -309,59 +312,3 @@ def compact_paragraph(brief: str, limit: int = PRECOMPACT_CHARS) -> str:
             out += piece
         out += "."
     return out if out != PRECOMPACT_HEAD else ""
-
-
-# ---------------------------------------------------------------------------------------------- notes
-
-
-def notes_dir(session_id: str) -> Path | None:
-    """Where notes for this session wait (T11 writes them); None for a session id that is not a plain name."""
-    if not isinstance(session_id, str) or not _SESSION.fullmatch(session_id) or session_id in (".", ".."):
-        return None
-    return config.state_dir() / NOTES_DIR / session_id
-
-
-def write_note(path: Path, line: str) -> None:
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, encoding="utf-8", delete=False) as f:
-        tmp = Path(f.name)
-        try:
-            f.write(line + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-            tmp.replace(path)
-        finally:
-            tmp.unlink(missing_ok=True)
-
-
-def deliver_notes(data: dict[str, Any], limit: int = MAX_CHARS) -> str:
-    """Every note waiting for this session, oldest first, up to MAX_CHARS; each is moved to delivered/ before it is
-    read, so two hooks running at once never give the same note twice."""
-    d = notes_dir(data.get("session_id", ""))
-    if d is None:
-        return ""
-    try:
-        with os.scandir(d) as entries:
-            files = sorted(Path(entry.path) for entry in entries
-                           if entry.name.endswith((".md", ".txt")) and entry.is_file(follow_symlinks=False))
-    except FileNotFoundError:
-        return ""
-    done = d / DELIVERED
-    texts: list[str] = []
-    size = 0
-    for f in files:
-        try:
-            if size and size + f.stat().st_size > limit:
-                break
-            done.mkdir(exist_ok=True)
-            target = done / f.name
-            os.replace(f, target)
-            text = target.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue  # taken by another hook
-        if text:
-            texts.append(text)
-            size += len(text) + 2
-    return clip("\n\n".join(texts), limit)
-

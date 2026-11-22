@@ -104,10 +104,33 @@ def test_codex_manifest_is_merged_and_stripped(path_with_fakes: Path, tmp_path: 
     install.install("codex", cli=False)  # twice: still one benchbook entry per event
     merged = json.loads(target.read_text())["hooks"]
     assert [h["command"] for e in merged["PostToolUse"] for h in e["hooks"]] == [
-        "my-linter", "benchbook hook bash-result --harness codex"]
+        "my-linter", "benchbook hook bash-result --harness codex", "benchbook hook notes --harness codex"]
     assert len(merged["SubagentStop"]) == 1
     install.uninstall(None)
     assert json.loads(target.read_text())["hooks"] == {"PostToolUse": [{"matcher": "^Bash$", "hooks": [mine]}]}
+
+
+def test_gemini_install_preserves_other_settings_and_grouped_hooks(path_with_fakes: Path, tmp_path: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path / "gemini"))
+    target = tmp_path / "gemini" / ".gemini" / "settings.json"
+    target.parent.mkdir(parents=True)
+    mine = {"type": "command", "command": "my-linter"}
+    ours = {"type": "command", "command": "benchbook hook notes --harness gemini"}
+    group = {"matcher": "read_file", "sequential": True, "hooks": [mine]}
+    existing = {"general": {"vimMode": True}, "hooks": {"AfterTool": [group]}}
+    target.write_text(json.dumps({**existing, "hooks": {"AfterTool": [{**group, "hooks": [mine, ours]}]}}))
+
+    install.install("gemini", cli=False)
+    merged = json.loads(target.read_text())
+    install.install("gemini", cli=False)
+    assert json.loads(target.read_text()) == merged
+    assert merged["general"] == existing["general"]
+    assert merged["hooks"]["AfterTool"][0] == group
+    assert set(merged["hooks"]) == {"AfterTool", "SessionStart"}
+
+    install.uninstall(None)
+    assert json.loads(target.read_text()) == existing
 
 
 def test_uninstall_removes_plugins_state_and_the_local_folder(path_with_fakes: Path, tmp_path: Path) -> None:
