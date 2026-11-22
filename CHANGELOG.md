@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- The code brief puts verified completions first, then a new section "Reported done, not re-run" (proposed
+  completions with no evidence, `checked: none`), then discarded approaches, findings and occupied paths. Verified
+  lines say how they were checked (`checked: re-run`, `checked: person`). `brief --here` marks a verified piece whose
+  paths changed since its commit (`changed since (N commits)`, `commit not in this checkout`) and a discarded
+  approach whose test file changed since (`test changed since`, moved to the end); computed when read, never stored.
+  `Ledger.brief` and `compile_brief` take `repo` and `max_chars`; the footer points to `benchbook get <id>`.
 - Two Claude Code plugins: `benchbook` (`integrations/claude-code/`, hooks only, plugin 0.2.0) and `benchbook-mcp`
   (`integrations/claude-code-mcp/`: the MCP server, the worker subagent, the skills; the lead skill is now
   `/benchbook-mcp:benchbook-lead` and the worker's tools `mcp__plugin_benchbook-mcp_benchbook__*`). Every hook runs

@@ -1564,12 +1564,14 @@ class Ledger:
             return psycopg.connect(self.url, row_factory=dict_row, autocommit=False), True
 
     def brief(self, task_id: str | UUID | None = None, budget_tokens: int = 2000,
-              partition: str | None = None, tags: Sequence[str] | None = None) -> str:
-        """tags: only a pack brief that reads them (the code pack's, per module tag such as mod:media)."""
+              partition: str | None = None, tags: Sequence[str] | None = None, repo: Any = None,
+              max_chars: int | None = None) -> str:
+        """tags: only a pack brief that reads them (the code pack's, per module tag such as mod:media). repo and
+        max_chars: the code pack's validity marks against that checkout's HEAD, and a character limit."""
         from .brief import compile_brief
 
         tid = self._rid(task_id, "task")
-        return compile_brief(self, tid, budget_tokens, partition=partition, tags=tags)
+        return compile_brief(self, tid, budget_tokens, partition=partition, tags=tags, repo=repo, max_chars=max_chars)
 
     def export(self) -> Iterator[dict[str, Any]]:
         """The whole project as an append-only event stream, oldest first."""

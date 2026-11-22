@@ -20,6 +20,8 @@ says how many items it left out; the header and the footer always stay.
 """
 from __future__ import annotations
 
+import re
+import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,9 +37,12 @@ from ...tokens import estimate_tokens
 if TYPE_CHECKING:
     from ...ledger import Ledger
 
-FOOTER = ("\nDetails: benchbook_get(<id>). Name your approach when you run a check (benchbook check run <check> "
-          "--approach NAME, or BENCHBOOK_APPROACH): a failure seen before is named in the run's output.\n")
-LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8}  # pack.toml [brief] overrides
+FOOTER = ("\nDetails: benchbook get <id> (one record, at most 400 tokens). Name your approach when you run a check "
+          "(benchbook check run <check> --approach NAME, or BENCHBOOK_APPROACH): a failure seen before is named in the "
+          "run's output.\n")
+LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8, "reported": 8}  # pack.toml [brief] overrides
+GIT_TIMEOUT = 2.0  # seconds per git call of the validity check (T10)
+_TEST_FILE = re.compile(r"([\w./-]+?)::")
 FETCH = 200  # rows read per section; the section's total counts all of them
 FILE_TAG = "file:"
 
@@ -109,14 +114,31 @@ WHERE f.project_id = %(p)s AND f.is_intent AND 'piece' = ANY(f.tags)
        OR EXISTS (SELECT 1 FROM {_PATHS.format('f')} AS x(path) WHERE x.path LIKE ANY(%(plikes)s::text[])))
 ORDER BY f.created_at, f.id
 LIMIT %(n)s"""
+_COMPLETION_SCOPE = """(%(all)s OR c.payload ->> 'piece' IN (SELECT piece FROM pieces) OR c.tags && %(t)s::text[]
+         OR EXISTS (SELECT 1 FROM unnest(c.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[])))"""
+# Completions reported and never re-run (T10): no supporting and no refuting evidence, not decided.
+REPORTED = f"""
+WITH {PIECES}
+SELECT s.id, c.payload ->> 'piece' AS piece, c.payload ->> 'commit' AS commit, s.created_at,
+       count(*) OVER () AS total
+FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
+WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'proposed' AND s.n_support = 0
+  AND s.n_refute = 0 AND {_COMPLETION_SCOPE}
+ORDER BY s.created_at DESC, s.id
+LIMIT %(n)s"""
+# The paths a piece occupies (its newest task's spec.paths): what the validity check compares (T10).
+PIECE_PATHS = """
+SELECT DISTINCT ON (t.spec ->> 'piece') t.spec ->> 'piece' AS piece, t.spec -> 'paths' AS paths
+FROM benchbook.tasks t
+WHERE t.project_id = %s AND 'piece' = ANY(t.tags) AND t.spec ->> 'piece' = ANY(%s)
+ORDER BY t.spec ->> 'piece', t.created_at DESC, t.id"""
 VERIFIED = f"""
 WITH {PIECES}, last AS (
   SELECT DISTINCT ON (c.payload ->> 'piece') c.payload ->> 'piece' AS piece, c.payload ->> 'commit' AS commit,
-         s.id, s.decided_at
+         c.payload -> 'paths' AS paths, s.last_oracle, s.id, s.decided_at
   FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
   WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'verified'
-    AND (%(all)s OR c.payload ->> 'piece' IN (SELECT piece FROM pieces) OR c.tags && %(t)s::text[]
-         OR EXISTS (SELECT 1 FROM unnest(c.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[])))
+    AND {_COMPLETION_SCOPE}
   ORDER BY c.payload ->> 'piece', s.decided_at DESC, s.id
 )
 SELECT *, count(*) OVER () AS total FROM last ORDER BY decided_at DESC, piece LIMIT %(n)s"""
@@ -161,16 +183,60 @@ def _total(rows: list[dict[str, Any]]) -> int:
     return int(rows[0]["total"]) if rows else 0
 
 
+def _git_ok(repo: Path, *args: str) -> int | None:
+    """The exit code of a git command in repo, None when it did not finish within GIT_TIMEOUT."""
+    try:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=GIT_TIMEOUT,
+                              stdin=subprocess.DEVNULL).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def validity(repo: Path, commit: str | None, paths: Sequence[str]) -> str | None:
+    """T10: whether what was checked at commit still holds at HEAD for paths. None: unchanged (or unknown, when there
+    is nothing to compare or git did not answer in time); otherwise the mark the brief line carries."""
+    if not commit or not paths:
+        return None
+    if _git_ok(repo, "cat-file", "-e", f"{commit}^{{commit}}") != 0:
+        return "commit not in this checkout"
+    if _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *paths) != 1:
+        return None
+    try:
+        n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD", "--", *paths],
+                           capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        n = ""
+    return f"changed since ({n} commit{'' if n == '1' else 's'})" if n.isdigit() else "changed since"
+
+
+def test_files(sig: str | None) -> list[str]:
+    """The test files a signature names: the part before :: of its test ids (pytest's dotted class names become
+    module paths)."""
+    out: list[str] = []
+    for m in _TEST_FILE.finditer(sig or ""):
+        token = m.group(1).split(":")[-1]
+        if "/" not in token and not token.endswith(".py") and "." in token:
+            token = token.replace(".", "/") + ".py"
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *, now: datetime | None = None,
-                  log: bool = True, partition: str | None = None, tags: Sequence[str] | None = None) -> str:
+                  log: bool = True, partition: str | None = None, tags: Sequence[str] | None = None,
+                  repo: Path | None = None, max_chars: int | None = None) -> str:
     """partition is accepted for the compiler interface and not read: a code project's partition is the piece, and
-    the brief is scoped by tags."""
+    the brief is scoped by tags. repo: the checkout whose HEAD the validity marks compare with (T10); max_chars: a
+    character limit applied with the token budget (the boundary hooks pass 6,000)."""
+    from ...lookup import checked
+
     limit = int(budget_tokens) * 105 // 100
     if limit < 1:
         raise ValidationFailed(["budget_tokens: must be positive"])
     p = lg.project
     scope = Scope.of(tags)
     limits = {**LIMITS, **{k: int(v) for k, v in lg.pack.brief_limits.items() if k in LIMITS}}
+    labels = lg.pack.brief_labels
     params = scope.params(p.id, FETCH)
     with lg._conn() as conn:
         if now is None:
@@ -183,6 +249,27 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         findings = conn.execute(FINDINGS, params).fetchall()
         occupied = conn.execute(OCCUPIED, params).fetchall()
         verified = conn.execute(VERIFIED, params).fetchall()
+        reported = conn.execute(REPORTED, params).fetchall()
+        piece_paths: dict[str, list[str]] = {}
+        if repo is not None and verified:
+            for r in conn.execute(PIECE_PATHS, (p.id, [v["piece"] for v in verified[: limits["verified"]]])):
+                piece_paths[r["piece"]] = [str(x) for x in r["paths"] or [] if isinstance(x, str)]
+
+    marks: dict[Any, str] = {}
+    if repo is not None:  # T10: computed when read, never stored; at most one section's lines, 2 s per git call
+        for r in verified[: limits["verified"]]:
+            paths = piece_paths.get(r["piece"]) or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
+            if (m := validity(repo, r["commit"], paths)) is not None:
+                marks[r["id"]] = m
+        stale = []
+        for r in discarded[: limits["discarded"]]:
+            pl = r["payload"] or {}
+            files = test_files(pl.get("signature"))
+            if files and validity(repo, pl.get("commit"), files) not in (None, "commit not in this checkout"):
+                marks[r["id"]] = "test changed since"
+                stale.append(r)
+        if stale:  # an approach whose failing test changed since goes to the end of its section
+            discarded = [r for r in discarded if r not in stale] + stale
 
     head = [f"# benchbook brief · {p.id} · {now.astimezone(UTC):%Y-%m-%d %H:%MZ}", f"Goal: {clip(p.goal, 300)}",
             f"Scope: {clip(scope.label(), 300)}"]
@@ -190,13 +277,16 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         t_tags = f" · tags: {clip(', '.join(task['tags']), 200)}" if task["tags"] else ""
         head.append(f'Your task {short("task", task["id"])}: "{clip(task["title"], 200)}"{t_tags}')
 
+    def mark(r: dict[str, Any]) -> str:
+        return f" · {marks[r['id']]}" if r["id"] in marks else ""
+
     def discarded_line(r: dict[str, Any]) -> str:
         pl = r["payload"] or {}
         approach = pl.get("approach") or "(no approach named)"
         first = f" · first {short('experiment', pl['first_attempt'])}" if pl.get("first_attempt") else ""
         when = f", last {age(now, r['last_at'])}" if r["last_at"] else ""
         return (f"- {short('claim', r['id'])} {clip(approach, 60)} on {clip(pl.get('piece', '?'), 60)}: "
-                f"{clip(pl.get('signature', ''), 160)}{first} · ×{r['n_support']}{when}")
+                f"{clip(pl.get('signature', ''), 160)}{first} · ×{r['n_support']}{when}{mark(r)}")
 
     def finding_line(r: dict[str, Any]) -> str:
         files = [t[len(FILE_TAG):] for t in r["tags"] if t.startswith(FILE_TAG)]
@@ -215,7 +305,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
 
     def verified_line(r: dict[str, Any]) -> str:
         return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
-                f"verified {age(now, r['decided_at'])})")
+                f"verified {age(now, r['decided_at'])}, checked: {checked(r['last_oracle'], labels)}){mark(r)}")
+
+    def reported_line(r: dict[str, Any]) -> str:
+        return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
+                f"reported {age(now, r['created_at'])}, checked: {checked(None, labels)})")
 
     def section(title: str, rows: list[dict[str, Any]], line: Any, key: str, hint: str) -> Section:
         s = Section(title, [line(r) for r in rows[: limits[key]]], total=_total(rows), hint=hint)
@@ -224,14 +318,16 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         return s
 
     sections = [
+        section("Last verified commit per piece ({shown} of {total})", verified, verified_line, "verified",
+                "benchbook search --kind claim --status verified"),
+        section("Reported done, not re-run ({shown} of {total})", reported, reported_line, "reported",
+                "benchbook search --kind claim --status proposed"),
         section("Discarded approaches, do not repeat ({shown} of {total})", discarded, discarded_line, "discarded",
                 "benchbook search --tags discarded"),
         section("Open out-of-scope findings ({shown} of {total})", findings, finding_line, "findings",
                 "benchbook search --tags out-of-scope"),
         section("Occupied paths ({shown} of {total} live pieces)", occupied, occupied_line, "occupied",
                 "benchbook piece list"),
-        section("Last verified commit per piece ({shown} of {total})", verified, verified_line, "verified",
-                "benchbook search --kind claim --status verified"),
     ]
 
     def render() -> str:
@@ -240,14 +336,17 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
             lines += s.render()
         return "\n".join(lines) + "\n" + FOOTER
 
+    def over(text: str) -> bool:
+        return estimate_tokens(text) > limit or (max_chars is not None and len(text) > max_chars)
+
     out = render()
-    while estimate_tokens(out) > limit and sections:
+    while over(out) and sections:
         if sections[-1].shown:
             sections[-1].shown -= 1
         else:
             sections.pop()
         out = render()
-    if estimate_tokens(out) > limit:
+    if over(out):
         raise ValidationFailed(["budget_tokens: too small for the brief header and footer; request a larger budget"])
     if log:
         with lg._conn() as conn:

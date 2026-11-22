@@ -282,7 +282,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
 
         scope = [*changed_scope(_repo_root()), *scope]
     b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
-                       tags=scope or None)
+                       tags=scope or None, repo=_repo_root() if here else None)
     emit({"brief": b}, b.rstrip("\n"))
 
 

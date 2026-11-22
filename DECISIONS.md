@@ -543,3 +543,13 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   only when it declares no `[checks]`; off a terminal they are written without asking.
 - **T07 uninstall removes the whole state directory.** The spool there holds results not yet recorded; uninstalling
   is the decision to drop them, and the command lists what it removed.
+- **T10 "changed since" counts commits that touch the piece's paths** (`git rev-list --count <commit>..HEAD --
+  <paths>`), not every commit since: the number says how much of the piece moved, not how busy the branch was.
+- **T10 a line with nothing to compare has no mark.** A verified piece with neither task paths nor recorded
+  directories, and a git call that times out, leave the line unmarked rather than guess; `commit not in this
+  checkout` is shown only when there are paths to compare. A discarded approach whose commit is missing is not marked
+  either: its signature still says what failed.
+- **T10 "reported, not re-run" means no evidence either way.** A proposed completion with a supporting or refuting
+  link is under review, not merely reported, and stays out of the section.
+- **T10 the footer keeps the approach hint.** Only the details pointer changed (`benchbook get <id>`); naming the
+  approach is what makes a failure a discarded approach, so the brief still asks for it.
