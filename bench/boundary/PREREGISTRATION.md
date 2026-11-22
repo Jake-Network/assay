@@ -7,7 +7,7 @@ the capture and scoring pipeline with two synthetic phases and six arms.
 ## Conditions
 
 **Model**: [full model ID for lead and subagents]
-**Claude Code**: [pinned version and effective settings]
+**Claude Code**: [pinned version (2.1.277 or later) and effective settings]
 **Date**: [run date and machine image]
 **Budget**: [USD per work call, per probe and total; turns and wall clock]
 **Tasks**: [ten fixed RoadmapBench tasks and source revisions, plus task manifest and evaluator hashes]
@@ -99,9 +99,12 @@ The last command previews the separate H5 sweep. The existing `bench.run --execu
 Run the three worker widths at the registered per-run cap, compare matching completed repetitions, and include
 stop reasons and delivered report counts.
 
-Arm D requires the installed `claude-mem` launcher to stop the isolated local worker after each trial.
+Arm D requires the installed `claude-mem` launcher to stop the isolated local worker after each trial. Arm F stops
+each trial's embedded PostgreSQL and retains its data directory with the trial artifacts.
 The boundary runner reserves each call's full cap before starting it, records a valid cost receipt, and stops on
 an exhausted budget, failed command, missing receipt, oracle error, or timeout. Missing receipts retain their full
 cap. A resumed call's receipt reports the whole session's spend, so the runner counts a call's own cost and tokens
 as the difference from the session's previous receipt, against the call's cap and in the report's totals.
-Keep the partial output and preregister any rerun before paying for it.
+Comparative totals include only task repetitions that every selected arm completes. The report lists any unmatched
+completed trials, and `metrics.json` retains their individual measurements. Keep the partial output and preregister
+any rerun before paying for it.

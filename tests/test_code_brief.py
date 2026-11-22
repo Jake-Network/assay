@@ -354,6 +354,42 @@ def test_path_prefixes(paths: list[str], limit: int, want: list[str]) -> None:
     assert checks.path_prefixes(paths, limit) == want
 
 
+def test_here_scope_uses_dirty_paths_on_a_new_branch_at_the_base_tip(tmp_path: Path) -> None:
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import make_repo
+
+    repo = make_repo(tmp_path / "repo")
+    git(repo, "branch", "-m", "release/main")
+    git(repo, "update-ref", "refs/remotes/origin/release/main", "HEAD")
+    (repo / "tests" / "test_new.py").touch()
+    assert changed_scope(repo, "origin/release/main") == []
+
+    git(repo, "switch", "-qc", "main")
+    assert changed_scope(repo, "origin/release/main") == ["file:tests/", "piece:main"]
+
+
+def test_here_scope_keeps_both_sides_of_a_non_ascii_rename(tmp_path: Path) -> None:
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import make_repo
+
+    repo = make_repo(tmp_path / "repo")
+    git(repo, "config", "core.quotePath", "true")
+    (repo / "이전").mkdir()
+    (repo / "이전" / "파일.py").touch()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add previous path")
+    git(repo, "switch", "-qc", "feature")
+
+    (repo / "미디어").mkdir()
+    git(repo, "mv", "이전/파일.py", "미디어/편집.py")
+    (repo / "새파일.py").touch()
+    want = ["file:미디어/", "file:새파일.py", "file:이전/", "piece:feature"]
+    assert changed_scope(repo) == want
+
+    git(repo, "commit", "-qm", "rename path")
+    assert changed_scope(repo) == want
+
+
 def test_here_scope_finds_a_discarded_approach_without_piece_start(tmp_path: Path, db_url: str, code: str) -> None:
     from benchbook.packs.code.brief import changed_scope
     from tests.conftest import make_repo
@@ -381,6 +417,22 @@ def test_here_scope_finds_a_discarded_approach_without_piece_start(tmp_path: Pat
 
 
 # ------------------------------------------------------------------------------------ the brief's five properties (T10)
+
+def test_brief_excludes_a_verification_whose_evidence_was_invalidated(db_url: str, code: str) -> None:
+    old_commit, new_commit = "a" * 40, "b" * 40
+    old = _verify(db_url, code, "media", old_commit)
+    newest = _verify(db_url, code, "media", new_commit)
+    human = agent(db_url, code, "human", "human")
+    assert short("claim", newest) in compile_brief(human, None)
+
+    [rerun] = human.sql_internal("SELECT id FROM benchbook.experiments_valid WHERE project_id = %s AND code_ref = %s",
+                                 (code, new_commit))
+    human.decide(rerun["id"], "invalidated", "human", "re-run used an incomplete fixture")
+
+    out = compile_brief(human, None)
+    assert short("claim", newest) not in out
+    assert short("claim", old) in out
+
 
 def _commit(repo: Path, path: str, text: str) -> None:
     (repo / path).write_text(text)

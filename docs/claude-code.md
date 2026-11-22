@@ -13,8 +13,8 @@ claude plugin install benchbook-mcp@benchbook        # optional: the MCP server,
 plugin; `--mcp` adds benchbook-mcp, `--dry-run` prints the steps, `--harness codex|cursor` merges that harness's
 manifest instead). `benchbook uninstall` removes the plugins, the state directory (spool, logs, notes), this
 checkout's `.benchbook/` when `git ls-files` answers that it tracks nothing there (a failing git or a corrupt index
-keeps the folder) and its `.git/info/exclude` line; the embedded database only with `--purge`, and only when the
-data directory is a PostgreSQL cluster (`PG_VERSION`) whose server `pg_ctl status` confirms stopped.
+keeps the folder) and its `.git/info/exclude` line. `--purge` also removes the embedded database when its directory
+contains the PostgreSQL version, data and control files and `pg_ctl status` confirms that its server has stopped.
 
 Claude Code loads a plugin's MCP server whenever the plugin is enabled, and every tool definition is in every
 prompt. That is why the hooks and the MCP server are two plugins: the hook plugin costs no tokens per turn.
@@ -275,19 +275,21 @@ The `benchbook` plugin also gives the model what the ledger says at the points w
 
 The detached processor verifies the reported commit using the project's declared checks. It stores the report's
 hash and structured identifiers. Repeated reports for the same project, piece and commit share one completed
-re-run within the database and writer's spool. SessionStart, UserPromptSubmit, and subsequent Agent or Bash
-results can deliver the pending note once. The asynchronous launch payload does not queue a check: the background
-agent's SubagentStop does.
+re-run within the database and writer's spool. An environment failure is kept for that report in its session, so a
+new report or session can re-run the checks after the environment recovers. SessionStart, UserPromptSubmit, and
+subsequent Agent or Bash results can deliver the pending note once. For a background agent, SubagentStop queues
+the check after the report arrives.
 
-Each brief is also written to `.benchbook/STATE.md` (first line: when, at which HEAD, for which project and from
-which ledger), for harnesses without hooks and for people; when the benchbook folder is tracked, STATE.md is added to
-`.git/info/exclude`. The ledger has 5 seconds to answer (connection, queries and the brief's git calls). When it
-cannot be reached (no answer in time, a refused connection), session-start gives the last STATE.md under the line
-"benchbook: the ledger did not answer (...); this is STATE.md as of <time>", but only when that file was written for
-the same project from the same ledger (the hash of `BENCHBOOK_DATABASE_URL` without its password, or of the
-embedded cluster's directory). A ledger that answers with a refusal (a revoked token, a failed login, an unknown
-project) gets nothing. pre-compact gives nothing in either case. Outside a benchbook project each hook leaves after reading config.toml, without importing
-the database layer; nothing goes to stderr and every hook exits 0 (failures are in `hook.log`).
+Each brief is also written to `.benchbook/STATE.md` for harnesses without hooks and for people. Its first line
+names the time, HEAD, project and connection fingerprint. When the benchbook folder is tracked, STATE.md is added
+to `.git/info/exclude`. The ledger has 5 seconds to answer, including connection, queries and the brief's git calls.
+SessionStart can supply the last STATE.md when the embedded ledger times out or a connection fails at the transport
+level. Fallback requires the same project and a matching database fingerprint. For an external PostgreSQL server,
+the fingerprint covers the effective libpq endpoint, database and login without including credentials. A service
+name, an implicit socket directory or multiple endpoints can make the target ambiguous. In those cases, with a
+Benchbook token, or after a remote timeout or authorization denial, the hook leaves the snapshot for manual use.
+PreCompact only gives live context. Outside a benchbook project each hook leaves after reading config.toml, without
+importing the database layer. The hooks log failures in `hook.log` and exit 0.
 
 ## Boundary hooks: what Claude Code does
 

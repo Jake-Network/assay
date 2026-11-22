@@ -91,8 +91,9 @@ def enqueue(data: dict[str, Any]) -> str:
     return line
 
 
-def _result_line(run: Verification, record: Recorded) -> str:
+def _result_line(run: Verification, record: Recorded, oracle: str | None = None) -> str:
     from .ids import short
+    from .lookup import checked
 
     if run.environment:
         result = "environment failure"
@@ -100,7 +101,7 @@ def _result_line(run: Verification, record: Recorded) -> str:
         result = "re-run passed" if run.all_passed and run.complete else "re-run failed"
     guard = ("tests weakened or check declarations changed; needs review"
              if run.integrity.guard_weakened or run.integrity.checks_changed else "tests not weakened")
-    verdict = "re-run" if record.outcome and record.outcome.decision == "verified" else "none"
+    verdict = checked(oracle)
     if record.outcome and record.outcome.decision == "inconclusive":
         guard += "; attempts disagree"
     elif record.outcome and record.outcome.person and "needs review" not in guard:
@@ -108,6 +109,16 @@ def _result_line(run: Verification, record: Recorded) -> str:
     ref = short("claim", record.claim_id) if record.claim_id else short("experiment", record.experiment_id)
     return (f"benchbook: {run.piece} {run.commit[:7]}: {result} ({run.total} checks, "
             f"{run.duration_ms / 1000:.1f}s), {guard}, checked: {verdict} ({ref})")
+
+
+def _cached_line(path: Path) -> str | None:
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return None
+    if isinstance(cached, dict) and isinstance(line := cached.get("line"), str):
+        return line
+    return None
 
 
 def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> str:
@@ -128,17 +139,38 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     key = hashlib.sha256(json.dumps([project, piece, commit]).encode()).hexdigest()
     results = spool / "verify-results"
     result = results / f"{key}.json"
-    try:
-        line = json.loads(result.read_text(encoding="utf-8"))["line"]
-    except FileNotFoundError:
+    report_identity = [key, data["session_id"], reporter, data["report_sha256"]]
+    report_key = hashlib.sha256(json.dumps(report_identity).encode()).hexdigest()
+    transient = results / f"report-{report_key}.json"
+    line = _cached_line(result)
+    # Older processors wrote environment failures into the commit cache. Only reuse them for the original report
+    # when that report has its own cache entry.
+    if line is not None and line.startswith(f"benchbook: {piece} {commit[:7]}: environment failure ("):
+        line = None
+    note_key = key
+    if line is None:
+        line = _cached_line(transient)
+        if line is not None:
+            note_key = report_key
+    if line is None:
         run, record = checks.verify(lg, piece, commit, repo=Path(data["repo"]), reported_by=reporter,
                                     trace_ref={"source": "agent-result", "report_sha256": data["report_sha256"]},
                                     receipt_id=receipt)
-        line = _result_line(run, record)
+        oracle = None
+        if record.claim_id is not None:
+            rows = lg.sql_internal(
+                "SELECT last_oracle FROM benchbook.v_claim_status WHERE project_id = %s AND id = %s"
+                " AND status = 'verified' AND NOT evidence_invalidated", (project, record.claim_id))
+            if rows:
+                oracle = rows[0]["last_oracle"]
+        line = _result_line(run, record, oracle)
         results.mkdir(mode=0o700, exist_ok=True)
+        if run.environment is not None:
+            note_key = report_key
+            result = transient
         hooks._write_info(result, {"line": line})
     notes.mkdir(parents=True, exist_ok=True, mode=0o700)
-    name = f"verify-{key}.txt"
+    name = f"verify-{note_key}.txt"
     with hooks._lock(notes, blocking=True):
         if not (notes / name).exists() and not (notes / session_notes.DELIVERED / name).exists():
             session_notes.write_note(notes / name, line)

@@ -158,8 +158,8 @@ def database_url(explicit: str | None = None) -> str:
 
 
 def is_cluster(d: Path) -> bool:
-    """Whether d is a PostgreSQL data directory (initdb writes PG_VERSION)."""
-    return (d / "PG_VERSION").is_file()
+    """Whether d has the version marker, data and control file written by initdb."""
+    return (d / "PG_VERSION").is_file() and (d / "base").is_dir() and (d / "global" / "pg_control").is_file()
 
 
 PG_CTL_NOT_RUNNING = 3  # pg_ctl status: no server running in the data directory

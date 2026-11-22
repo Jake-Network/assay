@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -21,21 +22,29 @@ def probe_rate(probes: list[dict[str, Any]], *kinds: str) -> str:
 def write(out: Path) -> Path:
     data = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
     trials = data["trials"]
+    selected = set(data.get("arms", (trial["arm"] for trial in trials)))
+    completed: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for trial in trials:
+        completed[trial["task"], trial["run"]].add(trial["arm"])
+    matched = {key for key, finished in completed.items() if selected <= finished}
     lines = ["# Boundary benchmark" + (" (DRY RUN)" if data["dry"] else ""), ""]
     if data["dry"]:
         lines.extend(["> Scripted events and token counts exercise measurement and reporting. "
                       "These results provide no evidence about model or plugin behavior.", ""])
     if "stopped" in data:
-        lines.extend(["> Execution stopped. Results cover completed trials. See metrics.json for the stop reason.", ""])
+        lines.extend(["> Execution stopped. See metrics.json for the stop reason.", ""])
     lines.extend([
-        "| Arm | Completed trials | H1 Compaction answers | H1 Delayed compaction answers | H1 Session answers |"
+        "Comparative totals include only task repetitions completed by every selected arm.", "",
+        "| Arm | Matched trials | H1 Compaction answers | H1 Delayed compaction answers | H1 Session answers |"
         " H2 False completions |"
         " H2 Weakened merges | H3 Repeated failures | H4 Cost USD | H4 Session tokens | H4 Wall seconds |"
         " H4 Peak lead tokens | H4 Probe cost USD | H6 Trusted stale | H6 Misflagged fresh |",
         "|" + "---|" * 15,
     ])
+    if not matched:
+        lines.extend(["", "No matched trials completed."])
     for arm, config in ARMS.items():
-        rows = [r for r in trials if r["arm"] == arm]
+        rows = [r for r in trials if r["arm"] == arm and (r["task"], r["run"]) in matched]
         if not rows:
             continue
         phases = [p for r in rows for p in r["phases"]]
@@ -69,6 +78,19 @@ def write(out: Path) -> Path:
         " requires a separate receipt from its provider before comparing total cost.",
         "H6 counts subsequent actions after changing one previously verified file, with an unchanged piece as a"
         " control. Per-probe scores also show each piece's applicability answer.", "",
+    ])
+    if unmatched := completed.keys() - matched:
+        lines.extend([
+            "## Unmatched completed trials", "",
+            "Individual trial measurements are available in metrics.json.", "",
+            "| Task | Repetition | Completed arms | Missing arms |", "|---|---|---|---|",
+        ])
+        for task, run in sorted(unmatched):
+            finished = completed[task, run]
+            missing = selected - finished
+            lines.append(f"| {task} | {run} | {', '.join(sorted(finished))} | {', '.join(sorted(missing))} |")
+        lines.append("")
+    lines.extend([
         "## H5 fan-in", "",
         "| Circle-packing configuration | Requested workers | Delivered reports | Lead report tokens (estimate) |"
         " Peak lead context (tokens) |", "|---|---|---|---|---|",

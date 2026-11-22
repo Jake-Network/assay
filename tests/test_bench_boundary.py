@@ -1,14 +1,17 @@
 """Boundary benchmark measurement and command assembly with no provider calls."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from bench import real
-from bench.boundary import arms, probes
+from bench.boundary import arms, probes, report, run, scripted
 from bench.run import worker_counts
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bench"
@@ -59,14 +62,10 @@ def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
     assert all(1650 < call["tokens"] < 1700 for trial in data["trials"] for call in trial["calls"])
 
 
-def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path) -> None:
-    """Claude Code's receipt for a resumed session reports the whole session's spend: $0.40, then $0.45 after a
-    call that cost $0.05. That call is within a $0.10 cap, and the batch spent $0.45, not $0.85."""
-    import argparse
-
-    from bench.boundary.run import Batch
-
-    receipts = iter([(0.40, 1000), (0.45, 1300)])
+@pytest.mark.parametrize(("session_cost", "exceeded"), [(0.40, False), (0.41, True)])
+def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path, session_cost: float, exceeded: bool) -> None:
+    """Accept the exact $0.10 cap despite binary subtraction, and retain a real over-budget receipt."""
+    receipts = iter([(0.30, 1000), (session_cost, 1300)])
 
     def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
         cost, tokens = next(receipts)
@@ -77,16 +76,85 @@ def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path) -> None:
             "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
         (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
 
-    args = argparse.Namespace(probe_budget_usd=0.5, max_budget_usd=0.5, total_budget_usd=10.0, model="m",
+    args = argparse.Namespace(probe_budget_usd=0.1, max_budget_usd=0.5, total_budget_usd=10.0, model="m",
                               claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
-    batch = Batch(args, tmp_path, execute)
+    batch = run.Batch(args, tmp_path, execute)
     batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
-    args.max_budget_usd = 0.10
-    batch.capture("A", tmp_path, {}, tmp_path / "second", "work", "s-1", resume=True, probe=False)
+    if exceeded:
+        with pytest.raises(real.BenchRunError, match="second exceeded its cap"):
+            batch.capture("A", tmp_path, {}, tmp_path / "second", "probe", "s-1", resume=True, probe=True)
+    else:
+        batch.capture("A", tmp_path, {}, tmp_path / "second", "probe", "s-1", resume=True, probe=True)
     second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
-    assert round(second["cost_usd"], 6) == 0.05 and second["tokens"] == 300
-    assert (second["session_cost_usd"], second["session_tokens"]) == (0.45, 1300)
-    assert round(batch.spent, 6) == 0.45
+    assert second["cost_usd"] == pytest.approx(session_cost - 0.30) and second["tokens"] == 300
+    assert (second["session_cost_usd"], second["session_tokens"]) == (session_cost, 1300)
+    assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == session_cost
+
+
+@pytest.mark.parametrize("completed_b", [True, False])
+def test_report_compares_matched_repetitions_and_lists_unmatched(tmp_path: Path, completed_b: bool) -> None:
+    def row(arm: str, repetition: int) -> dict[str, object]:
+        return {
+            "task": "task", "run": repetition, "arm": arm, "wall_seconds": 2, "phases": [], "probes": [],
+            "calls": [{"cost_usd": 0.25, "tokens": 20, "kind": "work", "lead_context_max": 10}],
+        }
+
+    trials = [row("A", 1), row("A", 2)]
+    if completed_b:
+        trials.insert(1, row("B", 1))
+    data = {"dry": False, "arms": ["A", "B"], "trials": trials, "stopped": "budget", "fan_in": []}
+    (tmp_path / "metrics.json").write_text(json.dumps(data), encoding="utf-8")
+    output = report.write(tmp_path).read_text(encoding="utf-8")
+    rows = [line for line in output.splitlines() if line.startswith(("| A Single session", "| B Text subagents"))]
+    if completed_b:
+        assert len(rows) == 2 and all("| 1 |" in line and "| 0.2500 | 20 | 2.00 |" in line for line in rows)
+    else:
+        assert not rows and "No matched trials completed." in output
+        assert "| task | 1 | A | B |" in output
+    assert "| task | 2 | A | B |" in output
+    assert json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))["trials"] == trials
+
+
+@pytest.mark.parametrize("failure", [None, "init", "trial"])
+def test_arm_f_stops_the_trial_database_even_when_init_or_work_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    task = scripted.fixture(tmp_path)
+    pg = tmp_path / task.id / "F-1" / "pg"
+    calls = []
+    actual_run = subprocess.run
+
+    def process(cmd, **kwargs):
+        if cmd[:4] == [sys.executable, "-m", "benchbook", "init"]:
+            assert kwargs["env"]["BENCHBOOK_DATA_DIR"] == str(pg)
+            calls.append("init")
+            if failure == "init":
+                raise subprocess.CalledProcessError(1, cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+        return actual_run(cmd, **kwargs)
+
+    def work(_trial):
+        calls.append("trial")
+        if failure == "trial":
+            raise real.BenchRunError("trial failed")
+        return {}
+
+    def stop(path: Path) -> bool:
+        assert path == pg
+        calls.append("stop")
+        return True
+
+    monkeypatch.setattr(run.subprocess, "run", process)
+    monkeypatch.setattr(run.Trial, "run", work)
+    monkeypatch.setattr(run, "stop_embedded", stop)
+    args = argparse.Namespace(dry=False, compact_window=100000, model="scripted")
+    batch = run.Batch(args, tmp_path, scripted.capture)
+    if failure:
+        with pytest.raises(subprocess.CalledProcessError if failure == "init" else real.BenchRunError):
+            run.trial(batch, task, "F", 1)
+    else:
+        assert run.trial(batch, task, "F", 1)["arm"] == "F"
+    assert calls == (["init", "stop"] if failure == "init" else ["init", "trial", "stop"])
 
 
 def test_configuration_has_equal_worker_instructions_and_read_only_probes(tmp_path: Path) -> None:
@@ -124,7 +192,7 @@ def test_h5_worker_sweep_previews_distinct_widths(tmp_path: Path) -> None:
         assert f"{count} general-purpose subagents" in cmd[2]
 
 
-def test_execute_requires_filled_registration_before_launch(tmp_path: Path) -> None:
+def task_manifest(tmp_path: Path) -> Path:
     oracle = tmp_path / "oracle.py"
     oracle.touch()
     source = tmp_path / "task"
@@ -134,6 +202,11 @@ def test_execute_requires_filled_registration_before_launch(tmp_path: Path) -> N
     manifest = tmp_path / "tasks.json"
     manifest.write_text(json.dumps([{"id": "task", "base": "a" * 40, "source": "task", "oracle": "oracle.py",
                                      "phases": phases}]), encoding="utf-8")
+    return manifest
+
+
+def test_execute_requires_filled_registration_before_launch(tmp_path: Path) -> None:
+    manifest = task_manifest(tmp_path)
     out = tmp_path / "run"
     result = subprocess.run([sys.executable, "-m", "bench.boundary.run", "--execute", "--arms", "A",
                              "--tasks", str(manifest), "--out", str(out), "--model", "model", "--max-budget-usd",
@@ -141,4 +214,26 @@ def test_execute_requires_filled_registration_before_launch(tmp_path: Path) -> N
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 1
     assert "fill in the pre-registration field Model" in result.stderr
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("version", ["2.1.276 (Claude Code)", "unknown"])
+def test_execute_rejects_unsupported_claude_version_before_trial(tmp_path: Path, version: str) -> None:
+    manifest = task_manifest(tmp_path)
+    registration = tmp_path / "registration.md"
+    template = Path(run.__file__).with_name("PREREGISTRATION.md").read_text(encoding="utf-8")
+    registration.write_text(template.replace(": [", ": registered ["), encoding="utf-8")
+    claude = tmp_path / "claude"
+    claude.write_text(f"#!/bin/sh\n[ \"$1\" = --version ] || exit 99\nprintf '%s\\n' '{version}'\n", encoding="utf-8")
+    claude.chmod(0o755)
+    out = tmp_path / "run"
+    result = subprocess.run(
+        [sys.executable, "-m", "bench.boundary.run", "--execute", "--arms", "A", "--tasks", str(manifest),
+         "--registration", str(registration), "--out", str(out), "--model", "model", "--max-budget-usd", "1",
+         "--probe-budget-usd", "1", "--total-budget-usd", "1"],
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 1
+    assert "--execute needs Claude Code 2.1.277 or newer" in result.stderr
     assert not out.exists()

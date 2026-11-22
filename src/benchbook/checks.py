@@ -689,72 +689,22 @@ def _run_one(spec: CheckSpec, wt: Path, out: Path, env: dict[str, str] | None = 
 
 @dataclass
 class BaseRun:
-    """One check's result at the merge-base, as the baseline cache keeps it."""
+    """One check's result at the merge-base."""
     status: str
-    signature: str | None  # the check's part
-    failed: list[str]  # failing test ids (JUnit)
-    tests: int | None  # testcases that ran (JUnit)
+    signature: str | None
+    failed: list[str]
+    tests: int | None
 
 
-def _spec_key(spec: CheckSpec, prep: VerifyPrep, repo: Path) -> str:
-    """The cache key of a check's merge-base run: its definition, the [verify] table and the content of the files
-    [verify] copies in (an .env edited since is another input)."""
-    copied: dict[str, str | None] = {}
-    for rel in prep.copy:
-        try:
-            copied[rel] = hashlib.sha256((repo / rel).read_bytes()).hexdigest()
-        except OSError:
-            copied[rel] = None
-    body = {"cmd": spec.cmd, "junit": spec.junit, "timeout": spec.timeout, "verify": prep.table(), "copied": copied}
-    return hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-
-
-def _baseline_file(repo: Path) -> Path:
-    key = hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()[:16]
-    return localcfg.state_dir() / "baseline" / f"{key}.json"
-
-
-def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec], env: dict[str, str] | None = None, *,
-             fresh: bool = False) -> tuple[dict[str, BaseRun], BaseException | None]:
-    """The results of SPECS at the merge-base of b, from the cache (state_dir/baseline/<repo>.json, keyed by
-    merge-base, check name, the check's definition and the [verify] inputs) or from one run of the missing ones in a
-    clean worktree of the merge-base. fresh: run them all now and only write the cache. The cache cannot see the
-    environment (a service that is back up, a tool installed since), so a decision that rests on the merge-base
-    failing (classify_environment) never reads it. Returns them and the run's interruption, if any (nothing is
-    cached then)."""
-    path = _baseline_file(repo)
-    try:
-        cache: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(cache, dict):
-            cache = {}
-    except (OSError, ValueError):
-        cache = {}
-    out: dict[str, BaseRun] = {}
-    missing = []
-    for s in specs:
-        hit = None if fresh else cache.get(f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep, repo)}")
-        if isinstance(hit, dict) and isinstance(hit.get("status"), str):
-            out[s.name] = BaseRun(hit["status"], hit.get("signature"), list(hit.get("failed") or []), hit.get("tests"))
-        else:
-            missing.append(s)
-    if not missing:
-        return out, None
+def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
+             env: dict[str, str] | None = None) -> tuple[dict[str, BaseRun], BaseException | None]:
+    """Run the reference checks now, using the same environment as the candidate."""
     prepared = Prepared()
-    results, interrupted = run_checks(repo, b.merge_base, missing, env, b.prep, prepared)
+    results, interrupted = run_checks(repo, b.merge_base, specs, env, b.prep, prepared)
     if interrupted is not None or prepared.error is not None:
-        return out, interrupted
-    for s, r in zip(missing, results, strict=True):
-        run = BaseRun(r.status, r.signature, [t for t, _ in r.failed_tests], r.tests)
-        out[s.name] = run
-        cache[f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep, repo)}"] = run.__dict__
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(cache, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        pass  # a cache that cannot be written only costs a re-run next time
-    return out, None
+        return {}, interrupted
+    return {r.name: BaseRun(r.status, r.signature, [t for t, _ in r.failed_tests], r.tests)
+            for r in results}, None
 
 
 def count_tests(repo: Path, b: Base, results: list[CheckResult], integ: Integrity,
@@ -762,7 +712,7 @@ def count_tests(repo: Path, b: Base, results: list[CheckResult], integ: Integrit
     """T04: the JUnit testcases that ran here and at the merge-base. Each JUnit check that reported a count is
     compared with its own merge-base run (integ.fewer_tests_in names those that ran fewer); tests_before and
     tests_after are the sums, for the record. Run only when guarded files changed; the merge-base runs come from
-    the baseline cache. Returns an interruption of that run."""
+    the current environment. Returns an interruption of that run."""
     counted = [r for r in results if b.checks[r.name].junit and r.tests is not None]
     if not counted:
         return None
@@ -832,7 +782,7 @@ def classify_environment(repo: Path, b: Base, results: list[CheckResult], env: d
     failing = [r for r in results if r.status in ("fail", "timeout")]
     if not failing or not all(r.name in elsewhere for r in failing):
         return None, None, None
-    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in failing], env, fresh=True)
+    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in failing], env)
     for r in failing:
         r.environment = r.name in runs and same_failure(r, runs[r.name])
     if interrupted is not None or not all(r.environment for r in failing):
@@ -945,13 +895,14 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     integ = integrity(repo, b, sha, moved)
     t0 = time.monotonic()
     prepared = Prepared()
-    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env(), b.prep, prepared)
+    env = check_env()
+    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], env, b.prep, prepared)
     environment, base_sig = prepared.error, None
     if interrupted is None and environment is None and sha != b.merge_base:  # the base can't tell a commit from itself
-        environment, base_sig, interrupted = classify_environment(repo, b, results, check_env(),
+        environment, base_sig, interrupted = classify_environment(repo, b, results, env,
                                                                   passed_elsewhere(lg, piece, sha, b, impl))
     if interrupted is None and environment is None and integ.guard_files and sha != b.merge_base:
-        interrupted = count_tests(repo, b, results, integ, check_env())
+        interrupted = count_tests(repo, b, results, integ, env)
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
                      paths=scope)

@@ -173,11 +173,15 @@ def test_uninstall_keeps_the_folder_when_git_does_not_answer(path_with_fakes: Pa
     assert (plain / ".benchbook").is_dir() and any("git ls-files failed" in s for s in plan.done)
 
 
+@pytest.mark.parametrize("version_marker", [False, True])
 def test_purge_keeps_a_directory_that_is_not_a_cluster(path_with_fakes: Path, tmp_path: Path,
-                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+                                                       monkeypatch: pytest.MonkeyPatch,
+                                                       version_marker: bool) -> None:
     data = tmp_path / "data"
     (data / "keep.txt").parent.mkdir()
     (data / "keep.txt").write_text("mine\n")
+    if version_marker:
+        (data / "PG_VERSION").write_text("16\n")
     monkeypatch.setenv("BENCHBOOK_DATA_DIR", str(data))
     for dry in (True, False):
         plan = install.uninstall(None, dry_run=dry, purge=True)
@@ -192,8 +196,10 @@ def test_purge_removes_a_cluster_only_after_its_server_is_confirmed_stopped(
     from benchbook.errors import BenchbookError
 
     data = tmp_path / "pg"
-    data.mkdir()
+    (data / "base").mkdir(parents=True)
+    (data / "global").mkdir()
     (data / "PG_VERSION").write_text("16\n")
+    (data / "global" / "pg_control").touch()
     monkeypatch.setenv("BENCHBOOK_DATA_DIR", str(data))
     plan = install.uninstall(None, dry_run=True, purge=True)
     assert data.is_dir() and f"would remove the embedded database: {data}" in plan.done
@@ -205,6 +211,10 @@ def test_purge_removes_a_cluster_only_after_its_server_is_confirmed_stopped(
     plan = install.uninstall(None, purge=True)
     assert (data / "PG_VERSION").is_file()
     assert any(s.startswith(f"kept the embedded database {data}") for s in plan.done)
+
+    monkeypatch.setattr(conn, "stop_embedded", lambda d=None: False)
+    plan = install.uninstall(None, purge=True)
+    assert data.is_dir() and any("could not be confirmed" in s for s in plan.done)
 
     stopped: list[Path | None] = []
     monkeypatch.setattr(conn, "stop_embedded", lambda d=None: stopped.append(d) or True)
