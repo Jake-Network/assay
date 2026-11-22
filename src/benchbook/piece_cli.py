@@ -51,7 +51,8 @@ def start(
         from .config import load
         from .ids import short
 
-        p, new = pin_checks(lg, piece, specs, load().guard_paths, None)
+        cfg = load()
+        p, new = pin_checks(lg, piece, specs, cfg.guard_paths, cfg.verify.table())
         out["pin"] = short("claim", p.id)
         text += f"\n{'pinned' if new else 'already pinned'} checks {', '.join(p.checks)} ({out['pin']})"
     emit(out, text)

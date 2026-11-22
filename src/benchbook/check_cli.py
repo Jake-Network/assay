@@ -106,7 +106,8 @@ def pin(
 
     cfg = load()
     specs = parse_check_options(check) if check else cfg.checks
-    p, new = pin_checks(ledger(), piece, specs, cfg.guard_paths, None, source="cli" if check else "config")
+    p, new = pin_checks(ledger(), piece, specs, cfg.guard_paths, cfg.verify.table(),
+                         source="cli" if check else "config")
     scope = "the project" if piece is None else f"piece {piece}"
     emit({"ok": True, "pin": short("claim", p.id), "piece": p.piece, "new": new, "sha256": p.sha256,
           "checks": list(p.checks)},
@@ -156,6 +157,8 @@ def render(v: Verification, rec: Recorded) -> str:
         if r.status in ("fail", "timeout") and not r.failed_tests and r.tail:
             lines += [f"      | {x}" for x in r.tail.splitlines()[-8:]]
     lines.append(f"checks {v.passed}/{v.total} passed")
+    if v.environment:
+        lines.append(f"environment: {v.environment}; not counted against the piece")
     if v.missing:
         lines.append(f"partial: {v.total} of {len(v.declared)} declared checks run (not run: {', '.join(v.missing)}); "
                      "recorded, but only a run of every declared check can verify")

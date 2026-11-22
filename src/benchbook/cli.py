@@ -173,8 +173,8 @@ def _init_code(root: Path, project: str, out: dict[str, Any]) -> str:
     cfg = load(root)
     if cfg.checks:
         name = STATE["agent"] or env("AGENT") or (None if env("TOKEN") else "lead")
-        p, _ = pin_checks(Ledger.open(project=project, agent=name), None, cfg.checks, cfg.guard_paths, None,
-                          source="config")
+        p, _ = pin_checks(Ledger.open(project=project, agent=name), None, cfg.checks, cfg.guard_paths,
+                          cfg.verify.table(), source="config")
         out["pin"] = short("claim", p.id)
         lines.append(f"  checks: {', '.join(p.checks)} pinned ({out['pin']})")
     return "".join(x + "\n" for x in lines)

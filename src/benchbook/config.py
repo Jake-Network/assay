@@ -147,6 +147,26 @@ class CheckSpec:
     timeout: float = 900.0  # seconds before the check's process group is killed
 
 
+@dataclass(frozen=True)
+class VerifyPrep:
+    """[verify]: what a clean verification worktree needs before the checks run (T02). copy: gitignored files
+    (.env) copied from the repository root, read there and never recorded beyond their names; prepare: a command run
+    in the worktree first (uv sync --frozen)."""
+    copy: tuple[str, ...] = ()
+    prepare: str | None = None
+    prepare_timeout: float = 600.0
+
+    def table(self) -> dict[str, Any]:
+        """The table as a pin keeps it: empty when nothing is declared."""
+        out: dict[str, Any] = {}
+        if self.copy:
+            out["copy"] = list(self.copy)
+        if self.prepare is not None:
+            out["prepare"] = self.prepare
+            out["prepare_timeout"] = self.prepare_timeout
+        return out
+
+
 @dataclass
 class LocalConfig:
     project: str | None = None
@@ -158,6 +178,7 @@ class LocalConfig:
     guard_base: str | None = None  # [guard] base: the ref a piece branched from (check verify --base)
     # [report] out_of_scope_heading: the heading of the out-of-scope section in an implementer's final report
     out_of_scope_heading: str | None = None
+    verify: VerifyPrep = field(default_factory=VerifyPrep)  # [verify] copy, prepare, prepare_timeout
 
 
 def _config_in(d: Path) -> Path | None:
@@ -213,6 +234,7 @@ def load(start: Path | None = None) -> LocalConfig:
         cfg.checks = parse_checks(data.get("checks"), str(p))
         cfg.guard_paths, cfg.guard_base = parse_guard(data.get("guard"), str(p))
         cfg.out_of_scope_heading = parse_report(data.get("report"), str(p))
+        cfg.verify = parse_verify(data.get("verify"), str(p))
     if project := env("PROJECT"):
         cfg.project = project
     return cfg
@@ -312,6 +334,36 @@ def parse_guard(table: Any, where: str = "config.toml") -> tuple[list[str], str 
     if base is not None and (not isinstance(base, str) or not base.strip()):
         raise BenchbookError(f"{where}: [guard] base must be a git ref such as \"origin/main\"")
     return list(paths), base
+
+
+_VERIFY_KEYS = {"copy", "prepare", "prepare_timeout"}
+
+
+def parse_verify(table: Any, where: str = "config.toml") -> VerifyPrep:
+    """[verify] as a VerifyPrep. copy holds paths relative to the repository root that stay inside it."""
+    from .errors import BenchbookError
+
+    if table is None:
+        return VerifyPrep()
+    if not isinstance(table, dict):
+        raise BenchbookError(f"{where}: [verify] must be a table")
+    if unknown := sorted(set(table) - _VERIFY_KEYS):
+        raise BenchbookError(f"{where}: [verify]: unknown key {', '.join(unknown)} (known: copy, prepare, "
+                             "prepare_timeout)")
+    copy, prepare = table.get("copy", []), table.get("prepare")
+    timeout = table.get("prepare_timeout", VerifyPrep.prepare_timeout)
+    if not isinstance(copy, list) or not all(isinstance(x, str) and x.strip() for x in copy):
+        raise BenchbookError(f"{where}: [verify] copy must be a list of paths, such as [\".env\"]")
+    for x in copy:
+        parts = Path(x).parts
+        if Path(x).is_absolute() or ".." in parts or not parts or x.startswith("~"):
+            raise BenchbookError(f"{where}: [verify] copy: {x!r} must be a path inside the repository, relative to "
+                                 "its root")
+    if prepare is not None and (not isinstance(prepare, str) or not prepare.strip()):
+        raise BenchbookError(f"{where}: [verify] prepare must be a non-empty command")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 86400:
+        raise BenchbookError(f"{where}: [verify] prepare_timeout must be a number of seconds (0 < t <= 86400)")
+    return VerifyPrep(tuple(dict.fromkeys(copy)), prepare.strip() if prepare else None, float(timeout))
 
 
 _REPORT_KEYS = {"out_of_scope_heading"}
