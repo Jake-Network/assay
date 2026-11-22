@@ -157,15 +157,34 @@ def database_url(explicit: str | None = None) -> str:
     return ensure_database(_embedded_server_uri(data_dir()), EMBEDDED_DB, legacy=LEGACY_EMBEDDED_DB)
 
 
-def stop_embedded() -> bool:
-    from pixeltable_pgserver.postgres_server import get_server
+def is_cluster(d: Path) -> bool:
+    """Whether d is a PostgreSQL data directory (initdb writes PG_VERSION)."""
+    return (d / "PG_VERSION").is_file()
 
-    d = data_dir()
-    if not (d / "PG_VERSION").exists():
-        return False
-    server = get_server(d, cleanup_mode=None, postgres_version=EMBEDDED_PG_VERSION, start=False)
+
+PG_CTL_NOT_RUNNING = 3  # pg_ctl status: no server running in the data directory
+
+
+def stop_embedded(d: Path | None = None) -> bool:
+    """Stop the embedded server of d (default data_dir()). False when d holds no cluster. Raises BenchbookError when
+    pg_ctl status does not confirm afterwards that no server runs there (a failed stop, an unreadable directory)."""
     import subprocess
 
-    subprocess.run([str(server.bin_path / "pg_ctl"), "-D", str(d), "-m", "fast", "stop"],
-                   capture_output=True, check=False)
+    from pixeltable_pgserver.postgres_server import get_server
+
+    from ..errors import BenchbookError
+
+    d = d or data_dir()
+    if not is_cluster(d):
+        return False
+    server = get_server(d, cleanup_mode=None, postgres_version=EMBEDDED_PG_VERSION, start=False)
+    ctl = str(server.bin_path / "pg_ctl")
+    stop = subprocess.run([ctl, "-D", str(d), "-m", "fast", "stop"], capture_output=True, text=True, check=False,
+                          timeout=120)
+    status = subprocess.run([ctl, "-D", str(d), "status"], capture_output=True, text=True, check=False, timeout=30)
+    if status.returncode != PG_CTL_NOT_RUNNING:
+        said = (stop.stderr or stop.stdout or status.stderr or status.stdout).strip().splitlines()
+        raise BenchbookError(f"the embedded Postgres in {d} is not confirmed stopped (pg_ctl stop exit "
+                             f"{stop.returncode}, status exit {status.returncode})"
+                             + (f": {said[-1][:200]}" if said else ""))
     return True

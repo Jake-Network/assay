@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_hooks, hooks
+from benchbook import Ledger, check_hooks, config, hooks
 from benchbook.checks import last_line_hash
 from benchbook.config import LocalConfig, parse_checks
 from tests.conftest import make_project
@@ -156,7 +156,9 @@ def test_declared_check_runs_are_recorded_by_the_hook(gate_repo: Path, tmp_path:
     assert ok["metrics"] == {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"},
                              "checks_declared": ["unit", "quick"], "failure_signature": None, "guard_touched": False,
                              "guard_files": [], "guard_weakened": False, "checks_changed": False, "via": "bash-hook",
-                             "worktree_dirty": False}
+                             "worktree_dirty": False,
+                             "check_definitions": {"unit": config.load(gate_repo).checks["unit"].definition},
+                             "run_by": "benchbook-worker"}
     assert bad["metrics"]["checks"] == {"quick": "fail"}
     line = "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
     assert bad["metrics"]["failure_signature"] == f"quick:exit 1:{last_line_hash(line)}"

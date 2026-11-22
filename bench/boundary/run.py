@@ -34,6 +34,9 @@ class Batch:
     out: Path
     execute_call: Callable[[real.PreparedRun, Path, int], None]
     spent: float = 0.0
+    # The last receipt of each session: (total_cost_usd, tokens). A resumed call's receipt reports the session's whole
+    # spend (code.claude.com/docs/en/agent-sdk/cost-tracking), so a call's own is the difference from the previous one.
+    sessions: dict[str, tuple[float, int]] = field(default_factory=dict)
 
     def capture(
         self, arm: str, work: Path, env: dict[str, str], target: Path, prompt: str, session: str, *,
@@ -52,7 +55,8 @@ class Batch:
         started = time.monotonic()
         self.execute_call(real.PreparedRun(work, cmd, env, None, None, session), target, self.args.wall_clock)
         events = real._read_stream(target)
-        metrics = read_call(events, session)
+        metrics = own_spend(read_call(events, session), self.sessions.get(session) if resume else None)
+        self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"])
         if metrics["cost_usd"] > cap:
             raise real.BenchRunError(f"{target.name} exceeded its cap")
         self.spent += metrics["cost_usd"] - cap
@@ -82,6 +86,16 @@ def read_call(events: list[tuple[int, dict[str, Any]]], session: str) -> dict[st
         raise real.BenchRunError("Claude invocation lacks full cost, session usage, or lead context evidence")
     return {"cost_usd": costs, "tokens": sum(sum(n) for n in counts if n is not None),
             "lead_context_max": max(contexts)}
+
+
+def own_spend(receipt: dict[str, Any], before: tuple[float, int] | None) -> dict[str, Any]:
+    """A call's own cost and tokens from its receipt, which for a resumed session covers the whole session so far
+    (before: the session's previous receipt). The session totals are kept beside them."""
+    cost, tokens = before or (0.0, 0)
+    if receipt["cost_usd"] < cost - 1e-9 or receipt["tokens"] < tokens:
+        raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
+    return {**receipt, "cost_usd": max(receipt["cost_usd"] - cost, 0.0), "tokens": receipt["tokens"] - tokens,
+            "session_cost_usd": receipt["cost_usd"], "session_tokens": receipt["tokens"]}
 
 
 def compile_env(arm: str, target: Path, args: argparse.Namespace) -> dict[str, str]:

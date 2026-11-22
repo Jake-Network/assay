@@ -64,6 +64,7 @@ class Match:
     project: str | None = None
     reason: str = ""
     junit: bool = False
+    definition: str | None = None  # config.CheckSpec.definition of the matched check
 
 
 def words(command: str) -> list[str] | None:
@@ -211,7 +212,8 @@ def match(command: str, cwd: Path, load: Any = config.load) -> Match | None:
     declared = declare(cfg.checks)
     for d in declared:
         if _equal(d, rest, rest_ops):
-            return Match(d.name, "direct", where, cfg.project, junit=cfg.checks[d.name].junit)
+            return Match(d.name, "direct", where, cfg.project, junit=cfg.checks[d.name].junit,
+                         definition=cfg.checks[d.name].definition)
     for d in declared:
         if _contains(d, segs, ops):
             return Match(d.name, "unrecordable", where, cfg.project,
@@ -367,7 +369,7 @@ def _record(call: ShellCall, found: Match) -> None:
         "failed_tests": [], "last_line_hash": res.line_hash,
         "sha": state.sha, "dirty": state.dirty, "changed": len(state.changed),
         "repo": str(repo), "agent": None, "interrupted": None, "via": VIA, "session_id": call.session_id,
-        "tool_use_id": call.tool_use_id, "agent_type": call.agent_type}
+        "tool_use_id": call.tool_use_id, "agent_type": call.agent_type, "definition": found.definition}
     if call.harness != "claude-code":
         entry["harness"] = call.harness
     spool_attempt(EVENT, project, entry)

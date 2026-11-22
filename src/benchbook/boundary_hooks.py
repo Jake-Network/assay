@@ -2,9 +2,13 @@
 
 - `benchbook hook session-start` (SessionStart, every source): the brief scoped by what this branch changed
   (`changed_scope`, the code pack's `brief --here`), at most 1,500 tokens and 6,000 characters, as additionalContext.
-  The same text goes to `.benchbook/STATE.md`, the time and HEAD on its first line, for harnesses without hooks and
-  for people. When the ledger does not answer within 5 seconds, the last STATE.md is given instead, under a line
-  saying so; with no STATE.md, nothing. A brief whose sections are all empty is written to STATE.md but not given.
+  The same text goes to `.benchbook/STATE.md`, the time, HEAD, project and ledger on its first line, for harnesses
+  without hooks and for people. When the ledger cannot be reached (no answer within 5 seconds, a refused
+  connection), the last STATE.md is given instead, under a line saying so, but only when it was written for this
+  project from this ledger (the database URL without its password, or the embedded cluster's directory). A ledger
+  that answers and refuses (a revoked token, a failed login, an unknown project) gets nothing: it is not down, and a
+  brief it would not give is not handed out from the cache. A brief whose sections are all empty is written to
+  STATE.md but not given.
 - `benchbook hook pre-compact` (PreCompact): the same brief cut to three lines per section, as one paragraph of at
   most 1,000 characters on stdout, which Claude Code reads as instructions for the compaction summary. Nothing when
   the ledger does not answer.
@@ -201,17 +205,44 @@ def _git(repo: Path | None, *args: str) -> str:
         return ""
 
 
+def ledger_id() -> str:
+    """Which ledger a brief came from, as 16 hex digits: the hash of BENCHBOOK_DATABASE_URL without its password, or
+    of the embedded cluster's directory."""
+    import hashlib
+
+    url = config.env("DATABASE_URL")
+    if url:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        try:
+            p = urlsplit(url)
+            netloc = (f"{p.username}@" if p.username else "") + (p.hostname or "") + (f":{p.port}" if p.port else "")
+            query = urlencode([(k, v) for k, v in parse_qsl(p.query) if k.lower() != "password"])
+            key = "url:" + urlunsplit((p.scheme, netloc, p.path, query, ""))
+        except ValueError:
+            key = "raw:" + url
+    else:
+        from .db.conn import data_dir
+
+        key = f"embedded:{data_dir().resolve()}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+_STATE_HEAD = re.compile(r"benchbook state · written [^·]+ · HEAD \S+ · project (\S+) · ledger ([0-9a-f]{16}) · ")
+
+
 def write_state(w: Where, brief: str) -> None:
-    """STATE.md: the brief under a first line with the time it was written and the HEAD it was written at. Kept
-    out of git status (.git/info/exclude) when the benchbook folder itself is tracked."""
+    """STATE.md: the brief under a first line with the time it was written, the HEAD it was written at, the project
+    and the ledger (ledger_id). Kept out of git status (.git/info/exclude) when the benchbook folder itself is
+    tracked."""
     from datetime import UTC, datetime
 
     head = _git(w.repo, "rev-parse", "--short=12", "HEAD") or "none"
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%MZ")
     w.local.mkdir(parents=True, exist_ok=True)
     tmp = w.state.with_name(f".{STATE_FILE}.{os.getpid()}.tmp")
-    tmp.write_text(f"benchbook state · written {stamp} · HEAD {head} · rewritten at each session start\n\n{brief}",
-                   encoding="utf-8")
+    tmp.write_text(f"benchbook state · written {stamp} · HEAD {head} · project {w.project} · ledger {ledger_id()} · "
+                   f"rewritten at each session start\n\n{brief}", encoding="utf-8")
     os.replace(tmp, w.state)
     if w.repo is not None:
         _exclude(w.repo, w.state)
@@ -237,7 +268,8 @@ def _exclude(repo: Path, path: Path) -> None:
 
 
 def from_state(w: Where, why: str) -> str:
-    """The last STATE.md under one line saying the ledger did not answer; "" when there is none."""
+    """The last STATE.md under one line saying the ledger did not answer; "" when there is none, or when it was
+    written for another project or from another ledger (or by a version that did not say which)."""
     from datetime import UTC, datetime
 
     try:
@@ -245,20 +277,57 @@ def from_state(w: Where, why: str) -> str:
         written = datetime.fromtimestamp(w.state.stat().st_mtime, UTC).strftime("%Y-%m-%d %H:%MZ")
     except OSError:
         return ""
+    head = _STATE_HEAD.match(text)
+    try:
+        same = head is not None and head[1] == w.project and head[2] == ledger_id()
+    except Exception as e:  # noqa: BLE001 - a ledger that cannot be named is not this one
+        _log(f"STATE.md not used: the ledger could not be named: {type(e).__name__}: {e}")
+        return ""
+    if not same:
+        _log(f"STATE.md not used: it was written for another project or ledger than {w.project}'s")
+        return ""
     return clip(f"benchbook: the ledger did not answer ({why}); this is STATE.md as of {written}.\n\n{text}",
                 MAX_CHARS)
 
 
-def _brief_or_none(w: Where, event: str) -> str | None:
-    """The brief (written to STATE.md as well), or None when the ledger did not answer in time or failed."""
+_AUTH_WORDS = ("authentication", "password", "pg_hba.conf", "permission denied", "role ")
+
+
+def unreachable(e: BaseException) -> bool:
+    """Whether the ledger failed by not answering (down, slow, refusing connections), as opposed to answering with a
+    refusal: a failed login (SQLSTATE class 28 or its message), a revoked token, an unknown project, a bug."""
+    if isinstance(e, TimeoutError):
+        return True
+    import psycopg
+
+    if not isinstance(e, psycopg.OperationalError):
+        return False
+    if (getattr(e, "sqlstate", None) or "").startswith("28"):
+        return False
+    text = str(e).lower()
+    return not any(word in text for word in _AUTH_WORDS)
+
+
+class LedgerFailed(Exception):
+    """compile_brief failed; down: the ledger could not be reached (unreachable), so the last STATE.md may stand in."""
+
+    def __init__(self, down: bool) -> None:
+        super().__init__("unreachable" if down else "refused")
+        self.down = down
+
+
+def _brief_or_none(w: Where, event: str) -> str:
+    """The brief (written to STATE.md as well). LedgerFailed when the ledger did not answer in time or failed."""
     try:
         brief = within(lambda: compile_brief(w), TIMEOUT)
     except TimeoutError as e:
         _log(f"{event}: {e}; ledger did not answer")
-        return None
-    except Exception as e:  # noqa: BLE001 - an unreachable or broken ledger is the same as a silent one here
-        _log(f"{event}: the ledger failed: {type(e).__name__}: {str(e)[:300]}")
-        return None
+        raise LedgerFailed(True) from e
+    except Exception as e:  # noqa: BLE001 - reported, and given no brief
+        down = unreachable(e)
+        _log(f"{event}: the ledger {'could not be reached' if down else 'failed'}: {type(e).__name__}: "
+             f"{str(e)[:300]}")
+        raise LedgerFailed(down) from e
     try:
         write_state(w, brief)
     except Exception as e:  # noqa: BLE001 - the brief is still given
@@ -270,9 +339,15 @@ def session_start(data: dict[str, Any]) -> str:
     w = where(data)
     if w is None:
         return ""
-    brief = _brief_or_none(w, "session-start")
-    if brief is None:
-        return from_state(w, f"no answer within {TIMEOUT:g} s")
+    try:
+        brief = _brief_or_none(w, "session-start")
+    except LedgerFailed as e:
+        if not e.down:
+            return ""
+        cause = e.__cause__
+        why = (f"no answer within {TIMEOUT:g} s" if isinstance(cause, TimeoutError)
+               else f"unreachable: {type(cause).__name__}")
+        return from_state(w, why)
     return "" if is_empty(brief) else brief
 
 
@@ -280,8 +355,11 @@ def pre_compact(data: dict[str, Any]) -> str:
     w = where(data)
     if w is None:
         return ""
-    brief = _brief_or_none(w, "pre-compact")
-    if brief is None or is_empty(brief):
+    try:
+        brief = _brief_or_none(w, "pre-compact")
+    except LedgerFailed:
+        return ""
+    if is_empty(brief):
         return ""
     from .code_status import RECORDING_STOPPED
 

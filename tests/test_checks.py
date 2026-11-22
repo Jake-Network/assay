@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -649,12 +650,17 @@ def test_bad_verify_tables(table: dict[str, Any], message: str) -> None:
 
 # ------------------------------------------------------------------------------------------- environment failures (T03)
 
-def implementer_passed(lg: Ledger, piece_name: str, sha: str, names: list[str]) -> None:
-    """The implementer's own clean run of the commit passed these checks (check run in its checkout)."""
-    lg.as_agent("impl").record_experiment(
+def implementer_passed(lg: Ledger, piece_name: str, sha: str, names: list[str], repo: Path, *, agent: str = "impl",
+                       run_by: str | None = None, definitions: dict[str, str] | None = None) -> None:
+    """The implementer's own clean run of the commit passed these checks (check run in its checkout), under the
+    definitions the checkout declares unless given."""
+    defs = definitions if definitions is not None else {
+        n: s.definition for n, s in config.load(repo).checks.items() if n in names}
+    lg.as_agent(agent).record_experiment(
         {"piece": piece_name, "checks": names},
         {"checks_passed": len(names), "checks_total": len(names), "checks": dict.fromkeys(names, "ok"),
-         "checks_declared": names, "failure_signature": None, "via": "check-run", "worktree_dirty": False},
+         "checks_declared": names, "failure_signature": None, "via": "check-run", "worktree_dirty": False,
+         "check_definitions": defs, **({"run_by": run_by} if run_by else {})},
         code_ref=sha)
 
 
@@ -662,7 +668,7 @@ def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_p
                                                                            lead_lg: Ledger) -> None:
     repo = make_env_repo(tmp_path / "repo", "")  # no copy: the clean worktree has no .env, at the base either
     sha = piece(repo, "good", {"impl.txt": "fixed\n"})
-    implementer_passed(lead_lg, "media", sha, ["secret"])  # its checkout has the .env
+    implementer_passed(lead_lg, "media", sha, ["secret"], repo)  # its checkout has the .env
     v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
     assert v.environment is not None and "secret fails the same way at the merge-base" in v.environment
     assert v.run_status == "error" and v.results[0].environment
@@ -710,10 +716,76 @@ def test_the_merge_base_run_is_cached(tmp_path: Path, vtmp: Path, lead_lg: Ledge
     monkeypatch.setattr(checks, "run_checks", counting)
     one = piece(repo, "one", {"impl.txt": "fixed\n"})
     two = piece(repo, "two", {"impl.txt": "fixed too\n"})
-    implementer_passed(lead_lg, "media", one, ["secret"])
-    implementer_passed(lead_lg, "other", two, ["secret"])
+    implementer_passed(lead_lg, "media", one, ["secret"], repo)
+    implementer_passed(lead_lg, "other", two, ["secret"], repo)
     checks.verify(lead_lg, "media", one, repo=repo, reported_by="impl")
     v, _ = checks.verify(lead_lg, "other", two, repo=repo, reported_by="impl")
     base = git(repo, "rev-parse", "main")
-    assert calls == [one, base, two] and v.environment is not None
+    # The cache cannot see the environment: the merge-base run an environment failure rests on is run every time
+    # (and written, for the test counts of T04, which do read it).
+    assert calls == [one, base, two, base] and v.environment is not None
     assert list((tmp_path / "state" / "benchbook" / "baseline").glob("*.json"))
+
+
+def service_repo(root: Path, flag: Path, extra: str = "") -> Path:
+    """One check that needs a service (FLAG exists) and, with extra, more."""
+    cmd = f"test -f {shlex.quote(str(flag))}" + extra
+    return make_repo(root, f'project = "ignored"\n\n[checks.service]\ncmd = {json.dumps(cmd)}\n\n'
+                           '[guard]\nbase = "main"\n')
+
+
+def test_a_merge_base_failure_from_before_the_environment_recovered_is_not_reused(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The service is down: piece one fails at the commit and at the merge-base (an environment failure, cached).
+    The service comes back, and piece two breaks the check for real: the merge-base passes now, so it refutes."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    flag = tmp_path / "service-up"
+    repo = service_repo(tmp_path / "repo", flag, " && test ! -f broken.txt")
+    one = piece(repo, "one", {"impl.txt": "fixed\n"})
+    implementer_passed(lead_lg, "one", one, ["service"], repo)
+    v, _ = checks.verify(lead_lg, "one", one, repo=repo, reported_by="impl")
+    assert v.environment is not None
+    flag.write_text("")
+    two = piece(repo, "two", {"broken.txt": "x\n"})
+    implementer_passed(lead_lg, "two", two, ["service"], repo)  # what the implementer says it saw
+    v, rec = checks.verify(lead_lg, "two", two, repo=repo, reported_by="impl")
+    assert v.environment is None and rec.relation == "refutes" and rec.discarded_id is not None
+    assert [link["relation"] for link in links_to(lead_lg, rec.claim_id)] == ["refutes"]
+
+
+@pytest.mark.parametrize(("who", "environment"), [
+    ({"agent": "bystander"}, False),  # someone else's pass is not the implementer's
+    ({"definitions": {"secret": "0" * 16}}, False),  # a pass of another command under the same name
+    ({"definitions": {}}, False),  # a pass that does not say what ran
+    ({"agent": "hook@host", "run_by": "impl"}, True),  # the Bash hook's record of the implementer's own run
+])
+def test_only_the_implementers_pass_of_the_same_definition_makes_an_environment_failure(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, who: dict[str, Any], environment: bool) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    implementer_passed(lead_lg, "media", sha, ["secret"], repo, **who)
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert (v.environment is not None) is environment
+    assert rec.relation == (None if environment else "refutes")
+
+
+def test_a_retried_request_finishes_from_the_attempt_it_recorded(tmp_path: Path, vtmp: Path,
+                                                                 lead_lg: Ledger) -> None:
+    """The first run failed and was recorded under the request's receipt; the retry would pass (the service came
+    back). The retry links and reports the stored failure, never its own run."""
+    from benchbook.verify_requests import _result_line
+
+    flag = tmp_path / "service-up"
+    repo = service_repo(tmp_path / "repo", flag)
+    sha = piece(repo, "flaky", {"impl.txt": "fixed\n"})
+    receipt = uuid.uuid4()
+    v, first = checks.verify(lead_lg, "flaky", sha, repo=repo, reported_by="impl", receipt_id=receipt)
+    assert first.experiment_id == receipt and first.relation == "refutes" and not v.all_passed
+    flag.write_text("")
+    v, again = checks.verify(lead_lg, "flaky", sha, repo=repo, reported_by="impl", receipt_id=receipt)
+    assert again.experiment_id == receipt and again.claim_id == first.claim_id and again.relation == "refutes"
+    assert [r.status for r in v.results] == ["fail"] and not v.all_passed
+    assert [link["relation"] for link in links_to(lead_lg, first.claim_id)] == ["refutes"]
+    assert again.discarded_id == first.discarded_id
+    assert "re-run failed" in _result_line(v, again)
+    assert row(lead_lg, "experiments", receipt)["metrics"]["checks"] == {"service": "fail"}

@@ -65,6 +65,11 @@ def fixture(out: Path) -> Task:
     return Task("scripted", source, git(source, "rev-parse", "HEAD").stdout.strip(), oracle, tuple(phases))
 
 
+# The tokens each scripted session has reported so far: like Claude Code's, a resumed call's receipt (modelUsage,
+# total_cost_usd) covers the whole session, not the call.
+_SESSION_TOKENS: dict[str, tuple[int, int]] = {}
+
+
 def capture(prepared: PreparedRun, out: Path, _wall_clock: int) -> None:
     n = int(out.name.split("-")[1])
     arm = out.parent.name[0]
@@ -85,9 +90,11 @@ def capture(prepared: PreparedRun, out: Path, _wall_clock: int) -> None:
     if phase:
         events.insert(n, {"type": "system", "subtype": "compact_boundary",
                           "compact_metadata": {"trigger": "auto", "pre_tokens": 100_000}})
+    seen_in, seen_out = _SESSION_TOKENS.get(str(prepared.session_id), (0, 0))
+    total_in, total_out = seen_in + usage["input_tokens"], seen_out + usage["output_tokens"]
+    _SESSION_TOKENS[str(prepared.session_id)] = (total_in, total_out)
     events.append({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0,
-                   "modelUsage": {"scripted": {"inputTokens": usage["input_tokens"],
-                                              "outputTokens": usage["output_tokens"]}},
+                   "modelUsage": {"scripted": {"inputTokens": total_in, "outputTokens": total_out}},
                    "result": "Use previous check as current." if action and arm == "A" else "OK",
                    "structured_output": answers})
     with (out / "lead.stream.jsonl").open("w", encoding="utf-8") as stream, (

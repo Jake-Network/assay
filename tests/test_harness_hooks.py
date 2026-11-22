@@ -164,9 +164,11 @@ def test_native_shell_events_require_an_integer_exit_code() -> None:
 # ------------------------------------------------------------------------------------------- the same attempt
 
 def _shape(row: dict[str, Any]) -> dict[str, Any]:
-    """What the acceptance compares: piece, check, outcome, signature (in metrics), via, commit, author."""
+    """What the acceptance compares: piece, check, outcome, signature (in metrics), via, commit, author. Not run_by:
+    the agent type is each harness's own to report (Claude Code's subagent type, none from some harnesses)."""
+    metrics = {k: v for k, v in row["metrics"].items() if k != "run_by"}
     return {"piece": row["config"]["piece"], "checks": row["config"]["checks"], "code_ref": row["code_ref"],
-            "run_status": row["run_status"], "author": row["author"], "metrics": row["metrics"]}
+            "run_status": row["run_status"], "author": row["author"], "metrics": metrics}
 
 
 @pytest.mark.parametrize("harness", sorted(RUNS))

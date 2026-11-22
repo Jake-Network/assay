@@ -102,4 +102,6 @@ stop reasons and delivered report counts.
 Arm D requires the installed `claude-mem` launcher to stop the isolated local worker after each trial.
 The boundary runner reserves each call's full cap before starting it, records a valid cost receipt, and stops on
 an exhausted budget, failed command, missing receipt, oracle error, or timeout. Missing receipts retain their full
-cap. Keep the partial output and preregister any rerun before paying for it.
+cap. A resumed call's receipt reports the whole session's spend, so the runner counts a call's own cost and tokens
+as the difference from the session's previous receipt, against the call's cap and in the report's totals.
+Keep the partial output and preregister any rerun before paying for it.

@@ -6,8 +6,10 @@ installed only with --mcp). Without a `claude` command the Claude Code steps are
 Cursor and Gemini CLI, it merges the packaged hooks into the user's settings.
 
 uninstall removes the plugins (or prints how), the state directory's spool and logs, this checkout's .benchbook/ when
-git does not track it and its .git/info/exclude line, and benchbook's entries in installed hook manifests. The
-embedded database is removed only with --purge. Every step is listed as it is done; --dry-run lists them only."""
+git answers that it tracks nothing there (a failing git, a broken index or a directory outside git keeps it) and its
+.git/info/exclude line, and benchbook's entries in installed hook manifests. The embedded database is removed only
+with --purge, and only when its directory holds a PostgreSQL cluster (PG_VERSION) whose server is confirmed stopped.
+Every step is listed as it is done; --dry-run lists them only."""
 from __future__ import annotations
 
 import json
@@ -172,20 +174,62 @@ def uninstall(root: Path | None, *, dry_run: bool = False, purge: bool = False) 
     plan.remove(config.state_dir(), "the state directory (spool, hook log, notes)")
     if root is not None:
         local = config.local_dir(root)
-        tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--", local.name], capture_output=True,
-                                 text=True).stdout.strip()
-        if local.is_dir() and not tracked:
-            plan.remove(local, "this checkout's benchbook folder")
+        if local.is_dir():
+            untracked, why = _untracked(root, local.name)
+            if untracked:
+                plan.remove(local, "this checkout's benchbook folder")
+            else:
+                plan.done.append(f"kept {local}: {why}")
         _unexclude(plan, root, local.name)
     if purge:
-        from .db.conn import data_dir
-
-        plan.run(["benchbook", "db", "stop"], optional=True)
-        plan.remove(data_dir(), "the embedded database")
+        _purge_database(plan)
     else:
         plan.done.append("kept the embedded database (benchbook uninstall --purge removes it)")
     plan.done.append("last: uv tool uninstall benchbook")
     return plan
+
+
+def _untracked(root: Path, name: str) -> tuple[bool, str]:
+    """(True, "") only when git answers, and answers that it tracks nothing under root/name. A failing git (outside
+    a repository, a corrupt index) is no answer: the folder may hold tracked files."""
+    try:
+        p = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", name], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL)
+    except OSError as e:
+        return False, f"git could not be run ({e}), so whether it is tracked is unknown"
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout).strip().splitlines()
+        return False, (f"git ls-files failed (exit {p.returncode}{': ' + err[0][:200] if err else ''}), so whether it "
+                       "is tracked is unknown")
+    if p.stdout.strip("\0"):
+        return False, "git tracks files in it"
+    return True, ""
+
+
+def _purge_database(plan: Plan) -> None:
+    """--purge: remove the embedded cluster, only when the data directory is one (PG_VERSION) and its server is
+    confirmed stopped. BENCHBOOK_DATA_DIR can name any directory; a directory that is not a cluster is kept."""
+    from .db.conn import data_dir, is_cluster, stop_embedded
+
+    d = data_dir()
+    if not d.exists() and not d.is_symlink():
+        plan.done.append(f"no embedded database at {d}")
+        return
+    if d.is_symlink() or not is_cluster(d):
+        plan.done.append(f"kept {d}: not a PostgreSQL data directory (no PG_VERSION), so --purge leaves it")
+        return
+    if plan.dry_run:
+        plan.done.append(f"would stop the embedded database in {d}")
+        plan.remove(d, "the embedded database")
+        return
+    try:
+        stop_embedded(d)
+    except Exception as e:  # noqa: BLE001 - whatever went wrong, the cluster is not known to be stopped
+        plan.done.append(f"kept the embedded database {d}: its server was not confirmed stopped "
+                         f"({type(e).__name__}: {str(e).strip()[:300]}); run benchbook db stop, then --purge again")
+        return
+    plan.done.append(f"stopped the embedded database in {d}")
+    plan.remove(d, "the embedded database")
 
 
 def _unexclude(plan: Plan, root: Path, name: str) -> None:

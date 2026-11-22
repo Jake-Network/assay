@@ -43,7 +43,7 @@ Hooks never write to stderr and always exit 0. Outside a benchbook project they 
 - **The re-run is independent.** A clean worktree of the reported commit, run by the lead or by the hook's processor.
   The implementer's own runs are recorded too, but never count as the re-run.
 - **Weakened tests go to a person, however green.** Deleted or changed assertions, new `skip`/`xfail` markers, any
-  `conftest.py` change, fewer tests than at the merge-base. Added tests are fine.
+  `conftest.py` change, a check running fewer tests than at the merge-base. Added tests are fine.
 - **The environment is not the commit's fault.** A failure counts as an environment failure (a missing `.env`, a
   service that is down) only when the implementer's own clean run passed and the merge-base fails the same way. A goal
   test that fails at the base by design still counts against the piece.

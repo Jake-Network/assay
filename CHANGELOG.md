@@ -2,6 +2,15 @@
 
 ## Unreleased: code pack
 
+- Review fixes (PR #4). `benchbook uninstall` keeps `.benchbook/` when git cannot say whether it is tracked, and
+  `--purge` removes only a PostgreSQL cluster whose server is confirmed stopped (`benchbook db stop` now fails when
+  it is not). A retried automatic re-run finishes from the attempt its first try recorded instead of running the
+  checks again. STATE.md names its project and ledger, and the session-start fallback uses it only for the same
+  ones and only when the ledger cannot be reached, never after a refusal. A JUnit check that runs fewer tests than at
+  the merge-base is a weakening even when another check runs more (`fewer_tests_checks`). An environment failure
+  needs a pass by one of the piece's implementers under the same check definition (`check_definitions`, `run_by` on
+  check run and Bash hook attempts), and its merge-base run is never read from the cache. The boundary benchmark
+  counts a resumed call's own cost and tokens, not the session's running total.
 - README.md and README.ko.md lead with coding work: what a session gets at each boundary, what "verified" means,
   the lead's commands and the harness table. The experiment swarm, autoresearch and the circle-packing benchmark
   follow under "Experiment swarms".

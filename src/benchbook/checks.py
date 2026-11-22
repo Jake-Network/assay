@@ -32,7 +32,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -129,6 +129,9 @@ class Integrity:
     guard_weakened_files: list[str] = field(default_factory=list)
     tests_before: int | None = None  # JUnit testcases that ran at the merge-base, over the JUnit checks
     tests_after: int | None = None
+    # The JUnit checks that ran fewer testcases than at the merge-base, each compared with itself: tests added to one
+    # check never make up for tests gone from another.
+    fewer_tests_in: list[str] = field(default_factory=list)
 
     @property
     def guard_touched(self) -> bool:
@@ -136,12 +139,12 @@ class Integrity:
 
     @property
     def fewer_tests(self) -> bool:
-        return self.tests_before is not None and self.tests_after is not None and self.tests_after < self.tests_before
+        return bool(self.fewer_tests_in)
 
     @property
     def guard_weakened(self) -> bool:
-        """What sends a commit to a person (T04): a guarded file weakened, or fewer JUnit tests ran than at the
-        merge-base. Tests only added are not."""
+        """What sends a commit to a person (T04): a guarded file weakened, or a JUnit check ran fewer tests than at
+        the merge-base. Tests only added are not."""
         return bool(self.guard_weakened_files) or self.fewer_tests
 
 
@@ -173,6 +176,12 @@ class Verification:
     prepared: Prepared | None = None
     baseline_signature: str | None = None  # how the failing checks failed at the merge-base (T03)
     paths: list[str] = field(default_factory=list)  # directory prefixes the commit changed since the merge-base (T06)
+    # The failure signature of an attempt already in the ledger (a retried request finishing from the stored run):
+    # its results keep only the statuses, so the signature is the recorded one.
+    recorded_signature: str | None = None
+
+    def signature(self) -> str | None:
+        return self.recorded_signature if self.recorded_signature is not None else failure_signature(self.results)
 
     @property
     def passed(self) -> int:
@@ -221,7 +230,7 @@ class Verification:
             "checks_total": self.total,
             "checks": {r.name: r.status for r in self.results},
             "checks_declared": list(self.declared),
-            "failure_signature": failure_signature(self.results),
+            "failure_signature": self.signature(),
             "guard_touched": self.integrity.guard_touched,
             "guard_files": self.integrity.guard_files[:MAX_GUARD_FILES],
             "checks_changed": self.integrity.checks_changed,
@@ -232,6 +241,7 @@ class Verification:
                if self.integrity.guard_added or self.integrity.guard_appended else {}),
             **({"tests_before": self.integrity.tests_before, "tests_after": self.integrity.tests_after}
                if self.integrity.tests_before is not None and self.integrity.tests_after is not None else {}),
+            **({"fewer_tests_checks": list(self.integrity.fewer_tests_in)} if self.integrity.fewer_tests_in else {}),
             **({"prepared": prep} if self.prepared is not None and (prep := self.prepared.metrics()) else {}),
             **({"environment": True} if self.environment is not None else {}),
             **({"baseline_signature": self.baseline_signature} if self.baseline_signature else {}),
@@ -686,8 +696,16 @@ class BaseRun:
     tests: int | None  # testcases that ran (JUnit)
 
 
-def _spec_key(spec: CheckSpec, prep: VerifyPrep) -> str:
-    body = {"cmd": spec.cmd, "junit": spec.junit, "timeout": spec.timeout, "verify": prep.table()}
+def _spec_key(spec: CheckSpec, prep: VerifyPrep, repo: Path) -> str:
+    """The cache key of a check's merge-base run: its definition, the [verify] table and the content of the files
+    [verify] copies in (an .env edited since is another input)."""
+    copied: dict[str, str | None] = {}
+    for rel in prep.copy:
+        try:
+            copied[rel] = hashlib.sha256((repo / rel).read_bytes()).hexdigest()
+        except OSError:
+            copied[rel] = None
+    body = {"cmd": spec.cmd, "junit": spec.junit, "timeout": spec.timeout, "verify": prep.table(), "copied": copied}
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
@@ -696,11 +714,14 @@ def _baseline_file(repo: Path) -> Path:
     return localcfg.state_dir() / "baseline" / f"{key}.json"
 
 
-def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
-             env: dict[str, str] | None = None) -> tuple[dict[str, BaseRun], BaseException | None]:
+def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec], env: dict[str, str] | None = None, *,
+             fresh: bool = False) -> tuple[dict[str, BaseRun], BaseException | None]:
     """The results of SPECS at the merge-base of b, from the cache (state_dir/baseline/<repo>.json, keyed by
-    merge-base, check name and the check's definition) or from one run of the missing ones in a clean worktree of the
-    merge-base. Returns them and the run's interruption, if any (nothing is cached then)."""
+    merge-base, check name, the check's definition and the [verify] inputs) or from one run of the missing ones in a
+    clean worktree of the merge-base. fresh: run them all now and only write the cache. The cache cannot see the
+    environment (a service that is back up, a tool installed since), so a decision that rests on the merge-base
+    failing (classify_environment) never reads it. Returns them and the run's interruption, if any (nothing is
+    cached then)."""
     path = _baseline_file(repo)
     try:
         cache: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
@@ -711,7 +732,7 @@ def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
     out: dict[str, BaseRun] = {}
     missing = []
     for s in specs:
-        hit = cache.get(f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep)}")
+        hit = None if fresh else cache.get(f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep, repo)}")
         if isinstance(hit, dict) and isinstance(hit.get("status"), str):
             out[s.name] = BaseRun(hit["status"], hit.get("signature"), list(hit.get("failed") or []), hit.get("tests"))
         else:
@@ -725,7 +746,7 @@ def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
     for s, r in zip(missing, results, strict=True):
         run = BaseRun(r.status, r.signature, [t for t, _ in r.failed_tests], r.tests)
         out[s.name] = run
-        cache[f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep)}"] = run.__dict__
+        cache[f"{b.merge_base}|{s.name}|{_spec_key(s, b.prep, repo)}"] = run.__dict__
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
@@ -738,22 +759,28 @@ def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
 
 def count_tests(repo: Path, b: Base, results: list[CheckResult], integ: Integrity,
                 env: dict[str, str] | None) -> BaseException | None:
-    """T04: the JUnit testcases that ran here and at the merge-base, summed over the JUnit checks that reported a
-    count, into integ.tests_before and tests_after. Run only when guarded files changed; the merge-base runs come
-    from the baseline cache. Returns an interruption of that run."""
+    """T04: the JUnit testcases that ran here and at the merge-base. Each JUnit check that reported a count is
+    compared with its own merge-base run (integ.fewer_tests_in names those that ran fewer); tests_before and
+    tests_after are the sums, for the record. Run only when guarded files changed; the merge-base runs come from
+    the baseline cache. Returns an interruption of that run."""
     counted = [r for r in results if b.checks[r.name].junit and r.tests is not None]
     if not counted:
         return None
     runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in counted], env)
+    if interrupted is not None:
+        return interrupted
     before = after = 0
     seen = False
+    fewer = []
     for r in counted:
         was = runs[r.name].tests if r.name in runs else None
         if isinstance(was, int) and r.tests is not None:
             before, after, seen = before + was, after + r.tests, True
-    if seen and interrupted is None:
-        integ.tests_before, integ.tests_after = before, after
-    return interrupted
+            if r.tests < was:
+                fewer.append(r.name)
+    if seen:
+        integ.tests_before, integ.tests_after, integ.fewer_tests_in = before, after, fewer
+    return None
 
 
 def same_failure(r: CheckResult, base: BaseRun) -> bool:
@@ -767,20 +794,32 @@ def same_failure(r: CheckResult, base: BaseRun) -> bool:
     return bool(mine) and len(r.failed_tests) < MAX_FAILED_SHOWN and mine <= set(base.failed)
 
 
-# The checks an implementer's own clean run of PIECE at COMMIT passed (check run, the Bash hook: metrics.via). A raw
-# Bash pass of a JUnit check proves nothing (docs/claude-code.md) and is left out, as the completion gate does.
+# The checks an implementer's own clean run of PIECE at COMMIT passed (check run, the Bash hook: metrics.via): run
+# by one of the piece's implementers (the attempt's author, or metrics.run_by, the agent type the Bash hook saw) and
+# of the definition verify runs (metrics.check_definitions, CheckSpec.definition). A run without either says nothing
+# about this check. A raw Bash pass of a JUnit check proves nothing (docs/claude-code.md) and is left out, as the
+# completion gate does.
 _PASSED_ELSEWHERE = (
     "SELECT DISTINCT c.key FROM benchbook.experiments_valid e,"
     " jsonb_each_text(CASE WHEN jsonb_typeof(e.metrics -> 'checks') = 'object' THEN e.metrics -> 'checks'"
     " ELSE '{}'::jsonb END) AS c(key, value)"
     " WHERE e.project_id = %s AND e.config ->> 'piece' = %s AND e.code_ref = %s AND e.run_status = 'ok'"
     " AND e.metrics ->> 'via' IS NOT NULL AND e.metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb"
-    " AND c.value = 'ok' AND (c.key <> ALL(%s::text[]) OR e.metrics ->> 'via' IS DISTINCT FROM 'bash-hook')")
+    " AND c.value = 'ok' AND (c.key <> ALL(%s::text[]) OR e.metrics ->> 'via' IS DISTINCT FROM 'bash-hook')"
+    " AND (e.author = ANY(%s::text[]) OR e.metrics ->> 'run_by' = ANY(%s::text[]))"
+    " AND jsonb_typeof(e.metrics -> 'check_definitions') = 'object'"
+    " AND e.metrics -> 'check_definitions' ->> c.key = %s::jsonb ->> c.key")
 
 
-def passed_elsewhere(lg: Ledger, piece: str, commit: str, b: Base) -> set[str]:
+def passed_elsewhere(lg: Ledger, piece: str, commit: str, b: Base, implementers: Collection[str]) -> set[str]:
+    """The checks of b that an implementer's own clean run of piece at commit passed, under b's definition."""
+    if not implementers:
+        return set()
     junit = [n for n, s in b.checks.items() if s.junit]
-    return {str(r["key"]) for r in lg.sql_internal(_PASSED_ELSEWHERE, (lg.project_id, piece, commit, junit))}
+    who = sorted(implementers)
+    defs = json.dumps({n: s.definition for n, s in b.checks.items()})
+    return {str(r["key"]) for r in lg.sql_internal(_PASSED_ELSEWHERE, (lg.project_id, piece, commit, junit, who, who,
+                                                                       defs))}
 
 
 def classify_environment(repo: Path, b: Base, results: list[CheckResult], env: dict[str, str] | None,
@@ -793,7 +832,7 @@ def classify_environment(repo: Path, b: Base, results: list[CheckResult], env: d
     failing = [r for r in results if r.status in ("fail", "timeout")]
     if not failing or not all(r.name in elsewhere for r in failing):
         return None, None, None
-    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in failing], env)
+    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in failing], env, fresh=True)
     for r in failing:
         r.environment = r.name in runs and same_failure(r, runs[r.name])
     if interrupted is not None or not all(r.environment for r in failing):
@@ -890,21 +929,32 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     if b.source == "pin":
         pin = pinned(lg, piece, impl)
         moved = pin is not None and pin_changed(lg, pin, piece, repo, impl)
-    integ = integrity(repo, b, sha, moved)
     scope = path_prefixes(changed_paths(repo, b.merge_base, sha))
+    found = None if given is None else given[0]
+    if receipt_id is not None and (stored := _stored_attempt(lg, receipt_id, piece, sha)) is not None:
+        # A retry of a request whose attempt is already in the ledger (the result cache was not written, a later
+        # step failed): finish the links and the decision from that attempt, never from a new run, which could
+        # disagree with what is stored.
+        v = _from_stored(stored, piece, sha, b, scope)
+        sig = v.signature()
+        seen = [p for p in failures.earlier(lg, piece, sig) if p.id != receipt_id] if sig else []
+        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
+        rec.seen_before = seen
+        rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
+        return v, rec
+    integ = integrity(repo, b, sha, moved)
     t0 = time.monotonic()
     prepared = Prepared()
     results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env(), b.prep, prepared)
     environment, base_sig = prepared.error, None
     if interrupted is None and environment is None and sha != b.merge_base:  # the base can't tell a commit from itself
         environment, base_sig, interrupted = classify_environment(repo, b, results, check_env(),
-                                                                  passed_elsewhere(lg, piece, sha, b))
+                                                                  passed_elsewhere(lg, piece, sha, b, impl))
     if interrupted is None and environment is None and integ.guard_files and sha != b.merge_base:
         interrupted = count_tests(repo, b, results, integ, check_env())
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
                      paths=scope)
-    found = None if given is None else given[0]
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
     if interrupted is not None:
@@ -917,6 +967,49 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     rec.seen_before = seen
     rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
     return v, rec
+
+
+_STORED = ("SELECT author, config, metrics, run_status, code_ref, duration_ms FROM benchbook.experiments"
+           " WHERE id = %s AND project_id = %s")
+
+
+def _stored_attempt(lg: Ledger, receipt_id: UUID, piece: str, commit: str) -> dict[str, Any] | None:
+    """The attempt a request's receipt already recorded, None when there is none. One of another agent, piece or
+    commit is refused, as record_experiment refuses it."""
+    from .errors import PermissionDenied
+
+    rows = lg.sql_internal(_STORED, (receipt_id, lg.project_id))
+    if not rows:
+        return None
+    row = rows[0]
+    if row["author"] != lg.agent:
+        raise PermissionDenied("the experiment receipt belongs to another agent")
+    if (row["config"] or {}).get("piece") != piece or row["code_ref"] != commit:
+        raise BenchbookError(f"the experiment receipt {receipt_id} records another piece or commit")
+    return row
+
+
+def _from_stored(row: dict[str, Any], piece: str, commit: str, b: Base, scope: list[str]) -> Verification:
+    """The Verification an attempt in the ledger records: statuses, declared checks, guard columns, signature."""
+    m = row["metrics"] if isinstance(row["metrics"], dict) else {}
+    statuses = m.get("checks")
+    results = [CheckResult(str(n), s if s in STATUSES else "fail")
+               for n, s in (statuses.items() if isinstance(statuses, dict) else ())]
+    integ = Integrity(list(m.get("guard_files") or []), m.get("checks_changed") is True,
+                      guard_weakened_files=list(m.get("guard_weakened_files") or []),
+                      tests_before=m.get("tests_before"), tests_after=m.get("tests_after"),
+                      fewer_tests_in=list(m.get("fewer_tests_checks") or []))
+    if m.get("guard_weakened") is True and not integ.guard_weakened:
+        integ.fewer_tests_in = ["(recorded)"]  # an attempt that recorded only the flag still needs review
+    environment = None
+    if m.get("environment") is True or row["run_status"] != "ok":
+        environment = "recorded as an environment failure"
+    approach = (row["config"] or {}).get("approach")
+    return Verification(piece, commit, b, integ, results, int(row["duration_ms"] or 0), None,
+                        approach=str(approach) if approach else None,
+                        declared=list(m.get("checks_declared") or []), environment=environment,
+                        baseline_signature=m.get("baseline_signature"), paths=scope,
+                        recorded_signature=m.get("failure_signature"))
 
 
 def _signal_name(e: BaseException | None) -> str | None:
@@ -1047,7 +1140,7 @@ def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:
     uncommitted changes is no attempt of its commit and leaves none; an interrupted one has no signature. The
     attempt is already recorded, so a failure here is reported, never raised: raising would make the spool record
     the attempt again."""
-    sig = failure_signature(v.results)
+    sig = v.signature()
     if v.run_status != "ok" or sig is None or getattr(v, "dirty", False):
         return
     try:

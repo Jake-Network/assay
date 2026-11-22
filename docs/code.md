@@ -413,10 +413,15 @@ down. It can also fail at the merge-base by design, because making it pass is th
 it failing is a false completion. The two look the same from the clean worktree, so `check verify` asks for evidence
 of an environment difference: a failing check is an environment failure only when
 
-1. the implementer's own run of this commit passed it (an attempt of the piece at the commit with `via` set and a
-   clean checkout, from `benchbook check run` or the Bash hook; a raw Bash pass of a JUnit check does not count), and
-2. run again at the merge-base, in a clean worktree with the same `[verify]` preparation, it fails the same way
-   (the same signature element, or every failing JUnit test fails there too).
+1. the implementer's own run of this commit passed it: an attempt of the piece at the commit with `via` set and a
+   clean checkout, from `benchbook check run` or the Bash hook, whose author is one of the piece's reporters (or,
+   for the Bash hook, whose `metrics.run_by` names one: the agent type it saw), and which ran the same definition
+   of the check (`metrics.check_definitions`, a hash of cmd, junit and timeout, equal to the merge-base's). A raw
+   Bash pass of a JUnit check does not count, nor does a pass recorded by another agent, of another command under the
+   same name, or by a version that recorded no definition. Run `benchbook --agent NAME check run ...` (or set
+   `BENCHBOOK_AGENT`) with the name the report goes under, and
+2. run again at the merge-base, now, in a clean worktree with the same `[verify]` preparation, it fails the same
+   way (the same signature element, or every failing JUnit test fails there too).
 
 When every failing check is an environment failure, the attempt is `run_status = "error"` with
 `metrics.environment = true` and `baseline_signature`, and no refutes link or discarded approach is written; the
@@ -425,7 +430,9 @@ Otherwise the failure refutes as before. The merge-base run happens only when co
 its own merge-base is not compared. Declaring `[verify] copy` (above) avoids the question for known files.
 
 The merge-base results are cached per repository in the state directory (`baseline/<hash>.json`), keyed by
-merge-base, check name and the check's definition, so pieces branched from the same commit run the base once.
+merge-base, check name, the check's definition and the content of the `[verify] copy` files. The cache cannot see
+the environment (a service that is back up), so condition 2 always runs the merge-base again; the test counts below
+read the cache.
 
 ### Added tests and weakened tests
 
@@ -438,7 +445,7 @@ A piece usually adds tests. `check verify` splits the guarded files a commit cha
 | lines deleted or changed, a file deleted, a binary change | `guard_weakened_files` | yes |
 | an added line with a skip marker (`pytest.mark.skip`, `pytest.mark.xfail`, `pytest.skip(`, `unittest.skip`, `it.skip(`, `describe.skip(`, `test.skip(`, `xit(`, `t.Skip(`, `#[ignore]`, `@Disabled`, `@Ignore`) | `guard_weakened_files` | yes |
 | any change to a `conftest.py` (an autouse fixture or hook can weaken every test) | `guard_weakened_files` | yes |
-| fewer JUnit testcases ran than at the merge-base | `tests_before`, `tests_after` | yes |
+| a JUnit check ran fewer testcases than it did at the merge-base (each check against its own count) | `fewer_tests_checks`, `tests_before`, `tests_after` (sums) | yes |
 
 `guard_weakened` is true for the last four. The all_pass rule, `check verify`'s decision and the PR summary block
 on `guard_weakened` and `checks_changed`, not on `guard_touched`, which keeps its meaning (any guarded file
