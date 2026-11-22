@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- `benchbook brief --here` scopes the code brief by what the current branch changed since its base (`file:<dir>/`
+  prefixes, at most 20, and `piece:<branch>`). Discarded approaches and completion claims carry the directories their
+  commit changed (`payload.paths`, `file:` tags; the spool's check attempts too), and the brief finds discarded
+  approaches and verified completions by those tags, without a `piece start`.
 - Out-of-scope findings in one line: `범위 밖: ...` (also as a list item, in bold, with a full-width colon) is a
   finding. `[report] agents` (subagent types or `["*"]`) reads those subagents' reports for findings only, with no
   `[auto-captured]` note, while `BENCHBOOK_HOOK_AGENTS` is unset. `init --pack code` writes a `[report]` table
