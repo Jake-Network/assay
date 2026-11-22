@@ -63,6 +63,27 @@ def answer(harness: str) -> str:
     return "{}\n" if harness in JSON_ANSWER else ""
 
 
+# Boundary hooks (T09, T11): the events whose answer carries context, and the harness event each answers. Claude Code
+# reads additionalContext under hookSpecificOutput for these (hooks reference, SessionStart, UserPromptSubmit and
+# PostToolUse), and PreCompact's plain stdout as instructions for the compaction summary.
+CONTEXT_EVENTS = {CLAUDE_CODE: {"session-start": "SessionStart", "notes": "UserPromptSubmit",
+                                "agent-result": "PostToolUse"}}
+PLAIN_EVENTS = {CLAUDE_CODE: frozenset({"pre-compact"})}
+
+
+def context_answer(harness: str, event: str, text: str) -> str:
+    """What a boundary hook prints to give text to the model, in this harness's form; the empty answer when there is
+    nothing to give or the harness has no such event (the other harnesses' boundary events come with T16)."""
+    if not text:
+        return answer(harness)
+    if event in PLAIN_EVENTS.get(harness, ()):
+        return text if text.endswith("\n") else text + "\n"
+    if (name := CONTEXT_EVENTS.get(harness, {}).get(event)) is not None:
+        return json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext": text}},
+                          ensure_ascii=False) + "\n"
+    return answer(harness)
+
+
 def _str(v: Any) -> str | None:
     return v if isinstance(v, str) and v else None
 

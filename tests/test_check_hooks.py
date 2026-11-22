@@ -155,7 +155,8 @@ def test_declared_check_runs_are_recorded_by_the_hook(gate_repo: Path, tmp_path:
     assert ok["duration_ms"] == 1234 and "tool_use_id toolu_01ABC123" in ok["notes"]
     assert ok["metrics"] == {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"},
                              "checks_declared": ["unit", "quick"], "failure_signature": None, "guard_touched": False,
-                             "guard_files": [], "checks_changed": False, "via": "bash-hook", "worktree_dirty": False}
+                             "guard_files": [], "guard_weakened": False, "checks_changed": False, "via": "bash-hook",
+                             "worktree_dirty": False}
     assert bad["metrics"]["checks"] == {"quick": "fail"}
     line = "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
     assert bad["metrics"]["failure_signature"] == f"quick:exit 1:{last_line_hash(line)}"
@@ -321,8 +322,11 @@ def test_coverage_counts_from_the_documented_query(gate_repo: Path, tmp_path: Pa
 def test_plugin_and_manual_hooks_run_both_events() -> None:
     plugin = ROOT / "integrations" / "claude-code"
     files = [plugin / "hooks" / "hooks.json", plugin / "manual" / "settings.hooks.json"]
+    def plain(h: Any) -> Any:  # the plugin runs each hook through its shim (T07); the manual file runs benchbook
+        return json.loads(json.dumps(h).replace('\\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\\" ', "benchbook hook "))
+
     for f in files:
-        h = json.loads(f.read_text())["hooks"]
+        h = plain(json.loads(f.read_text())["hooks"])
         assert "PreToolUse" not in h
         bash = [e for e in h["PostToolUse"] if e.get("matcher") == "Bash"]
         assert [x["command"] for e in bash for x in e["hooks"]] == ["benchbook hook bash-result"], f
@@ -330,7 +334,7 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
         assert h["PostToolUseFailure"][0]["matcher"] == "Bash"
         [done] = h["TaskCompleted"]
         assert "matcher" not in done and [x["command"] for x in done["hooks"]] == ["benchbook hook task-completed"]
-    assert json.loads(files[0].read_text()) == json.loads(files[1].read_text())
+    assert plain(json.loads(files[0].read_text())) == json.loads(files[1].read_text())
     version = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text())["version"]
     assert tuple(int(x) for x in version.split(".")) >= (0, 1, 3)
 
