@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- README.md and README.ko.md lead with coding work: what a session gets at each boundary, what "verified" means,
+  the lead's commands and the harness table. The experiment swarm, autoresearch and the circle-packing benchmark
+  follow under "Experiment swarms".
+- CI runs once per change (pull requests and pushes to main, a newer push cancelling the older run), lints once,
+  and tests Python 3.11 and 3.13 on Linux and 3.13 on macOS instead of nine combinations. The wheel smoke test still
+  runs on Linux and macOS, in CI and before every release.
 - The automatic re-run also takes a report from SubagentStop. Claude Code 2.1.330 returns `async_launched` for
   every Agent call, background or not, so the foreground PostToolUse result never came and no report was re-run.
   The "re-running" line and the result are delivered as notes at the next hook that can give context (the task

@@ -2,7 +2,8 @@
 # A new user's first minute, run from a built wheel: `uvx benchbook doctor` on a machine that has never had benchbook,
 # `benchbook init` in an empty directory, then `doctor` again. It fails when the wheel misses a file the commands
 # need, or when the embedded Postgres dependency does not install or start on this OS. CI runs it on fresh Linux and
-# macOS runners for every push (ci.yml) and on the release artifacts before they are published (release.yml).
+# macOS runners for every pull request and push to main (ci.yml) and on the release artifacts before they are
+# published (release.yml).
 #
 # HOME is a temp directory for the run, so the default data and state directories are the ones exercised (on macOS
 # the data directory has a space) and your real ledger is never read or written.
