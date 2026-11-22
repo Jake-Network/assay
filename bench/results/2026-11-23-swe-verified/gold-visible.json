@@ -1,0 +1,40 @@
+{
+  "what": "Post-hoc diagnostic, not in the pre-registration: the visible check run on the reference fix (swe_check --mode visible --gold) for the 7 refuted completions, after the batch ended.",
+  "results": [
+    {
+      "instance_id": "sympy__sympy-18763",
+      "exit": 0,
+      "summary": "swe_check visible sympy__sympy-18763 | PASS_TO_PASS: 141/141 passed | PASS"
+    },
+    {
+      "instance_id": "django__django-15127",
+      "exit": 0,
+      "summary": "swe_check visible django__django-15127 | PASS_TO_PASS: 1/1 passed | PASS"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-4970",
+      "exit": 0,
+      "summary": "swe_check visible pylint-dev__pylint-4970 | PASS_TO_PASS: 17/17 passed | PASS"
+    },
+    {
+      "instance_id": "django__django-13807",
+      "exit": 0,
+      "summary": "swe_check visible django__django-13807 | PASS_TO_PASS: 38/38 passed | PASS"
+    },
+    {
+      "instance_id": "django__django-13089",
+      "exit": 1,
+      "summary": "swe_check visible django__django-13089 | PASS_TO_PASS: 348/349 passed | FAIL"
+    },
+    {
+      "instance_id": "django__django-15569",
+      "exit": 1,
+      "summary": "swe_check visible django__django-15569 | PASS_TO_PASS: 241/242 passed | FAIL"
+    },
+    {
+      "instance_id": "django__django-15315",
+      "exit": 1,
+      "summary": "swe_check visible django__django-15315 | PASS_TO_PASS: 32/33 passed |   FAILED   Field instances from abstract models are not equal. | FAIL"
+    }
+  ]
+}

@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- Measured the false completion rate on SWE-bench Verified (bench/results/2026-11-23-swe-verified/): 7 of 39
+  completions failed a re-run of the declared checks, 17.9% (95% CI 9.0% to 32.7%); spec §8 keeps P0 and P1.
 - Review fixes (PR #4). `benchbook uninstall` keeps `.benchbook/` when git cannot say whether it is tracked, and
   `--purge` removes only a PostgreSQL cluster whose server is confirmed stopped (`benchbook db stop` now fails when
   it is not). A retried automatic re-run finishes from the attempt its first try recorded instead of running the

@@ -1,0 +1,943 @@
+{
+  "django__django-11880": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 29.9,
+        "tail": "swe_check visible django__django-11880\nPASS_TO_PASS: 114/114 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 23.1,
+        "tail": "swe_check hidden django__django-11880\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 114/114 passed\n  FAILED   test_field_deep_copy_error_messages (forms_tests.tests.test_forms.FormsTestCase)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 29.3,
+        "tail": "swe_check hidden django__django-11880\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 114/114 passed\nPASS\n"
+      }
+    }
+  },
+  "pytest-dev__pytest-7521": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 27.2,
+        "tail": "swe_check visible pytest-dev__pytest-7521\nPASS_TO_PASS: 124/124 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 26.9,
+        "tail": "swe_check hidden pytest-dev__pytest-7521\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 125/125 passed\n  FAILED   testing/test_capture.py::TestCaptureFixture::test_cafd_preserves_newlines[\\r\\n]\n  FAILED   testing/test_capture.py::TestCaptureFixture::test_cafd_preserves_newlines[\\r]\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 29.1,
+        "tail": "swe_check hidden pytest-dev__pytest-7521\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 125/125 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-15499": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.6,
+        "tail": "swe_check visible django__django-15499\nPASS_TO_PASS: 35/35 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.7,
+        "tail": "swe_check hidden django__django-15499\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 35/35 passed\n  FAILED   test_create_alter_model_managers (migrations.test_optimizer.OptimizerTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.6,
+        "tail": "swe_check hidden django__django-15499\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 35/35 passed\nPASS\n"
+      }
+    }
+  },
+  "sympy__sympy-15809": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 32.6,
+        "tail": "swe_check visible sympy__sympy-15809\nPASS_TO_PASS: 10/10 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 28.9,
+        "tail": "swe_check hidden sympy__sympy-15809\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 10/10 passed\n  ERROR    test_Min\n  ERROR    test_Max\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 32.6,
+        "tail": "swe_check hidden sympy__sympy-15809\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 10/10 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-14373": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.9,
+        "tail": "swe_check visible django__django-14373\nPASS_TO_PASS: 18/18 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.5,
+        "tail": "swe_check hidden django__django-14373\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 19/19 passed\n  FAILED   test_Y_format_year_before_1000 (utils_tests.test_dateformat.DateFormatTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.1,
+        "tail": "swe_check hidden django__django-14373\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 19/19 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-11179": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.1,
+        "tail": "swe_check visible django__django-11179\nPASS_TO_PASS: 40/40 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 24.3,
+        "tail": "swe_check hidden django__django-11179\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 40/40 passed\n  FAILED   test_fast_delete_instance_set_pk_none (delete.tests.FastDeleteTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 27.5,
+        "tail": "swe_check hidden django__django-11179\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 40/40 passed\nPASS\n"
+      }
+    }
+  },
+  "pytest-dev__pytest-7205": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.1,
+        "tail": "swe_check visible pytest-dev__pytest-7205\nPASS_TO_PASS: 16/16 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.0,
+        "tail": "swe_check hidden pytest-dev__pytest-7205\nFAIL_TO_PASS: 0/10 passed\nPASS_TO_PASS: 16/16 passed\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameters[--setup-only]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameter_ids[--setup-only]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameter_ids_function[--setup-only]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameters[--setup-plan]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameter_ids[--setup-plan]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameter_ids_function[--setup-plan]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameters[--setup-show]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameter_ids[--setup-show]\n  FAILED   testing/test_setuponly.py::test_show_fixtures_with_parameter_ids_function[--setup-show]\n  FAILED   testing/test_setuponly.py::test_show_fixture_action_with_bytes\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.6,
+        "tail": "swe_check hidden pytest-dev__pytest-7205\nFAIL_TO_PASS: 10/10 passed\nPASS_TO_PASS: 16/16 passed\nPASS\n"
+      }
+    }
+  },
+  "sphinx-doc__sphinx-8721": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.1,
+        "tail": "swe_check visible sphinx-doc__sphinx-8721\nPASS_TO_PASS: 2/2 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 21.9,
+        "tail": "swe_check hidden sphinx-doc__sphinx-8721\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 3/3 passed\n  FAILED   tests/test_ext_viewcode.py::test_viewcode_epub_default\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.5,
+        "tail": "swe_check hidden sphinx-doc__sphinx-8721\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 3/3 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-12193": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.3,
+        "tail": "swe_check visible django__django-12193\nPASS_TO_PASS: 11/11 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.8,
+        "tail": "swe_check hidden django__django-12193\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 11/11 passed\n  FAILED   test_get_context_does_not_mutate_attrs (forms_tests.widget_tests.test_checkboxinput.CheckboxInputTest)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.3,
+        "tail": "swe_check hidden django__django-12193\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 11/11 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-15104": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.4,
+        "tail": "swe_check visible django__django-15104\nPASS_TO_PASS: 131/131 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.6,
+        "tail": "swe_check hidden django__django-15104\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 131/131 passed\n  ERROR    test_add_custom_fk_with_hardcoded_to (migrations.test_autodetector.AutodetectorTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.4,
+        "tail": "swe_check hidden django__django-15104\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 131/131 passed\nPASS\n"
+      }
+    }
+  },
+  "sympy__sympy-14711": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.2,
+        "tail": "swe_check visible sympy__sympy-14711\nPASS_TO_PASS: 2/2 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.0,
+        "tail": "swe_check hidden sympy__sympy-14711\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 2/2 passed\n  ERROR    test_Vector\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.7,
+        "tail": "swe_check hidden sympy__sympy-14711\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 2/2 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-14765": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.7,
+        "tail": "swe_check visible django__django-14765\nPASS_TO_PASS: 64/64 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.2,
+        "tail": "swe_check hidden django__django-14765\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 64/64 passed\n  FAILED   test_real_apps_non_set (migrations.test_state.StateTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.0,
+        "tail": "swe_check hidden django__django-14765\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 64/64 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-9296": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.2,
+        "tail": "swe_check visible django__django-9296\nPASS_TO_PASS: 20/20 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.3,
+        "tail": "swe_check hidden django__django-9296\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 20/20 passed\n  MISSING  test_paginator_iteration (pagination.tests.PaginationTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.6,
+        "tail": "swe_check hidden django__django-9296\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 20/20 passed\nPASS\n"
+      }
+    }
+  },
+  "sympy__sympy-18763": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.5,
+        "tail": "swe_check visible sympy__sympy-18763\nPASS_TO_PASS: 141/141 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 23.3,
+        "tail": "swe_check hidden sympy__sympy-18763\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 141/141 passed\n  FAILED   test_latex_subs\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 26.0,
+        "tail": "swe_check hidden sympy__sympy-18763\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 141/141 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-15127": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.9,
+        "tail": "swe_check visible django__django-15127\nPASS_TO_PASS: 1/1 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.2,
+        "tail": "swe_check hidden django__django-15127\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 1/1 passed\n  FAILED   test_override_settings_level_tags (messages_tests.tests.TestLevelTags)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.8,
+        "tail": "swe_check hidden django__django-15127\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 1/1 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-17029": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.5,
+        "tail": "swe_check visible django__django-17029\nPASS_TO_PASS: 43/43 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.2,
+        "tail": "swe_check hidden django__django-17029\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 43/43 passed\n  FAILED   test_clear_cache (apps.tests.AppsTests.test_clear_cache)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.7,
+        "tail": "swe_check hidden django__django-17029\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 43/43 passed\nPASS\n"
+      }
+    }
+  },
+  "sympy__sympy-19637": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 20.9,
+        "tail": "swe_check visible sympy__sympy-19637\nPASS_TO_PASS: 40/40 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 20.6,
+        "tail": "swe_check hidden sympy__sympy-19637\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 40/40 passed\n  ERROR    test_kernS\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.4,
+        "tail": "swe_check hidden sympy__sympy-19637\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 40/40 passed\nPASS\n"
+      }
+    }
+  },
+  "sphinx-doc__sphinx-9591": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.7,
+        "tail": "swe_check visible sphinx-doc__sphinx-9591\nPASS_TO_PASS: 44/44 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.3,
+        "tail": "swe_check hidden sphinx-doc__sphinx-9591\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 44/44 passed\n  FAILED   tests/test_domain_py.py::test_pyproperty\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.9,
+        "tail": "swe_check hidden sphinx-doc__sphinx-9591\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 44/44 passed\nPASS\n"
+      }
+    }
+  },
+  "pylint-dev__pylint-4970": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 19.9,
+        "tail": "swe_check visible pylint-dev__pylint-4970\nPASS_TO_PASS: 17/17 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 19.5,
+        "tail": "swe_check hidden pylint-dev__pylint-4970\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 17/17 passed\n  FAILED   tests/checkers/unittest_similar.py::test_set_duplicate_lines_to_zero\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.1,
+        "tail": "swe_check hidden pylint-dev__pylint-4970\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 17/17 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-13807": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.2,
+        "tail": "swe_check visible django__django-13807\nPASS_TO_PASS: 38/38 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 23.0,
+        "tail": "swe_check hidden django__django-13807\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 38/38 passed\n  ERROR    test_check_constraints_sql_keywords (backends.tests.FkConstraintsTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.5,
+        "tail": "swe_check hidden django__django-13807\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 38/38 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-13089": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 95.1,
+        "tail": "swe_check visible django__django-13089\nPASS_TO_PASS: 349/349 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 89.7,
+        "tail": "swe_check hidden django__django-13089\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 351/352 passed\n  ERROR    test_cull_delete_when_store_empty (cache.tests.DBCacheTests)\n  ERROR    test_cull_delete_when_store_empty (cache.tests.DBCacheWithTimeZoneTests)\n  FAILED   test_touch (cache.tests.LocMemCacheTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 97.6,
+        "tail": "swe_check hidden django__django-13089\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 352/352 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-15569": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.6,
+        "tail": "swe_check visible django__django-15569\nPASS_TO_PASS: 242/242 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 24.3,
+        "tail": "swe_check hidden django__django-15569\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 242/242 passed\n  FAILED   test_get_transforms (model_fields.test_jsonfield.TestMethods)\n  FAILED   test_lookups_caching (custom_lookups.tests.LookupTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 26.8,
+        "tail": "swe_check hidden django__django-15569\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 242/242 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-13363": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.0,
+        "tail": "swe_check visible django__django-13363\nPASS_TO_PASS: 76/76 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.7,
+        "tail": "swe_check hidden django__django-13363\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 76/76 passed\n  FAILED   test_trunc_timezone_applied_before_truncation (db_functions.datetime.test_extract_trunc.DateFunctionWithTimeZoneTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.5,
+        "tail": "swe_check hidden django__django-13363\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 76/76 passed\nPASS\n"
+      }
+    }
+  },
+  "psf__requests-1142": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 19.2,
+        "tail": "swe_check visible psf__requests-1142\nPASS_TO_PASS: 5/5 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 19.3,
+        "tail": "swe_check hidden psf__requests-1142\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 5/5 passed\n  FAILED   test_requests.py::RequestsTestCase::test_no_content_length\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 21.8,
+        "tail": "swe_check hidden psf__requests-1142\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 5/5 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-14855": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 51.4,
+        "tail": "swe_check visible django__django-14855\nPASS_TO_PASS: 324/324 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 49.6,
+        "tail": "swe_check hidden django__django-14855\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 325/325 passed\n  FAILED   test_readonly_foreignkey_links_custom_admin_site (admin_views.tests.ReadonlyTest)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 52.3,
+        "tail": "swe_check hidden django__django-14855\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 325/325 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-15315": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.9,
+        "tail": "swe_check visible django__django-15315\nPASS_TO_PASS: 33/33 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.8,
+        "tail": "swe_check hidden django__django-15315\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 33/33 passed\n  FAILED   test_hash_immutability (model_fields.tests.BasicFieldTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.2,
+        "tail": "swe_check hidden django__django-15315\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 33/33 passed\nPASS\n"
+      }
+    }
+  },
+  "psf__requests-1921": {
+    "ok": false,
+    "steps": {
+      "visible_base": {
+        "exit": 1,
+        "want": 0,
+        "seconds": 57.8,
+        "tail": "swe_check visible psf__requests-1921\nPASS_TO_PASS: 105/107 passed\n  FAILED   test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable\n  FAILED   test_requests.py::RequestsTestCase::test_pyopenssl_redirect\nFAIL\n"
+      }
+    }
+  },
+  "psf__requests-1724": {
+    "ok": false,
+    "steps": {
+      "visible_base": {
+        "exit": 1,
+        "want": 0,
+        "seconds": 53.8,
+        "tail": "swe_check visible psf__requests-1724\nPASS_TO_PASS: 77/78 passed\n  FAILED   test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable\nFAIL\n"
+      }
+    }
+  },
+  "psf__requests-2317": {
+    "ok": false,
+    "steps": {
+      "visible_base": {
+        "exit": 1,
+        "want": 0,
+        "seconds": 471.5,
+        "tail": "swe_check visible psf__requests-2317\nPASS_TO_PASS: 129/133 passed\n  FAILED   test_requests.py::RequestsTestCase::test_auth_is_stripped_on_redirect_off_host\n  FAILED   test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable\n  FAILED   test_requests.py::RequestsTestCase::test_pyopenssl_redirect\n  FAILED   test_requests.py::TestTimeout::test_stream_timeout\nFAIL\n"
+      }
+    }
+  },
+  "psf__requests-1766": {
+    "ok": false,
+    "steps": {
+      "visible_base": {
+        "exit": 1,
+        "want": 0,
+        "seconds": 56.1,
+        "tail": "swe_check visible psf__requests-1766\nPASS_TO_PASS: 78/79 passed\n  FAILED   test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable\nFAIL\n"
+      }
+    }
+  },
+  "django__django-11964": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.9,
+        "tail": "swe_check visible django__django-11964\nPASS_TO_PASS: 15/15 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 23.1,
+        "tail": "swe_check hidden django__django-11964\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 15/15 passed\n  MISSING  test_str (model_enums.tests.ChoicesTests)\n  MISSING  test_textchoices (model_enums.tests.ChoicesTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.7,
+        "tail": "swe_check hidden django__django-11964\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 15/15 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-11239": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.8,
+        "tail": "swe_check visible django__django-11239\nPASS_TO_PASS: 5/5 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.3,
+        "tail": "swe_check hidden django__django-11239\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 5/5 passed\n  MISSING  test_ssl_certificate (dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.2,
+        "tail": "swe_check hidden django__django-11239\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 5/5 passed\nPASS\n"
+      }
+    }
+  },
+  "sphinx-doc__sphinx-9367": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 20.3,
+        "tail": "swe_check visible sphinx-doc__sphinx-9367\nPASS_TO_PASS: 25/25 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 19.9,
+        "tail": "swe_check hidden sphinx-doc__sphinx-9367\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 24/25 passed\n  FAILED   tests/test_pycode_ast.py::test_unparse[(1,)-(1,)]\n  MISSING  tests/test_pycode_ast.py::test_unparse[(1,\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.4,
+        "tail": "swe_check hidden sphinx-doc__sphinx-9367\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 25/25 passed\nPASS\n"
+      }
+    }
+  },
+  "sphinx-doc__sphinx-7454": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 21.5,
+        "tail": "swe_check visible sphinx-doc__sphinx-7454\nPASS_TO_PASS: 27/27 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 20.9,
+        "tail": "swe_check hidden sphinx-doc__sphinx-7454\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 27/27 passed\n  FAILED   tests/test_domain_py.py::test_parse_annotation\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.3,
+        "tail": "swe_check hidden sphinx-doc__sphinx-7454\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 27/27 passed\nPASS\n"
+      }
+    }
+  },
+  "sphinx-doc__sphinx-7889": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 19.8,
+        "tail": "swe_check visible sphinx-doc__sphinx-7889\nPASS_TO_PASS: 5/5 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 19.7,
+        "tail": "swe_check hidden sphinx-doc__sphinx-7889\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 5/5 passed\n  FAILED   tests/test_ext_autodoc_mock.py::test_MockObject\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.3,
+        "tail": "swe_check hidden sphinx-doc__sphinx-7889\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 5/5 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-15467": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.4,
+        "tail": "swe_check visible django__django-15467\nPASS_TO_PASS: 62/62 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.9,
+        "tail": "swe_check hidden django__django-15467\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 62/62 passed\n  FAILED   test_radio_fields_foreignkey_formfield_overrides_empty_label (admin_widgets.tests.AdminFormfieldForDBFieldTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.4,
+        "tail": "swe_check hidden django__django-15467\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 62/62 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-14089": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.4,
+        "tail": "swe_check visible django__django-14089\nPASS_TO_PASS: 43/43 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.4,
+        "tail": "swe_check hidden django__django-14089\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 43/43 passed\n  ERROR    test_reversed (utils_tests.test_datastructures.OrderedSetTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.8,
+        "tail": "swe_check hidden django__django-14089\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 43/43 passed\nPASS\n"
+      }
+    }
+  },
+  "sympy__sympy-19954": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.9,
+        "tail": "swe_check visible sympy__sympy-19954\nPASS_TO_PASS: 56/56 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.1,
+        "tail": "swe_check hidden sympy__sympy-19954\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 56/56 passed\n  ERROR    test_sylow_subgroup\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.9,
+        "tail": "swe_check hidden sympy__sympy-19954\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 56/56 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-13417": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.2,
+        "tail": "swe_check visible django__django-13417\nPASS_TO_PASS: 280/280 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 23.8,
+        "tail": "swe_check hidden django__django-13417\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 280/280 passed\n  FAILED   test_annotated_default_ordering (queries.tests.QuerysetOrderedTests)\n  FAILED   test_annotated_values_default_ordering (queries.tests.QuerysetOrderedTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 26.2,
+        "tail": "swe_check hidden django__django-13417\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 280/280 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-14404": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 51.7,
+        "tail": "swe_check visible django__django-14404\nPASS_TO_PASS: 323/323 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 49.3,
+        "tail": "swe_check hidden django__django-14404\nFAIL_TO_PASS: 0/2 passed\nPASS_TO_PASS: 323/323 passed\n  FAILED   test_missing_slash_append_slash_true_force_script_name (admin_views.tests.AdminSiteFinalCatchAllPatternTests)\n  FAILED   test_missing_slash_append_slash_true_script_name (admin_views.tests.AdminSiteFinalCatchAllPatternTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 52.2,
+        "tail": "swe_check hidden django__django-14404\nFAIL_TO_PASS: 2/2 passed\nPASS_TO_PASS: 323/323 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-11951": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 22.8,
+        "tail": "swe_check visible django__django-11951\nPASS_TO_PASS: 21/21 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 22.6,
+        "tail": "swe_check hidden django__django-11951\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 21/21 passed\n  FAILED   test_explicit_batch_size_respects_max_batch_size (bulk_create.tests.BulkCreateTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.5,
+        "tail": "swe_check hidden django__django-11951\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 21/21 passed\nPASS\n"
+      }
+    }
+  },
+  "django__django-14580": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 24.0,
+        "tail": "swe_check visible django__django-14580\nPASS_TO_PASS: 49/49 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 23.2,
+        "tail": "swe_check hidden django__django-14580\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 49/49 passed\n  FAILED   test_serialize_type_model (migrations.test_writer.WriterTests)\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 25.7,
+        "tail": "swe_check hidden django__django-14580\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 49/49 passed\nPASS\n"
+      }
+    }
+  },
+  "sympy__sympy-12481": {
+    "ok": true,
+    "steps": {
+      "visible_base": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 20.5,
+        "tail": "swe_check visible sympy__sympy-12481\nPASS_TO_PASS: 7/7 passed\nPASS\n"
+      },
+      "hidden_base": {
+        "exit": 1,
+        "want": 1,
+        "seconds": 20.3,
+        "tail": "swe_check hidden sympy__sympy-12481\nFAIL_TO_PASS: 0/1 passed\nPASS_TO_PASS: 7/7 passed\n  ERROR    test_args\nFAIL\n"
+      },
+      "hidden_gold": {
+        "exit": 0,
+        "want": 0,
+        "seconds": 23.0,
+        "tail": "swe_check hidden sympy__sympy-12481\nFAIL_TO_PASS: 1/1 passed\nPASS_TO_PASS: 7/7 passed\nPASS\n"
+      }
+    }
+  }
+}
