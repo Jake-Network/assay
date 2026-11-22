@@ -13,7 +13,8 @@ the capture and scoring pipeline with two synthetic phases and six arms.
 **Tasks**: [ten fixed RoadmapBench tasks and source revisions, plus task manifest and evaluator hashes]
 **Claude-mem**: [pinned plugin revision, worker provider, model and spending cap]
 **Commits**: [benchbook revision, task adapter and evaluator revisions]
-**H5 budget**: [per-run and total caps for the circle-packing sweep]
+**H5 budget**: configurations A and C × requested workers 8, 16 and 30 × 3 runs (18 runs), model claude-sonnet-5-5,
+USD 5 per run (`--max-budget-usd 5`), USD 90 in total; Claude Code 2.1.330.
 
 ## Arms and schedule
 
