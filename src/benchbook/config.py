@@ -179,6 +179,9 @@ class LocalConfig:
     # [report] out_of_scope_heading: the heading of the out-of-scope section in an implementer's final report
     out_of_scope_heading: str | None = None
     verify: VerifyPrep = field(default_factory=VerifyPrep)  # [verify] copy, prepare, prepare_timeout
+    # [report] agents: the subagent types whose reports are read for findings when BENCHBOOK_HOOK_AGENTS is unset
+    # (["*"]: every subagent). Their reports leave findings only, no [auto-captured] note (T05).
+    report_agents: list[str] = field(default_factory=list)
 
 
 def _config_in(d: Path) -> Path | None:
@@ -234,6 +237,7 @@ def load(start: Path | None = None) -> LocalConfig:
         cfg.checks = parse_checks(data.get("checks"), str(p))
         cfg.guard_paths, cfg.guard_base = parse_guard(data.get("guard"), str(p))
         cfg.out_of_scope_heading = parse_report(data.get("report"), str(p))
+        cfg.report_agents = parse_report_agents(data.get("report"), str(p))
         cfg.verify = parse_verify(data.get("verify"), str(p))
     if project := env("PROJECT"):
         cfg.project = project
@@ -366,7 +370,7 @@ def parse_verify(table: Any, where: str = "config.toml") -> VerifyPrep:
     return VerifyPrep(tuple(dict.fromkeys(copy)), prepare.strip() if prepare else None, float(timeout))
 
 
-_REPORT_KEYS = {"out_of_scope_heading"}
+_REPORT_KEYS = {"out_of_scope_heading", "agents"}
 HEADING_MAX = 100
 
 
@@ -381,7 +385,8 @@ def parse_report(table: Any, where: str = "config.toml") -> str | None:
     if not isinstance(table, dict):
         raise BenchbookError(f"{where}: [report] must be a table")
     if unknown := sorted(set(table) - _REPORT_KEYS):
-        raise BenchbookError(f"{where}: [report]: unknown key {', '.join(unknown)} (known: out_of_scope_heading)")
+        raise BenchbookError(f"{where}: [report]: unknown key {', '.join(unknown)} (known: out_of_scope_heading, "
+                             "agents)")
     heading = table.get("out_of_scope_heading")
     if heading is None:
         return None
@@ -389,3 +394,17 @@ def parse_report(table: Any, where: str = "config.toml") -> str | None:
         raise BenchbookError(f"{where}: [report] out_of_scope_heading must be one line of text "
                              f"(1-{HEADING_MAX} characters), such as \"범위 밖\" or \"Out of scope\"")
     return heading.strip()
+
+
+def parse_report_agents(table: Any, where: str = "config.toml") -> list[str]:
+    """[report] agents: subagent types (with or without a plugin prefix) whose reports the hook reads for findings,
+    or ["*"] for every subagent."""
+    from .errors import BenchbookError
+
+    if not isinstance(table, dict) or table.get("agents") is None:
+        return []
+    agents = table["agents"]
+    if not isinstance(agents, list) or not all(isinstance(a, str) and a.strip() and len(a) <= 100 for a in agents):
+        raise BenchbookError(f'{where}: [report] agents must be a list of subagent types, such as ["implementer"] '
+                             'or ["*"]')
+    return [a.strip() for a in agents]

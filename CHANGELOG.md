@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- Out-of-scope findings in one line: `범위 밖: ...` (also as a list item, in bold, with a full-width colon) is a
+  finding. `[report] agents` (subagent types or `["*"]`) reads those subagents' reports for findings only, with no
+  `[auto-captured]` note, while `BENCHBOOK_HOOK_AGENTS` is unset. `init --pack code` writes a `[report]` table
+  with `agents = ["*"]`.
 - Environment failures: a failing check that the implementer's own clean run of the commit passed (`via`) is run
   again at the merge-base (cached per merge-base and check definition in the state directory). When every failing
   check fails the same way there, the attempt is an environment failure: `run_status` error,
