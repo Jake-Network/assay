@@ -45,7 +45,7 @@ The plugin (`integrations/claude-code/`) contains:
 | `agents/benchbook-worker.md` | worker subagent: worker tools only (no `benchbook_decide`, `benchbook_create_tasks`, `benchbook_cancel_task`) |
 | `skills/benchbook/SKILL.md` | rules for any agent using the ledger |
 | `skills/benchbook-lead/SKILL.md` | the lead loop, `/benchbook:benchbook-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PreToolUse(Bash)` -> `benchbook hook bash-start`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
 
 For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
 
@@ -137,16 +137,12 @@ nothing else (no database module is imported), and compares the command with eac
 - One leading `cd DIR &&` is allowed; the check is then looked up, and its commit read, in DIR.
 - The check must have run from the repository root, where a declared check runs; the same words run in a
   subdirectory are observed as `unrecordable`.
-- A word with `{junit}` in the declaration matches a word of that shape or nothing. For a `junit = true` check
-  that exits 0, that word is where the hook reads the report: the run is recorded as passed only when that file
-  was written by this run and shows a test that ran and none that failed (a report with no test run is recorded as
-  a failure, as `check run` records it). "Written by this run" links the two ends of the tool call, with no clock:
-  `benchbook hook bash-start` (PreToolUse on Bash) notes the report's state (inode, size, mtime) before the
-  command runs, under its `tool_use_id`, and afterwards the report must exist and differ from that note. A report
-  also counts once only (`junit-used.jsonl` in the spool, checked and marked under one lock, so hooks that end at
-  once cannot share it). Without the word, without the PreToolUse note (an older hooks.json, or a harness other than
-  Claude Code), or with a report the command did not write, the run is `unrecordable`: exit 0 alone proves nothing
-  for a JUnit check, and the completion gate asks for `benchbook check run`.
+- A word with `{junit}` in the declaration matches a word of that shape or nothing. A raw Bash call for a
+  `junit = true` check can record a known failure or timeout from the tool response. A successful raw call is
+  observed as `unrecordable`: a shared report path cannot identify which invocation wrote the XML. Run
+  `benchbook check run NAME` to record a pass. It supplies a separate temporary report path for each invocation
+  and accepts a pass only when the report contains a test that ran and no failures. The completion gate ignores
+  successful raw Bash records for JUnit checks, including ones recorded by older releases.
 - The remaining words must be equal. Extra arguments (`-k upload`, `-x`) are a different command and do not
   match.
 
@@ -207,13 +203,14 @@ a state directory never record each other's entries. Replay an entry with the to
 a rotation (`benchbook agent add NAME --rotate`) the old token no longer authenticates, so the processor notes in
 each token's spool (`writer.info`) which agent the ledger said that token was; `benchbook hook replay` under the
 new token moves into its own spool the entries of the old one whose project names the same agent there, and records
-them. The move is idempotent (a copy's name is fixed by its original, and a processed copy is remembered in
-`adopted.done`), so a replay retried after a failed removal records nothing twice. Every token's spool notes its
+them. Each entry keeps its original receipt through repeated rotations. For a check attempt, that receipt is its
+experiment ID in the ledger, so a retry after the database commits reuses the same row even if local cleanup or
+writing `adopted.done` failed. Separate check executions keep separate receipts. Every token's spool notes its
 database target when its first entry is queued, so entries of a token no processor ever confirmed (the ledger was
 unreachable for its whole life) are found too: they stay where they are, and replay counts them as `held`, names
-the folder and exits non-zero. An entry that
-names an agent (`check run` with `--agent` or `BENCHBOOK_AGENT`) different from the token's is refused, moves to
-the spool's `dead/` and is recorded by `benchbook hook replay` run with that agent's token. On a
+the folder and exits non-zero. If replay cannot check the current token's agent because the database is
+unavailable, it reports the entries still queued. A check that names an agent (`--agent` or `BENCHBOOK_AGENT`)
+different from the token's agent moves to `dead/`; run the check with that agent's token to record its result. On a
 `benchbook_writer` login without a token the processor cannot register `hook` and the entry goes to `dead/`, as
 for the result-capture hook. The gate only reads (`projects`, `experiments_valid`), which the writer login may.
 

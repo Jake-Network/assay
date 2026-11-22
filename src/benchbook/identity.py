@@ -16,7 +16,7 @@ from typing import Any
 
 import psycopg
 
-from .errors import BenchbookError, NotFound, PermissionDenied
+from .errors import BenchbookError, InvalidAgentToken, NotFound, PermissionDenied
 
 TOKEN_PREFIX = "bbt_"  # recognisable in a secret scanner; carries no information
 _OWNER_ONLY = ("this needs the database owner's connection: the benchbook_writer login cannot register agents or "
@@ -49,7 +49,7 @@ def authenticate(conn: psycopg.Connection[Any], project_id: str, token: str) -> 
         row = conn.execute("SELECT agent_id, agent_role FROM benchbook.authenticate(%s, %s)",
                            (project_id, token)).fetchone()
     except psycopg.errors.InvalidPassword as e:
-        raise PermissionDenied(
+        raise InvalidAgentToken(
             f"BENCHBOOK_TOKEN is not valid for project {project_id}: it was revoked or replaced, or it was issued "
             "for another project. Ask the operator for a new one (benchbook agent add NAME --rotate).") from e
     assert row is not None

@@ -26,6 +26,10 @@ class PermissionDenied(BenchbookError):
     pass
 
 
+class InvalidAgentToken(PermissionDenied):
+    """The database rejected this token for the requested project."""
+
+
 class LeaseLost(BenchbookError):
     def __init__(self, task_id: str):
         super().__init__(

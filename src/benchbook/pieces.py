@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import psycopg
+
 from . import globs
 from .errors import BenchbookError, LeaseLost, ValidationFailed
 from .ids import short
@@ -98,72 +100,64 @@ def start(lg: Ledger, piece: str, patterns: Sequence[str], repo: Path, lease_sec
     another live intent holds this piece or overlapping paths; nothing is written then."""
     piece = check_name(piece)
     lease = PIECE_LEASE if lease_seconds is None else lease_seconds
-    mine = [t for t in lg.my_intents() if PIECE_TAG in t.tags and t.spec.get("piece") == piece]
-    if not patterns and not mine and (last := _expired(lg, piece)) is not None:
-        patterns, tags = last["declared"], [*last["tags"], *tags]  # start again what ran out, as it was declared
-    if not patterns and not mine:
-        raise BenchbookError(f"declare the paths piece {piece} will change: --paths 'glob' (repeatable)")
-    paths, new = expand(patterns, tracked_files(repo)) if patterns else (None, [])
-    if mine:
-        cur = mine[0]
-        patch: dict[str, Any] = {} if paths is None else {"paths": paths, "declared": _declared(patterns)}
-        try:
-            t = lg.update_intent(cur.id, patch, lease_seconds=lease, exclusive=["piece"], exclusive_paths=["paths"])
-        except LeaseLost:
-            # Either the lease ran out since my_intents read it (the paths are free for anyone, so they are taken
-            # again as a new piece, through the overlap check, never by reviving the old one), or the piece was
-            # released meanwhile (piece done, a lead's cancel): then there is nothing to restore.
-            if paths is None and not _ran_out(lg, cur.id):
-                raise BenchbookError(f"piece {piece} ({cur.short_id}) was released (or taken over) while it was "
-                                     "being renewed; start it again with --paths") from None
-            if paths is None:
-                patterns = [p for p in cur.spec.get("declared") or [] if isinstance(p, str)]
-                paths, new = expand(patterns, tracked_files(repo))
-            tags = [*_extra_tags(cur.tags, piece), *tags]
-        else:
-            extra = [x for x in tags if x not in cur.tags]
-            note = (f"tags are fixed when a piece starts; {', '.join(extra)} not added (piece done, then start "
-                    "again)" if extra else None)
-            return Started(t, True, list(t.spec.get("paths", [])), new, note)
-    assert paths is not None
-    spec = {"piece": piece, "paths": paths, "declared": _declared(patterns)}
-    t = lg.create_intent(f"piece {piece}", spec, tags=[PIECE_TAG, f"piece:{piece}", *tags], lease_seconds=lease,
-                         exclusive=["piece"], exclusive_paths=["paths"])
-    return Started(t, False, paths, new)
+    declared = _declared(patterns)
+    paths, new = expand(declared, tracked_files(repo)) if patterns else (None, [])
+    with lg._intent_transaction() as conn:
+        previous = _latest(conn, lg, piece)
+        if previous is not None and previous["live"]:
+            patch = {} if paths is None else {"paths": paths, "declared": declared}
+            try:
+                task = lg._update_intent(conn, previous["id"], patch, lease, ["piece"], ["paths"])
+            except LeaseLost:
+                # The database clock reached expiry before the renewal. Re-read under the same lock.
+                previous = _latest(conn, lg, piece)
+            else:
+                extra = [tag for tag in tags if tag not in task.tags]
+                note = (f"tags are fixed when a piece starts; {', '.join(extra)} not added (piece done, then start "
+                        "again)" if extra else None)
+                return Started(task, True, list(task.spec.get("paths", [])), new, note)
+        if paths is None:
+            declared = _recover_paths(previous)
+            if not declared:
+                raise BenchbookError(f"declare the paths piece {piece} will change: --paths 'glob' (repeatable)")
+            assert previous is not None
+            paths, new = expand(declared, tracked_files(repo))
+            tags = [*_extra_tags(previous["tags"], piece), *tags]
+        spec = {"piece": piece, "paths": paths, "declared": declared}
+        task = lg._create_intent(conn, f"piece {piece}", spec, [PIECE_TAG, f"piece:{piece}", *tags], lease,
+                                 ["piece"], ["paths"])
+        return Started(task, False, paths, new)
 
 
 def _extra_tags(tags: Sequence[str], piece: str) -> list[str]:
     return [x for x in tags if x not in ("intent", PIECE_TAG, f"piece:{piece}")]
 
 
-# An intent whose lease ran out: still claimed past its expiry, or failed by next_task, which leaves the expiry as it
-# was. A release (complete_task, cancel_task) clears lease_expires_at.
-_RAN_OUT = ("(status = 'claimed' AND lease_expires_at <= clock_timestamp())"
-            " OR (status = 'failed' AND lease_expires_at IS NOT NULL)")
+# Creation events are ordered under the intent lock. A task's timestamp can predate the lock wait, or the wall
+# clock can step backwards; neither should make a released generation look older than one it replaced.
+_GENERATION_ORDER = ("ORDER BY (SELECT id FROM benchbook.task_events e WHERE e.task_id = t.id"
+                     " AND e.event = 'created' ORDER BY e.id LIMIT 1) DESC NULLS LAST, t.created_at DESC, t.id DESC")
 
 
-def _ran_out(lg: Ledger, task_id: Any) -> bool:
-    rows = lg.sql_internal(f"SELECT {_RAN_OUT} AS ran_out FROM benchbook.tasks WHERE project_id=%s AND id=%s",
-                           (lg.project_id, task_id))
-    return bool(rows and rows[0]["ran_out"])
+def _latest(conn: psycopg.Connection[Any], lg: Ledger, piece: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT t.id, t.status, t.spec -> 'declared' AS declared, t.tags,"
+        " t.status = 'claimed' AND t.lease_expires_at > clock_timestamp() AS live,"
+        " t.lease_expires_at IS NOT NULL AS has_expiry FROM benchbook.tasks t"
+        " WHERE t.project_id=%s AND t.lease_owner=%s AND 'intent' = ANY(t.tags)"
+        f" AND %s = ANY(t.tags) AND t.spec ->> 'piece' = %s {_GENERATION_ORDER} LIMIT 1",
+        (lg.project_id, lg.agent, PIECE_TAG, piece),
+    ).fetchone()
+    return row
 
 
-def _expired(lg: Ledger, piece: str) -> dict[str, Any] | None:
-    """lg's newest intent for PIECE, when its lease ran out without a release: its declared globs and extra tags, so
-    `piece start` without --paths takes the paths again (through the overlap check) instead of failing.
-
-    Ran out: still claimed past its expiry, or failed by expiry. next_task fails an exhausted intent whose lease ran
-    out and leaves lease_expires_at as it was; a release (piece done, done --failed, a lead's cancel) clears it. So a
-    failed intent that still has an expiry ran out, and one without was ended on purpose: nothing to restore."""
-    rows = lg.sql_internal(
-        f"SELECT spec -> 'declared' AS declared, tags, {_RAN_OUT} AS ran_out FROM benchbook.tasks"
-        " WHERE project_id=%s AND lease_owner=%s AND 'intent' = ANY(tags) AND %s = ANY(tags)"
-        " AND spec ->> 'piece' = %s ORDER BY created_at DESC LIMIT 1",
-        (lg.project_id, lg.agent, PIECE_TAG, piece))
-    if not rows or not rows[0]["ran_out"] or not isinstance(rows[0]["declared"], list):
-        return None
-    declared = [p for p in rows[0]["declared"] if isinstance(p, str)]
-    return {"declared": declared, "tags": _extra_tags(rows[0]["tags"] or [], piece)} if declared else None
+def _recover_paths(previous: dict[str, Any] | None) -> list[str]:
+    # Automatic expiry retains the deadline, including failed intents closed by next_task. An explicit
+    # completion or cancellation clears it. Only the latest generation is eligible for recovery.
+    if (previous is None or previous["live"] or not previous["has_expiry"]
+            or previous["status"] not in ("claimed", "failed") or not isinstance(previous["declared"], list)):
+        return []
+    return [path for path in previous["declared"] if isinstance(path, str)]
 
 
 def done(lg: Ledger, piece: str, failed: bool = False, summary: str = "") -> Task:
@@ -172,30 +166,28 @@ def done(lg: Ledger, piece: str, failed: bool = False, summary: str = "") -> Tas
     from .ledger import DECIDERS
 
     piece = check_name(piece)
-    rows = lg.sql_internal(
-        "SELECT id, lease_owner, lease_expires_at > now() AS live FROM benchbook.tasks WHERE project_id=%s"
-        " AND status='claimed' AND %s = ANY(tags) AND 'intent' = ANY(tags) AND spec ->> 'piece' = %s"
-        " ORDER BY created_at DESC", (lg.project_id, PIECE_TAG, piece))
-    released: Task | None = None
-    for r in rows:
-        if r["lease_owner"] != lg.agent:
-            continue
-        try:
-            t = lg.complete_task(r["id"], "failed" if failed else "done", summary)
-        except LeaseLost:
-            continue  # its lease ran out and another agent's claim marked it failed meanwhile
-        released = released or t
-    if released is not None:
-        return released
-    live = [r for r in rows if r["live"]]
-    if live and lg.role in DECIDERS:
-        return lg.cancel_task(live[0]["id"], f"piece {piece} released by {lg.agent}"
-                              + (f": {summary}" if summary else ""))
-    if live:
-        tid = short("task", live[0]["id"])
-        raise BenchbookError(f"piece {piece} is held by {live[0]['lease_owner']} ({tid}); only its holder or a lead "
-                             f"(orchestrator or human) can release it")
-    raise BenchbookError(f"no live piece {piece}: nothing to release")
+    with lg._intent_transaction() as conn:
+        rows = conn.execute(
+            "SELECT t.id, t.lease_owner, t.lease_expires_at > clock_timestamp() AS live FROM benchbook.tasks t"
+            " WHERE t.project_id=%s AND t.status='claimed' AND %s = ANY(t.tags) AND 'intent' = ANY(t.tags)"
+            f" AND t.spec ->> 'piece' = %s {_GENERATION_ORDER}", (lg.project_id, PIECE_TAG, piece),
+        ).fetchall()
+        released = None
+        for row in rows:
+            if row["lease_owner"] == lg.agent:
+                task = lg._complete_task(conn, row["id"], "failed" if failed else "done", summary)
+                released = released or task
+        if released is not None:
+            return released
+        live = next((row for row in rows if row["live"]), None)
+        if live is not None:
+            if lg.role in DECIDERS:
+                return lg._cancel_task(conn, live["id"], f"piece {piece} released by {lg.agent}"
+                                       + (f": {summary}" if summary else ""))
+            tid = short("task", live["id"])
+            raise BenchbookError(f"piece {piece} is held by {live['lease_owner']} ({tid}); only its holder or a lead "
+                                 f"(orchestrator or human) can release it")
+        raise BenchbookError(f"no live piece {piece}: nothing to release")
 
 
 def held(lg: Ledger, tags: Sequence[str] = ()) -> list[dict[str, Any]]:

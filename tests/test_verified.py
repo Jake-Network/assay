@@ -106,6 +106,17 @@ def test_replication_rule_is_unchanged_for_other_packs(db_url: str, project: str
 
 # ------------------------------------------------------------------------------------------- the rule in decide()
 
+@pytest.mark.parametrize("statuses", [{"unit": "fail", "value": "ok"}, {"unit": "ok"}])
+def test_a_rerun_requires_consistent_check_results(db_url: str, code_project: str,
+                                                 statuses: dict[str, str]) -> None:
+    impl = open_as(db_url, code_project, "impl")
+    lead = open_as(db_url, code_project, "lead")
+    claim = completion(impl)
+    inconsistent = attempt(lead, {**PASS, "checks": statuses})
+    with pytest.raises(InvalidTransition, match="not every attempt"):
+        lead.check_rerun(claim, [inconsistent])
+
+
 def test_a_self_recorded_pass_alone_cannot_verify(db_url: str, code_project: str) -> None:
     impl = open_as(db_url, code_project, "impl")
     lead = open_as(db_url, code_project, "lead")
