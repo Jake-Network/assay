@@ -12,7 +12,9 @@ claude plugin install benchbook-mcp@benchbook        # optional: the MCP server,
 `benchbook install` does the same in one line (`uv tool install benchbook==<its version>`, the marketplace, the hook
 plugin; `--mcp` adds benchbook-mcp, `--dry-run` prints the steps, `--harness codex|cursor` merges that harness's
 manifest instead). `benchbook uninstall` removes the plugins, the state directory (spool, logs, notes), this
-checkout's untracked `.benchbook/` and its `.git/info/exclude` line; the embedded database only with `--purge`.
+checkout's `.benchbook/` when `git ls-files` answers that it tracks nothing there (a failing git or a corrupt index
+keeps the folder) and its `.git/info/exclude` line; the embedded database only with `--purge`, and only when the
+data directory is a PostgreSQL cluster (`PG_VERSION`) whose server `pg_ctl status` confirms stopped.
 
 Claude Code loads a plugin's MCP server whenever the plugin is enabled, and every tool definition is in every
 prompt. That is why the hooks and the MCP server are two plugins: the hook plugin costs no tokens per turn.
@@ -277,11 +279,14 @@ re-run within the database and writer's spool. SessionStart, UserPromptSubmit, a
 results can deliver the pending note once. The asynchronous launch payload does not queue a check: the background
 agent's SubagentStop does.
 
-Each brief is also written to `.benchbook/STATE.md` (first line: when and at which HEAD), for harnesses without
-hooks and for people; when the benchbook folder is tracked, STATE.md is added to `.git/info/exclude`. The ledger
-has 5 seconds to answer (connection, queries and the brief's git calls). When it does not, session-start gives the
-last STATE.md under the line "benchbook: the ledger did not answer (...); this is STATE.md as of <time>", and
-pre-compact gives nothing. Outside a benchbook project each hook leaves after reading config.toml, without importing
+Each brief is also written to `.benchbook/STATE.md` (first line: when, at which HEAD, for which project and from
+which ledger), for harnesses without hooks and for people; when the benchbook folder is tracked, STATE.md is added to
+`.git/info/exclude`. The ledger has 5 seconds to answer (connection, queries and the brief's git calls). When it
+cannot be reached (no answer in time, a refused connection), session-start gives the last STATE.md under the line
+"benchbook: the ledger did not answer (...); this is STATE.md as of <time>", but only when that file was written for
+the same project from the same ledger (the hash of `BENCHBOOK_DATABASE_URL` without its password, or of the
+embedded cluster's directory). A ledger that answers with a refusal (a revoked token, a failed login, an unknown
+project) gets nothing. pre-compact gives nothing in either case. Outside a benchbook project each hook leaves after reading config.toml, without importing
 the database layer; nothing goes to stderr and every hook exits 0 (failures are in `hook.log`).
 
 ## Boundary hooks: what Claude Code does

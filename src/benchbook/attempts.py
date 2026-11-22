@@ -28,7 +28,7 @@ from .checks import Base, CheckResult, Integrity, Verification
 from .errors import BenchbookError
 
 GUARD_KEYS = ("guard_touched", "guard_files", "checks_changed", "guard_weakened", "guard_weakened_files",
-              "guard_added_files", "tests_before", "tests_after")
+              "guard_added_files", "tests_before", "tests_after", "fewer_tests_checks")
 STATUSES = {"ok": "ok", "fail": "fail", "timeout": "timeout", "interrupted": "not_run"}
 SOURCES = {"check-run": "check run", "bash-result": "Bash hook"}
 CONNECT_TIMEOUT = 5  # seconds; the gate fails open after that
@@ -43,6 +43,10 @@ class LocalRun(Verification):
     changed: int = 0
     integrity_note: str | None = None  # why the guard columns are missing; None when they were computed
     source_note: str = ""
+    # What check verify needs to count this run as the implementer's own pass (checks.passed_elsewhere): the hash of
+    # the definition that ran (CheckSpec.definition) and, for the Bash hook, the agent type that ran it.
+    definition: str | None = None
+    run_by: str | None = None
 
     def metrics(self) -> dict[str, Any]:
         m = super().metrics()
@@ -51,6 +55,10 @@ class LocalRun(Verification):
                 m.pop(k, None)
         m["via"] = self.via
         m["worktree_dirty"] = self.dirty
+        if self.definition:
+            m["check_definitions"] = {r.name: self.definition for r in self.results}
+        if self.run_by:
+            m["run_by"] = self.run_by
         return m
 
     def notes(self) -> str:
@@ -100,11 +108,15 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
         if ids:
             source += " (" + ", ".join(f"{k} {v}" for k, v in ids.items()) + ")"
     approach = str(data["approach"]) if data.get("approach") else None
+    definition = data.get("definition")
+    run_by = data.get("agent") or data.get("agent_type")
     return LocalRun(str(data["piece"]), sha, base, integ, [result], result.duration_ms, data.get("interrupted"),
                     approach, declared=list(base.checks),
                     via=str(data.get("via") or ("bash-hook" if event == "bash-result" else "check-run")),
                     paths=paths, dirty=bool(data.get("dirty")), changed=int(data.get("changed") or 0),
-                    integrity_note=note, source_note=source)
+                    integrity_note=note, source_note=source,
+                    definition=definition if isinstance(definition, str) and definition else None,
+                    run_by=str(run_by)[:100] if run_by else None)
 
 
 def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: UUID) -> str:

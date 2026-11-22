@@ -152,6 +152,67 @@ def test_uninstall_removes_plugins_state_and_the_local_folder(path_with_fakes: P
     assert any("kept the embedded database" in s for s in plan.done)
 
 
+def test_uninstall_keeps_the_folder_when_git_does_not_answer(path_with_fakes: Path, tmp_path: Path) -> None:
+    """A corrupt index makes git ls-files fail with no output; that is no answer, not "untracked"."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / ".benchbook").mkdir()
+    (repo / ".benchbook" / "config.toml").write_text('project = "x"\n')
+    git(repo, "add", ".benchbook")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "tracked")
+    (repo / ".git" / "index").write_bytes(b"not an index")
+    for dry in (True, False):
+        plan = install.uninstall(repo, dry_run=dry)
+        assert (repo / ".benchbook" / "config.toml").exists()
+        assert not any("benchbook folder" in s for s in plan.done)
+        assert any(s.startswith(f"kept {repo / '.benchbook'}: git ls-files failed") for s in plan.done)
+    plain = tmp_path / "plain"  # outside any repository (cli's _repo_root falls back to the cwd)
+    (plain / ".benchbook").mkdir(parents=True)
+    plan = install.uninstall(plain)
+    assert (plain / ".benchbook").is_dir() and any("git ls-files failed" in s for s in plan.done)
+
+
+def test_purge_keeps_a_directory_that_is_not_a_cluster(path_with_fakes: Path, tmp_path: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    data = tmp_path / "data"
+    (data / "keep.txt").parent.mkdir()
+    (data / "keep.txt").write_text("mine\n")
+    monkeypatch.setenv("BENCHBOOK_DATA_DIR", str(data))
+    for dry in (True, False):
+        plan = install.uninstall(None, dry_run=dry, purge=True)
+        assert (data / "keep.txt").read_text() == "mine\n"
+        assert any("not a PostgreSQL data directory" in s for s in plan.done)
+        assert not any("the embedded database:" in s for s in plan.done)
+
+
+def test_purge_removes_a_cluster_only_after_its_server_is_confirmed_stopped(
+        path_with_fakes: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchbook.db import conn
+    from benchbook.errors import BenchbookError
+
+    data = tmp_path / "pg"
+    data.mkdir()
+    (data / "PG_VERSION").write_text("16\n")
+    monkeypatch.setenv("BENCHBOOK_DATA_DIR", str(data))
+    plan = install.uninstall(None, dry_run=True, purge=True)
+    assert data.is_dir() and f"would remove the embedded database: {data}" in plan.done
+
+    def still_running(d: Path | None = None) -> bool:
+        raise BenchbookError("not confirmed stopped")
+
+    monkeypatch.setattr(conn, "stop_embedded", still_running)
+    plan = install.uninstall(None, purge=True)
+    assert (data / "PG_VERSION").is_file()
+    assert any(s.startswith(f"kept the embedded database {data}") for s in plan.done)
+
+    stopped: list[Path | None] = []
+    monkeypatch.setattr(conn, "stop_embedded", lambda d=None: stopped.append(d) or True)
+    plan = install.uninstall(None, purge=True)
+    assert stopped == [data] and not data.exists()
+    assert f"removed the embedded database: {data}" in plan.done
+
+
 # ------------------------------------------------------------------------------------------- init's proposals
 
 @pytest.mark.parametrize(("files", "want"), [

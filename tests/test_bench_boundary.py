@@ -55,6 +55,38 @@ def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
     assert "--resume" in compact["cmd"] and "--session-id" in restart["cmd"] and "--resume" in action["cmd"]
     assert compact["session"] != restart["session"] == action["session"]
     assert (out / "scripted" / "E-1" / "past-events" / "session-01" / "lead.jsonl").is_file()
+    # The scripted receipts are cumulative per session, as Claude Code's are; each call counts only its own tokens.
+    assert all(1650 < call["tokens"] < 1700 for trial in data["trials"] for call in trial["calls"])
+
+
+def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path) -> None:
+    """Claude Code's receipt for a resumed session reports the whole session's spend: $0.40, then $0.45 after a
+    call that cost $0.05. That call is within a $0.10 cap, and the batch spent $0.45, not $0.85."""
+    import argparse
+
+    from bench.boundary.run import Batch
+
+    receipts = iter([(0.40, 1000), (0.45, 1300)])
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        cost, tokens = next(receipts)
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                   "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0}}}]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=0.5, max_budget_usd=0.5, total_budget_usd=10.0, model="m",
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    batch = Batch(args, tmp_path, execute)
+    batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    args.max_budget_usd = 0.10
+    batch.capture("A", tmp_path, {}, tmp_path / "second", "work", "s-1", resume=True, probe=False)
+    second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
+    assert round(second["cost_usd"], 6) == 0.05 and second["tokens"] == 300
+    assert (second["session_cost_usd"], second["session_tokens"]) == (0.45, 1300)
+    assert round(batch.spent, 6) == 0.45
 
 
 def test_configuration_has_equal_worker_instructions_and_read_only_probes(tmp_path: Path) -> None:

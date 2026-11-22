@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import Ledger, checks
-from tests.conftest import CONFIG, TEST_EXTRA, TEST_IMPL, make_project, make_repo, piece
+from benchbook import Ledger, checks, config
+from tests.conftest import CONFIG, PY, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
 
 FIXED = {"impl.txt": "fixed\n"}
 SKIP_FIXED = TEST_IMPL.replace("def test_fixed", "import pytest\n\n\n@pytest.mark.skip\ndef test_fixed")
@@ -84,7 +84,8 @@ def test_mutation_failing_at_the_merge_base_too_is_the_environment(tmp_path: Pat
     lead.as_agent("impl").record_experiment(  # the implementer's checkout has the service: its run passed
         {"piece": "mutant", "checks": names},
         {"checks_passed": 3, "checks_total": 3, "checks": dict.fromkeys(names, "ok"), "checks_declared": names,
-         "failure_signature": None, "via": "check-run", "worktree_dirty": False}, code_ref=sha)
+         "failure_signature": None, "via": "check-run", "worktree_dirty": False,
+         "check_definitions": {n: s.definition for n, s in config.load(repo).checks.items()}}, code_ref=sha)
     v, rec = checks.verify(lead, "mutant", sha, repo=repo, reported_by="impl")
     assert v.environment is not None and v.run_status == "error"
     assert rec.relation is None and rec.discarded_id is None
@@ -98,3 +99,43 @@ def test_tests_counts_are_recorded_when_tests_change(tmp_path: Path, vtmp: Path,
     m = lead.sql_internal("SELECT metrics FROM benchbook.experiments WHERE id = %s", (rec.experiment_id,))[0]["metrics"]
     assert (m["tests_before"], m["tests_after"]) == (2, 3) and m["guard_added_files"] == ["tests/test_new.py"]
     assert m["guard_weakened"] is False and m["guard_touched"] is True
+
+
+TWO_JUNIT = f"""project = "ignored"
+
+[checks.unit]
+cmd = "{PY} -m pytest -q -p no:cacheprovider tests/unit --junitxml={{junit}}"
+junit = true
+timeout = 120
+
+[checks.smoke]
+cmd = "{PY} -m pytest -q -p no:cacheprovider tests/smoke --junitxml={{junit}}"
+junit = true
+timeout = 120
+
+[guard]
+paths = ["tests/**", "**/conftest.py", ".benchbook/config.toml"]
+base = "main"
+"""
+CASES = ('import pytest\n\n\n@pytest.mark.parametrize("c", open("cases/{0}.txt").read().split())\n'
+         'def test_{0}(c):\n    assert c\n')
+
+
+def test_fewer_tests_in_one_junit_check_are_not_made_up_by_another(tmp_path: Path, vtmp: Path, lead: Ledger) -> None:
+    """unit ran 2 tests at the merge-base and 1 here, smoke 1 and 2: 3 and 3 in all, and still a weakening. The test
+    files are untouched (the cases moved in an unguarded file); a note added under tests/ makes the guard look."""
+    repo = make_repo(tmp_path / "repo", TWO_JUNIT)
+    for path, text in {"tests/unit/test_unit.py": CASES.format("unit"), "tests/smoke/test_smoke.py":
+                       CASES.format("smoke"), "cases/unit.txt": "a\nb\n", "cases/smoke.txt": "a\n"}.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "two suites")
+    sha = piece(repo, "moved", {"cases/unit.txt": "a\n", "cases/smoke.txt": "a\nb\n", "tests/NOTES.txt": "x\n"})
+    v, rec = checks.verify(lead, "moved", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and not v.integrity.guard_weakened_files
+    assert (v.integrity.tests_before, v.integrity.tests_after) == (3, 3)
+    assert v.integrity.fewer_tests_in == ["unit"] and v.integrity.guard_weakened
+    m = lead.sql_internal("SELECT metrics FROM benchbook.experiments WHERE id = %s", (rec.experiment_id,))[0]["metrics"]
+    assert m["guard_weakened"] is True and m["fewer_tests_checks"] == ["unit"]
+    assert rec.outcome is not None and rec.outcome.decision is None and rec.outcome.person

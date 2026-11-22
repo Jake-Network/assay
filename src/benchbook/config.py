@@ -146,6 +146,16 @@ class CheckSpec:
     junit: bool = False  # read failing test ids from the JUnit XML written to {junit}
     timeout: float = 900.0  # seconds before the check's process group is killed
 
+    @property
+    def definition(self) -> str:
+        """A hash of what the check runs (cmd, junit, timeout). A pass recorded under this name counts for a check
+        verify only when its definition is the one verify ran (checks.passed_elsewhere)."""
+        import hashlib
+        import json
+
+        body = {"cmd": self.cmd, "junit": self.junit, "timeout": float(self.timeout)}
+        return hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
 
 @dataclass(frozen=True)
 class VerifyPrep:

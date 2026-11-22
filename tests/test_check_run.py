@@ -13,13 +13,13 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_run, hooks
+from benchbook import Ledger, check_run, config, hooks
 from tests.conftest import make_project
 
 PY = shlex.quote(sys.executable)
 SCRIPT = str(Path(sys.executable).parent / "benchbook")
 METRIC_KEYS = {"checks_passed", "checks_total", "checks", "checks_declared", "failure_signature", "guard_touched",
-               "guard_files", "checks_changed", "guard_weakened", "via", "worktree_dirty"}
+               "guard_files", "checks_changed", "guard_weakened", "via", "worktree_dirty", "check_definitions"}
 CHECK_OK = r"""import sys
 sys.stdout.write("out line 1\n"); sys.stdout.flush()
 sys.stderr.write("err line 2\n"); sys.stderr.flush()
@@ -145,7 +145,8 @@ def test_output_is_the_commands_byte_for_byte_and_the_run_is_recorded(repo: Path
                               "checks_declared": ["unit", "fails", "slow", "quick"], "failure_signature": None,
                               "guard_touched": False, "guard_files": [],
                               "checks_changed": False, "guard_weakened": False, "via": "check-run",
-                              "worktree_dirty": False}
+                              "worktree_dirty": False,
+                              "check_definitions": {"unit": config.load(repo).checks["unit"].definition}}
     assert exp["notes"].startswith("check run: unit in ")
     assert not spool_entries(tmp_path / "state")  # drained
 

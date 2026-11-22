@@ -168,7 +168,8 @@ def render(v: Verification, rec: Recorded) -> str:
         lines.append(f"guard: {len(files)} test file(s) weakened since the merge-base (lines deleted or changed, a "
                      "skip marker, or conftest): " + ", ".join(files[:10]) + (" ..." if len(files) > 10 else ""))
     if integ.fewer_tests:
-        lines.append(f"guard: {integ.tests_after} test(s) ran, {integ.tests_before} at the merge-base")
+        lines.append(f"guard: fewer tests ran than at the merge-base in {', '.join(integ.fewer_tests_in)} "
+                     f"({integ.tests_after} in all, {integ.tests_before} at the merge-base)")
     if added := integ.guard_added + integ.guard_appended:
         lines.append(f"tests added (not a weakening): {', '.join(added[:10])}" + (" ..." if len(added) > 10 else ""))
     if v.integrity.checks_changed:

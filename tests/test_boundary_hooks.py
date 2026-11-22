@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pytest
 
 from benchbook import boundary_hooks, harnesses
@@ -130,11 +131,17 @@ def test_a_silent_ledger_gives_the_last_state(recorded: dict[str, Any], env: Pat
     repo = recorded["repo"]
     data = fixture("session_start_startup.json", repo)
     before = context(run("session-start", data, capsys, monkeypatch))
-    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://benchbook@127.0.0.1:1/none?connect_timeout=1")
+    compile_brief = boundary_hooks.compile_brief
+
+    def refused(w: Any) -> str:  # the same ledger, down: its server refuses connections
+        raise psycopg.OperationalError("connection failed: connect: Connection refused")
+
+    monkeypatch.setattr(boundary_hooks, "compile_brief", refused)
     down = context(run("session-start", data, capsys, monkeypatch))
-    assert down.startswith("benchbook: the ledger did not answer") and before in down
+    assert down.startswith("benchbook: the ledger did not answer (unreachable") and before in down
     assert len(down) <= boundary_hooks.MAX_CHARS
     assert run("pre-compact", fixture("pre_compact.json", repo), capsys, monkeypatch) == ""
+    monkeypatch.setattr(boundary_hooks, "compile_brief", compile_brief)
 
     def slow(w: Any) -> str:
         time.sleep(3)
@@ -148,6 +155,44 @@ def test_a_silent_ledger_gives_the_last_state(recorded: dict[str, Any], env: Pat
     assert boundary_hooks.abandoned
     (repo / ".benchbook" / "STATE.md").unlink()
     assert run("session-start", data, capsys, monkeypatch) == ""  # nothing to fall back on
+
+
+@pytest.mark.parametrize("change", ["another ledger", "another project", "token refused", "login refused"])
+def test_the_last_state_is_given_only_for_this_project_on_this_ledger_when_it_is_down(
+        recorded: dict[str, Any], env: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+        change: str) -> None:
+    """STATE.md is per checkout. A brief written for another project or from another database never stands in, and a
+    ledger that answered with a refusal is not down: nothing is given."""
+    from benchbook.errors import InvalidAgentToken
+
+    repo = recorded["repo"]
+    data = fixture("session_start_startup.json", repo)
+    assert context(run("session-start", data, capsys, monkeypatch))
+    if change == "another ledger":  # unreachable, but not the database STATE.md came from
+        monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://benchbook@127.0.0.1:1/none?connect_timeout=1")
+    elif change == "another project":  # same checkout, switched to a project that is down or unknown
+        other = make_project(os.environ["BENCHBOOK_DATABASE_URL"])
+        cfg = repo / ".benchbook" / "config.toml"
+        cfg.write_text(cfg.read_text().replace(f'"{recorded_project(repo)}"', f'"{other}"'))
+
+        def down(w: Any) -> str:
+            raise psycopg.OperationalError("connection failed: connect: Connection refused")
+
+        monkeypatch.setattr(boundary_hooks, "compile_brief", down)
+    else:
+        def refuse(w: Any) -> str:
+            if change == "token refused":
+                raise InvalidAgentToken("BENCHBOOK_TOKEN is not valid for project x")
+            raise psycopg.OperationalError('connection failed: FATAL:  password authentication failed for user "b"')
+
+        monkeypatch.setattr(boundary_hooks, "compile_brief", refuse)
+    assert run("session-start", data, capsys, monkeypatch) == ""
+
+
+def recorded_project(repo: Path) -> str:
+    import tomllib
+
+    return str(tomllib.loads((repo / ".benchbook" / "config.toml").read_text())["project"])
 
 
 def test_the_brief_stays_within_six_thousand_characters(db_url: str, code: str, env: Path,

@@ -587,3 +587,32 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   uses the first outgoing model-context hook and later continuations for notes. Pi injects the startup brief
   before the first agent turn and adds pending notes to tool results. The two native extensions are installed
   per project.
+
+## After the review of PR #4 (2026-11-23)
+
+- **uninstall removes .benchbook/ only on git's answer.** `git ls-files` that fails (outside a repository, a corrupt
+  index) printed nothing, which read as "untracked". The folder is now kept unless git exits 0 with no tracked file.
+- **--purge removes a cluster, not a directory.** `BENCHBOOK_DATA_DIR` can name any directory, so purge needs
+  `PG_VERSION` there and `pg_ctl status` saying no server runs after the stop; otherwise it keeps the directory and
+  says why. `benchbook db stop` now fails when the server is not confirmed stopped.
+- **A retried verification finishes from the attempt it recorded.** The spool's receipt is the attempt id. When it is
+  already in the ledger, check verify does not run the checks again: it rebuilds the run from the stored metrics
+  (statuses, declared checks, guard columns, signature) and writes the link, the discarded approach, the decision
+  and the result line from that. A second run could disagree with what is stored and link the opposite way.
+- **STATE.md says whose brief it is.** Its first line names the project and the ledger (a hash of the database URL
+  without its password, or of the embedded data directory). The fallback is used only for the same project and
+  ledger, and only when the ledger could not be reached; a refusal (a revoked token, a failed login, an unknown
+  project) gives nothing. A STATE.md from before this change names neither and is not used.
+- **Fewer tests are counted per JUnit check.** Sums let tests added to one check hide tests gone from another.
+  `tests_before` and `tests_after` stay as sums for the record; `fewer_tests_checks` names the checks that dropped.
+- **T03's pass elsewhere must be the implementer's, of the same definition.** The attempt's author is one of the
+  piece's reporters, or the Bash hook's `run_by` (the agent type it saw) names one, and `check_definitions` matches
+  the merge-base's hash of cmd, junit and timeout. Passes recorded before this change have no definition and no
+  longer count: they fall back to refuting, the side that a person can overturn. A `check run` without
+  `--agent`/`BENCHBOOK_AGENT` is recorded under the hook's name and does not count either.
+- **T03's merge-base run is not cached.** The cache key cannot see the environment, and a failure cached while a
+  service was down would turn a real regression into an environment failure after it came back. The test counts
+  (T04) still read the cache, whose key now includes the content of the `[verify] copy` files.
+- **The boundary benchmark counts a resumed call's own spend.** Claude Code's receipt for a resumed session reports
+  the whole session (total_cost_usd and modelUsage); the runner subtracts the session's previous receipt for the
+  call's cap, the batch budget and the report, and keeps the session totals beside them.
