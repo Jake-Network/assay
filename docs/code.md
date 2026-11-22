@@ -603,12 +603,28 @@ benchbook brief --here                               # what this branch changed:
 
 It shows, in this order:
 
-1. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
+1. **Last verified commit per piece**: the newest `verified` completion of each piece in scope, with how it was
+   checked (`checked: re-run`, `checked: person`, ...; the oracle of its last decision named by pack.toml
+   `[brief.labels]`).
+2. **Reported done, not re-run**: completions still `proposed` with no supporting and no refuting evidence, newest
+   first, each `checked: none`. A report is not a check; this section keeps the two apart.
+3. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
    signature, first attempt and number of failed attempts; most recently failed first.
-2. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
+4. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
    tag or by `file:` prefix; most reported first.
-3. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
-4. **Last verified commit per piece**: the newest `verified` completion of each piece in scope.
+5. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
+
+The footer names `benchbook get <id>` for one record's details (at most 400 tokens).
+
+**Changed since the check.** With `--here` (and from the boundary hooks) the brief compares each verified line with
+the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are those the piece's newest task
+occupies (`piece start`), else the directories its completion recorded. A line whose paths changed ends in
+`· changed since (2 commits)` (the commits since that touch those paths); one whose commit this checkout lacks ends
+in `· commit not in this checkout`; an unchanged line has no mark. A discarded approach whose failing test file
+(the part of the signature before `::`) changed since the commit it failed at ends in `· test changed since` and
+moves to the end of its section: the failure may no longer hold. Only the lines shown are compared (at most 8 per
+section), each git call has 2 seconds, and nothing is stored: the same ledger at the same HEAD gives the same text.
+Without a checkout (`--tags`, MCP) the brief shows no marks.
 
 **Scope.** A tag matches records that carry it exactly (`mod:media`, `piece:x`). A `file:<prefix>` tag matches by
 prefix: the `file:` tags of findings and the paths pieces occupy. A piece is in scope when one of its tasks (`piece
@@ -628,7 +644,8 @@ the sections hold the union.
 **Budget.** At most 8 items per section (pack.toml `[brief]`), each line cut to a fixed length; then items are
 dropped from the last section upwards until the brief fits `--budget` (with the same 5% slack as the default brief),
 and each section says how many it left out (`(+3 more: benchbook piece list)`). Header and footer always stay; a
-budget too small for them is an error. Each brief is logged in `brief_log` as before.
+budget too small for them is an error. A character limit (`max_chars`, 6,000 in the boundary hooks) is applied the
+same way: whichever limit is reached first trims. Each brief is logged in `brief_log` as before.
 
 `--pack` is not an option: the project's pack already chooses the compiler. Other packs refuse `--tags` rather than
 ignore it; their briefs are unchanged.
