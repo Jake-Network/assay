@@ -64,20 +64,22 @@ re-run it. Spec §8 decides the scope of the code pack with it: 10% or more, bui
 
 ## Conditions
 
-- Agent: Claude Code [version, recorded by run.py in batch.json], model [claude-sonnet-5-5] (proposal: the model of
-  the first benchmark, bench/results/2026-11-20-claude-sonnet-5-5, so the two measurements share a model).
-- Budget: [USD 3] per instance (`--max-budget-usd`), [USD 120] in total (`--total-budget-usd`), wall clock
-  [40] minutes per implementer, at most 150 turns. Basis of the proposal: an easy SWE-bench task takes a Claude Code
+- Agent: Claude Code 2.1.330 (run.py also records it in batch.json), model claude-sonnet-5-5 (the model of
+  the first benchmark, bench/results/2026-11-20-claude-sonnet-5-5, so the two measurements share a model), the same
+  version for the whole batch.
+- Budget: USD 3 per instance (`--max-budget-usd`), USD 120 in total (`--total-budget-usd`), wall clock
+  40 minutes per implementer, at most 150 turns (`--max-turns`). Basis of the proposal: an easy SWE-bench task takes a Claude Code
   session some 30 to 60 turns with a cached context of 30k to 80k tokens; at Sonnet 5.5 prices ($2 input, $10
   output, $0.10 cache read per million tokens) that is about $0.5 to $2 per instance, $20 to $80 for 40. The total
   cap is 40 times the instance cap, so the total rule only fires if instances run over. With Opus 5.5 ($4/$20)
   double both caps.
-- Machine: [x86_64 Linux with Docker; the images exist for x86_64 only], [disk: 50 GB free]. Basis: the 40 images
+- Machine: x86_64 WSL2 Linux (kernel 6.18.40.1-microsoft-standard-WSL2) with Docker 29.10.0 (the images exist for
+  x86_64 only); disk: 874 GB free (50 GB needed). Basis: the 40 images
   are 11.6 GB to download (15.6 GB with the 17 reserves), measured from their Docker Hub manifests with layers
   shared between images counted once; unpacked images take more, estimated 2 to 3 times that, plus the git
   mirrors and worktrees (about 3 GB).
-- benchbook: commit [sha]. swebench 5.0.2 (`uv run --no-project --with swebench==5.0.2`).
-- Date: [date].
+- benchbook: the commit that commits this filled-in file (run.py records the sha in batch.json). swebench 5.0.2 (`uv run --no-project --with swebench==5.0.2`).
+- Date: 2026-11-23.
 
 ## Metrics (computed by bench/code/report.py from the batch's ledger)
 
@@ -124,11 +126,11 @@ calls named `instances.json`, the hidden mode, `test_patch` or the dataset (repo
 
 ```bash
 uv run python -m bench.code.run --dry                                          # 1. no model, no Docker
-uv run python -m bench.code.run --out ~/benchbook-swe/run-1 --preflight --execute  # 2. Docker only
-uv run python -m bench.code.run --out ~/benchbook-swe/run-1 --model [model]     # 3. preview of the commands
-uv run python -m bench.code.run --out ~/benchbook-swe/run-1 --model [model] --max-budget-usd [3] \
-    --total-budget-usd [120] --wall-clock [40] --execute                        # 4. the run (costs money)
-uv run python -m bench.code.report ~/benchbook-swe/run-1                        # 5. report.md
+uv run python -m bench.code.run --out ~/benchbook-bench/swe-run-1 --preflight --execute  # 2. Docker only
+uv run python -m bench.code.run --out ~/benchbook-bench/swe-run-1 --model claude-sonnet-5-5     # 3. preview of the commands
+uv run python -m bench.code.run --out ~/benchbook-bench/swe-run-1 --model claude-sonnet-5-5 --max-budget-usd 3 \
+    --total-budget-usd 120 --wall-clock 40 --max-turns 150 --execute           # 4. the run (costs money)
+uv run python -m bench.code.report ~/benchbook-bench/swe-run-1                        # 5. report.md
 ```
 
 Keep the batch directory outside the benchbook repository: the implementers' worktrees live in it, and a worktree
