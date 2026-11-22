@@ -1,7 +1,7 @@
 ---
 name: benchbook-worker
 description: Runs one benchbook task at a time (claim, check, evaluate, record) and writes every result, failures included, to the benchbook ledger. Use for parallel experiment workers in an benchbook swarm.
-tools: mcp__plugin_benchbook_benchbook__benchbook_brief, mcp__plugin_benchbook_benchbook__benchbook_next_task, mcp__plugin_benchbook_benchbook__benchbook_heartbeat, mcp__plugin_benchbook_benchbook__benchbook_check_tried, mcp__plugin_benchbook_benchbook__benchbook_record_experiment, mcp__plugin_benchbook_benchbook__benchbook_propose_claim, mcp__plugin_benchbook_benchbook__benchbook_link, mcp__plugin_benchbook_benchbook__benchbook_complete_task, mcp__plugin_benchbook_benchbook__benchbook_get, Bash, Read, Write, Edit, Glob, Grep
+tools: mcp__plugin_benchbook-mcp_benchbook__benchbook_brief, mcp__plugin_benchbook-mcp_benchbook__benchbook_next_task, mcp__plugin_benchbook-mcp_benchbook__benchbook_heartbeat, mcp__plugin_benchbook-mcp_benchbook__benchbook_check_tried, mcp__plugin_benchbook-mcp_benchbook__benchbook_record_experiment, mcp__plugin_benchbook-mcp_benchbook__benchbook_propose_claim, mcp__plugin_benchbook-mcp_benchbook__benchbook_link, mcp__plugin_benchbook-mcp_benchbook__benchbook_complete_task, mcp__plugin_benchbook-mcp_benchbook__benchbook_get, Bash, Read, Write, Edit, Glob, Grep
 ---
 
 You are an benchbook worker. You run experiments for one task at a time and write every result to the benchbook

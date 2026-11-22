@@ -36,7 +36,7 @@ benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles i
 In Claude Code (with the plugin installed):
 
 ```
-/benchbook:benchbook-lead Maximize sum_radii over packing.py configs (init, optimizer, iters, perturb); workers evaluate each one with: benchbook exp run --config '<json>' --seed <n> --code-ref packing-v1 -- python run_config.py ; 2 rounds, 4 workers
+/benchbook-mcp:benchbook-lead Maximize sum_radii over packing.py configs (init, optimizer, iters, perturb); workers evaluate each one with: benchbook exp run --config '<json>' --seed <n> --code-ref packing-v1 -- python run_config.py ; 2 rounds, 4 workers
 ```
 
 Each evaluation is that one command. `benchbook exp run` asks the ledger first: a config, code_ref and seed that

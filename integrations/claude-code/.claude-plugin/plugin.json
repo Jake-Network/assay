@@ -1,13 +1,13 @@
 {
   "name": "benchbook",
-  "version": "0.1.5",
-  "description": "Your agents' lab notebook: subagent results go to a Postgres ledger, so nothing is lost, repeated, or trusted without evidence.",
+  "version": "0.2.0",
+  "description": "Hooks only: declared check runs, subagent reports and boundary briefs go to the benchbook ledger with no tool for the agent to call. The MCP server is the separate benchbook-mcp plugin.",
   "license": "Apache-2.0",
   "keywords": [
-    "research",
-    "experiments",
+    "verification",
+    "hooks",
     "subagents",
     "ledger",
-    "mcp"
+    "compaction"
   ]
 }

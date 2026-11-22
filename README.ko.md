@@ -14,13 +14,13 @@ Postgres 원장을 준다. worker는 실험이 끝나는 즉시(실패도) 기�
 uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook     # v0.1.0이 PyPI에 올라가면 `uv tool install benchbook`. Docker 불필요
 uv tool update-shell        # `benchbook`을 못 찾으면 한 번. 새 터미널을 열고 Claude Code를 다시 시작
 cd your-repo && benchbook init --goal "검증 손실 최소화" --metric val_loss --direction min
-claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook
+claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook benchbook-mcp@benchbook
 ```
 
 Claude Code에서:
 
 ```
-/benchbook:benchbook-lead train.py의 val_loss 최소화, 3라운드, worker 4개
+/benchbook-mcp:benchbook-lead train.py의 val_loss 최소화, 3라운드, worker 4개
 ```
 
 `benchbook serve` 후 http://127.0.0.1:7466 에서 진행을 본다.

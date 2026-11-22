@@ -5,8 +5,17 @@
 ```bash
 uv tool install --from /path/to/benchbook benchbook      # puts `benchbook` on PATH (the plugin runs `benchbook mcp`, `benchbook hook`)
 claude plugin marketplace add /path/to/benchbook     # the repository root has .claude-plugin/marketplace.json
-claude plugin install benchbook@benchbook
+claude plugin install benchbook@benchbook            # hooks only: no MCP tools in the session
+claude plugin install benchbook-mcp@benchbook        # optional: the MCP server, worker subagent and lead skill
 ```
+
+`benchbook install` does the same in one line (`uv tool install benchbook==<its version>`, the marketplace, the hook
+plugin; `--mcp` adds benchbook-mcp, `--dry-run` prints the steps, `--harness codex|cursor` merges that harness's
+manifest instead). `benchbook uninstall` removes the plugins, the state directory (spool, logs, notes), this
+checkout's untracked `.benchbook/` and its `.git/info/exclude` line; the embedded database only with `--purge`.
+
+Claude Code loads a plugin's MCP server whenever the plugin is enabled, and every tool definition is in every
+prompt. That is why the hooks and the MCP server are two plugins: the hook plugin costs no tokens per turn.
 
 Claude Code starts `benchbook mcp` and `benchbook hook` from its own PATH. If `command -v benchbook` finds nothing in a new
 terminal, run `uv tool update-shell` once (it adds `~/.local/bin` to your shell profile), open a new terminal and
@@ -37,17 +46,27 @@ On macOS the embedded database lives in `~/Library/Application Support/benchbook
 `BENCHBOOK_DATA_DIR`, and set it in Claude Code's `settings.json` `env` too: the CLI, MCP server and hook must see the
 same value.
 
-The plugin (`integrations/claude-code/`) contains:
+The hook plugin (`integrations/claude-code/`, `benchbook@benchbook`) contains:
+
+| file | what |
+|---|---|
+| `bin/benchbook-hook` | the shim every hook runs: `benchbook hook EVENT` from PATH (`assay hook` when only that is there); without either it notes one line in `${CLAUDE_PLUGIN_DATA}/missing-cli`, which `benchbook doctor` reports, and exits 0 |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+
+Every command in hooks.json is `"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT`, so the plugin calls only a file of
+its own (the directory's submission checklist asks for that).
+
+The MCP plugin (`integrations/claude-code-mcp/`, `benchbook-mcp@benchbook`) contains:
 
 | file | what |
 |---|---|
 | `.mcp.json` | the `benchbook` MCP server (`benchbook mcp`, stdio) |
 | `agents/benchbook-worker.md` | worker subagent: worker tools only (no `benchbook_decide`, `benchbook_create_tasks`, `benchbook_cancel_task`) |
 | `skills/benchbook/SKILL.md` | rules for any agent using the ledger |
-| `skills/benchbook-lead/SKILL.md` | the lead loop, `/benchbook:benchbook-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+| `skills/benchbook-lead/SKILL.md` | the lead loop, `/benchbook-mcp:benchbook-lead <goal>` |
 
-For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
+For development, `claude --plugin-dir integrations/claude-code --plugin-dir integrations/claude-code-mcp` loads both
+without installing.
 
 ## Install by hand (no plugin)
 
@@ -55,11 +74,11 @@ For development, `claude --plugin-dir integrations/claude-code` loads it without
 cp integrations/claude-code/manual/.mcp.json .mcp.json
 mkdir -p .claude/agents .claude/skills
 cp integrations/claude-code/manual/agents/benchbook-worker.md .claude/agents/
-cp -r integrations/claude-code/skills/benchbook integrations/claude-code/skills/benchbook-lead .claude/skills/
+cp -r integrations/claude-code-mcp/skills/benchbook integrations/claude-code-mcp/skills/benchbook-lead .claude/skills/
 ```
 
 Merge `integrations/claude-code/manual/settings.hooks.json` into `.claude/settings.json`. The skill is then
-`/benchbook-lead`. Tool names differ between the two installs (`mcp__plugin_benchbook_benchbook__*` vs `mcp__benchbook__*`), which is
+`/benchbook-lead`. Tool names differ between the two installs (`mcp__plugin_benchbook-mcp_benchbook__*` vs `mcp__benchbook__*`), which is
 why the manual worker file is separate.
 
 ## The loop

@@ -533,3 +533,13 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   can weaken every test without deleting any, so any change to one is a weakening, as the mutation table expects.
 - **T04 guard_weakened is always written** (a boolean on every attempt, like guard_touched); the file lists and the
   test counts only when there is something to say.
+- **T07 the lead skill and the MCP server move to benchbook-mcp.** Both teach or serve ledger tools, which the hook
+  plugin must not load. The skill command becomes `/benchbook-mcp:benchbook-lead`, and the worker's tool names are
+  written as `mcp__plugin_benchbook-mcp_benchbook__*` on the assumption that Claude Code keeps a hyphenated plugin
+  name in the tool prefix; T08's session check confirms it. bench/real.py loads both plugin directories and counts
+  the pre-split server name as its own.
+- **T07 init defaults to the code pack only without --metric.** `init --metric X` keeps the core pack, so the
+  research quick start and its scripts are unchanged (spec open question 5). Proposals are appended to config.toml
+  only when it declares no `[checks]`; off a terminal they are written without asking.
+- **T07 uninstall removes the whole state directory.** The spool there holds results not yet recorded; uninstalling
+  is the decision to drop them, and the command lists what it removed.

@@ -18,13 +18,13 @@ transcripts. In the circle-packing benchmark this did not yet lower the lead's p
 uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook     # `uv tool install benchbook` once v0.1.0 is on PyPI; no Docker needed
 uv tool update-shell        # once, if `benchbook` is not found; then open a new terminal and restart Claude Code
 cd your-repo && benchbook init --goal "Minimise validation loss" --metric val_loss --direction min
-claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook
+claude plugin marketplace add Jake-Network/benchbook && claude plugin install benchbook@benchbook benchbook-mcp@benchbook
 ```
 
 Then in Claude Code:
 
 ```
-/benchbook:benchbook-lead Minimise val_loss of train.py; 3 rounds, 4 workers
+/benchbook-mcp:benchbook-lead Minimise val_loss of train.py; 3 rounds, 4 workers
 ```
 
 and `benchbook serve` to watch it at http://127.0.0.1:7466.

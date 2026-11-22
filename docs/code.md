@@ -12,6 +12,7 @@ integration step.
 ## Set up
 
 ```bash
+benchbook init                    # in a git repository, no --metric: the code pack, with the checks it finds proposed
 benchbook init --pack code        # same as --pack code --metric checks_passed --direction max
 ```
 

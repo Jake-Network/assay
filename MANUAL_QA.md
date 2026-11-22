@@ -10,7 +10,7 @@ Setup for all scenarios:
 uv tool install --from . benchbook        # or: pipx install .   (puts `benchbook` on PATH for the MCP server and hook)
 cd /path/to/a/scratch/repo && git init
 claude plugin marketplace add /path/to/benchbook
-claude plugin install benchbook@benchbook
+claude plugin install benchbook@benchbook benchbook-mcp@benchbook   # hooks; MCP server, worker and lead skill
 ```
 
 ## Scenario 2: `/benchbook-lead` runs circle packing for two rounds
@@ -18,7 +18,7 @@ claude plugin install benchbook@benchbook
 1. Copy `examples/circle-packing/{evaluator.py,packing.py,seed_program.py}` into the scratch repo.
 2. `benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles in the unit square." --metric sum_radii --direction max`
 3. In another terminal: `benchbook serve`, open http://127.0.0.1:7466.
-4. In Claude Code: `/benchbook:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
+4. In Claude Code: `/benchbook-mcp:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
 
 Expected: tasks appear on the Tasks page and get claimed by `worker-1..4`; experiments and the best-so-far curve
 update live; each worker's final message is <= 3 sentences plus ids; after round 1 the lead reads
