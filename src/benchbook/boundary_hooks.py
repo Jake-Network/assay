@@ -157,12 +157,17 @@ def compile_brief(w: Where) -> str:
 
     lg = Ledger.open(project=w.project, agent=config.default_agent("hook"), role="harness")
     tags: list[str] = []
-    if w.repo is not None and lg.pack.name == "code":
+    warning = ""
+    if lg.pack.name == "code":
+        from .code_status import recording_warning
         from .packs.code.brief import changed_scope
 
-        tags = changed_scope(w.repo)
-    text = lg.brief(budget_tokens=BRIEF_TOKENS, tags=tags or None, repo=w.repo, max_chars=MAX_CHARS)
-    return clip(text, MAX_CHARS)
+        warning = recording_warning(w.repo or w.local.parent)
+        if w.repo is not None:
+            tags = changed_scope(w.repo)
+    limit = MAX_CHARS - len(warning) - 2 if warning else MAX_CHARS
+    text = clip(lg.brief(budget_tokens=BRIEF_TOKENS, tags=tags or None, repo=w.repo, max_chars=limit), limit)
+    return f"{warning}\n\n{text}" if warning else text
 
 
 def clip(text: str, limit: int) -> str:
@@ -175,7 +180,8 @@ def clip(text: str, limit: int) -> str:
 
 def is_empty(brief: str) -> bool:
     """True when no section lists anything: every item line is "- none recorded"."""
-    return not any(line.startswith("- ") and line != NONE_LINE for line in brief.splitlines())
+    return not brief.startswith("benchbook: recording stopped: ") and not any(
+        line.startswith("- ") and line != NONE_LINE for line in brief.splitlines())
 
 
 def _git(repo: Path | None, *args: str) -> str:
@@ -270,7 +276,15 @@ def pre_compact(data: dict[str, Any]) -> str:
     if w is None:
         return ""
     brief = _brief_or_none(w, "pre-compact")
-    return "" if brief is None or is_empty(brief) else compact_paragraph(brief)
+    if brief is None or is_empty(brief):
+        return ""
+    from .code_status import RECORDING_STOPPED
+
+    if brief.startswith(RECORDING_STOPPED):
+        warning = brief.splitlines()[0]
+        summary = compact_paragraph(brief, PRECOMPACT_CHARS - len(warning) - 1)
+        return " ".join(part for part in (warning, summary) if part)
+    return compact_paragraph(brief)
 
 
 def compact_paragraph(brief: str, limit: int = PRECOMPACT_CHARS) -> str:

@@ -565,3 +565,6 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   results are cached there by project, piece and commit. A different authenticated writer has its own processor
   and may run the same piece independently. A reported commit with multiple matching local branches requires an
   explicit piece in the commit or report. The completion report's hash is saved as attempt trace metadata.
+- **T13 status groups reports by the latest active commit of each piece.** The queue and last 24 hours of hook
+  failures use the same database/writer health checks as doctor. A report overdue for processing also triggers
+  the replay warning.

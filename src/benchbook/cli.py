@@ -249,7 +249,13 @@ def _repo_root() -> Path:
 @app.command()
 def status() -> None:
     """One-screen project summary."""
-    s = ledger(read_only=True).status()
+    lg = ledger(read_only=True)
+    if lg.pack.name == "code":
+        from . import code_status
+
+        s = code_status.status(lg, _repo_root())
+        return emit(s, code_status.render(s))
+    s = lg.status()
     if STATE["json"]:
         return emit(s)
     b = s["best"]
@@ -262,6 +268,18 @@ def status() -> None:
              "tasks     " + ", ".join(f"{k} {v}" for k, v in sorted(s["tasks"].items())),
              "active    " + (", ".join(s["active_agents"]) or "none in the last 15 min")]
     print("\n".join(lines))
+
+
+@app.command()
+def statusline() -> None:
+    """Print the latest cached code-project counts for a harness status line."""
+    from .code_status import read_cache
+
+    line = read_cache(STATE["project"])
+    if STATE["json"]:
+        print(json.dumps({"statusline": line}, ensure_ascii=False))
+    elif line:
+        print(line)
 
 
 @app.command()
@@ -281,8 +299,14 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
         from .packs.code.brief import changed_scope
 
         scope = [*changed_scope(_repo_root()), *scope]
-    b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
-                       tags=scope or None, repo=_repo_root() if here else None)
+    lg = ledger()
+    b = lg.brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
+                 tags=scope or None, repo=_repo_root() if here else None)
+    if lg.pack.name == "code":
+        from .code_status import recording_warning
+
+        if warning := recording_warning(_repo_root()):
+            b = f"{warning}\n\n{b}"
     emit({"brief": b}, b.rstrip("\n"))
 
 

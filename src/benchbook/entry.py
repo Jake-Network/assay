@@ -79,6 +79,12 @@ def main(legacy: bool = False) -> None:
 
         print(f"benchbook {__version__}")
         sys.exit(0)
+    if argv == ["statusline"]:
+        from .code_status import read_cache
+
+        if line := read_cache():
+            print(line)
+        sys.exit(0)
     from .cli import main as cli_main
 
     cli_main()
