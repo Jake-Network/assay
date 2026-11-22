@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Iterator
@@ -112,3 +114,65 @@ def lead(db_url: str, project: str) -> Ledger:
 @pytest.fixture
 def worker(db_url: str, project: str) -> Ledger:
     return Ledger.open(project=project, agent="worker-1", role="worker", database_url=db_url)
+
+
+# ------------------------------------------------------------------------------------------- temporary git repositories
+# A repository with two declared checks (a JUnit unit suite and a plain command), used by check verify's tests and the
+# mutation table (tests/test_mutations.py). The base's test_fixed fails until impl.txt says "fixed".
+
+PY = shlex.quote(sys.executable)
+CONFIG = f"""project = "ignored"
+
+[checks.unit]
+cmd = "{PY} -m pytest -q -p no:cacheprovider tests --junitxml={{junit}}"
+junit = true
+timeout = 120
+
+[checks.value]
+cmd = "grep -qx ok value.txt"
+
+[guard]
+paths = ["tests/**", "**/conftest.py", ".benchbook/config.toml"]
+base = "main"
+"""
+TEST_IMPL = """def test_fixed():
+    print("OUTPUT-MARKER-7f3a")
+    assert open("impl.txt").read().strip() == "fixed"
+"""
+TEST_EXTRA = "def test_extra():\n    assert True\n"
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def make_repo(root: Path, cfg: str = CONFIG) -> Path:
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        git(root, "config", k, v)
+    files = {".benchbook/config.toml": cfg, "tests/test_impl.py": TEST_IMPL, "tests/test_extra.py": TEST_EXTRA,
+             "impl.txt": "todo\n", "value.txt": "ok\n"}
+    for path, text in files.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    return root
+
+
+def piece(repo: Path, branch: str, files: dict[str, str | None]) -> str:
+    """A commit on a new branch from main (None deletes the file); main stays checked out."""
+    git(repo, "checkout", "-q", "-b", branch, "main")
+    for path, text in files.items():
+        if text is None:
+            git(repo, "rm", "-q", path)
+        else:
+            (repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (repo / path).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", branch)
+    sha = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    return sha
+
+

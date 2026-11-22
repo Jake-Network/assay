@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import signal
 import subprocess
 import sys
@@ -21,66 +20,11 @@ import pytest
 from benchbook import Ledger, checks, config
 from benchbook.errors import BenchbookError
 from benchbook.packs import load_pack
-from tests.conftest import make_project
+from tests.conftest import CONFIG, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
 
-PY = shlex.quote(sys.executable)
-CONFIG = f"""project = "ignored"
-
-[checks.unit]
-cmd = "{PY} -m pytest -q -p no:cacheprovider tests --junitxml={{junit}}"
-junit = true
-timeout = 120
-
-[checks.value]
-cmd = "grep -qx ok value.txt"
-
-[guard]
-paths = ["tests/**", "**/conftest.py", ".benchbook/config.toml"]
-base = "main"
-"""
-TEST_IMPL = """def test_fixed():
-    print("OUTPUT-MARKER-7f3a")
-    assert open("impl.txt").read().strip() == "fixed"
-"""
-TEST_EXTRA = "def test_extra():\n    assert True\n"
 METRIC_KEYS = {"checks_passed", "checks_total", "checks", "checks_declared", "failure_signature", "guard_touched",
-               "guard_files", "checks_changed"}
+               "guard_files", "checks_changed", "guard_weakened"}
 DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
-
-
-def make_repo(root: Path, cfg: str = CONFIG) -> Path:
-    root.mkdir(parents=True)
-    git(root, "init", "-q", "-b", "main")
-    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
-        git(root, "config", k, v)
-    files = {".benchbook/config.toml": cfg, "tests/test_impl.py": TEST_IMPL, "tests/test_extra.py": TEST_EXTRA,
-             "impl.txt": "todo\n", "value.txt": "ok\n"}
-    for path, text in files.items():
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text(text)
-    git(root, "add", "-A")
-    git(root, "commit", "-q", "-m", "base")
-    return root
-
-
-def piece(repo: Path, branch: str, files: dict[str, str | None]) -> str:
-    """A commit on a new branch from main (None deletes the file); main stays checked out."""
-    git(repo, "checkout", "-q", "-b", branch, "main")
-    for path, text in files.items():
-        if text is None:
-            git(repo, "rm", "-q", path)
-        else:
-            (repo / path).parent.mkdir(parents=True, exist_ok=True)
-            (repo / path).write_text(text)
-    git(repo, "add", "-A")
-    git(repo, "commit", "-q", "-m", branch)
-    sha = git(repo, "rev-parse", "HEAD")
-    git(repo, "checkout", "-q", "main")
-    return sha
 
 
 def assert_clean(repo: Path, vtmp: Path) -> None:
@@ -139,7 +83,7 @@ def test_passing_commit_supports_the_completion(repo: Path, vtmp: Path, verifier
     assert exp["metrics"] == {
         "checks_passed": 2, "checks_total": 2, "checks": {"unit": "ok", "value": "ok"},
         "checks_declared": ["unit", "value"], "failure_signature": None,
-        "guard_touched": False, "guard_files": [], "checks_changed": False}
+        "guard_touched": False, "guard_files": [], "checks_changed": False, "guard_weakened": False}
     claim = row(verifier, "claims", rec.claim_id)
     assert claim["author"] == "impl" and claim["kind"] == "completion"  # two different agents in the ledger
     assert claim["payload"] == {"piece": "media", "commit": sha, "reported_checks": []}
@@ -705,10 +649,20 @@ def test_bad_verify_tables(table: dict[str, Any], message: str) -> None:
 
 # ------------------------------------------------------------------------------------------- environment failures (T03)
 
+def implementer_passed(lg: Ledger, piece_name: str, sha: str, names: list[str]) -> None:
+    """The implementer's own clean run of the commit passed these checks (check run in its checkout)."""
+    lg.as_agent("impl").record_experiment(
+        {"piece": piece_name, "checks": names},
+        {"checks_passed": len(names), "checks_total": len(names), "checks": dict.fromkeys(names, "ok"),
+         "checks_declared": names, "failure_signature": None, "via": "check-run", "worktree_dirty": False},
+        code_ref=sha)
+
+
 def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_path: Path, vtmp: Path,
                                                                            lead_lg: Ledger) -> None:
     repo = make_env_repo(tmp_path / "repo", "")  # no copy: the clean worktree has no .env, at the base either
     sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    implementer_passed(lead_lg, "media", sha, ["secret"])  # its checkout has the .env
     v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
     assert v.environment is not None and "secret fails the same way at the merge-base" in v.environment
     assert v.run_status == "error" and v.results[0].environment
@@ -717,6 +671,16 @@ def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_p
     assert m["environment"] is True and m["baseline_signature"] == m["failure_signature"]
     from benchbook.check_cli import render
     assert "environment: secret fails the same way at the merge-base" in render(v, rec)
+
+
+def test_failing_at_the_merge_base_without_a_pass_elsewhere_still_refutes(tmp_path: Path, vtmp: Path,
+                                                                         lead_lg: Ledger) -> None:
+    """The piece's goal fails at the base by design: a commit that leaves it failing is a false completion, unless
+    the implementer's own run of the commit passed it (which points at the clean worktree's environment)."""
+    repo = make_env_repo(tmp_path / "repo", "")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is None and rec.relation == "refutes" and rec.discarded_id is not None
 
 
 def test_a_check_that_passes_at_the_merge_base_still_refutes(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
@@ -746,6 +710,8 @@ def test_the_merge_base_run_is_cached(tmp_path: Path, vtmp: Path, lead_lg: Ledge
     monkeypatch.setattr(checks, "run_checks", counting)
     one = piece(repo, "one", {"impl.txt": "fixed\n"})
     two = piece(repo, "two", {"impl.txt": "fixed too\n"})
+    implementer_passed(lead_lg, "media", one, ["secret"])
+    implementer_passed(lead_lg, "other", two, ["secret"])
     checks.verify(lead_lg, "media", one, repo=repo, reported_by="impl")
     v, _ = checks.verify(lead_lg, "other", two, repo=repo, reported_by="impl")
     base = git(repo, "rev-parse", "main")

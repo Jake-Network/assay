@@ -55,6 +55,11 @@ DEFAULT_BASE = "origin/main"
 # Used when the merge-base declares no [guard] paths: a guard that is silently empty would report "untouched".
 DEFAULT_GUARD_PATHS = ("tests/**", "**/conftest.py", ".benchbook/config.toml")
 MAX_GUARD_FILES = 100  # stored in metrics; guard_touched is computed from all of them
+# T04: an added line with one of these makes a guarded file weakened even when nothing was deleted.
+SKIP_MARKERS = ("pytest.mark.skip", "pytest.mark.xfail", "pytest.skip(", "unittest.skip", "it.skip(", "describe.skip(",
+                "test.skip(", "xit(", "t.Skip(", "#[ignore]", "@Disabled", "@Ignore")
+# Files whose any change can weaken every test (an autouse fixture, a collection hook): never "added only".
+ALWAYS_WEAKENING = ("conftest.py",)
 MAX_REPORT_BYTES = 10_000_000
 MAX_FAILED_SHOWN = 50  # failing test ids kept on a result for the table; the signature is made from all of them
 PIECE = re.compile(r"\S{1,100}")
@@ -117,10 +122,27 @@ class Prepared:
 class Integrity:
     guard_files: list[str]  # changed files (deleted ones included) that match a guard glob
     checks_changed: bool
+    # T04: guard_files split by what the change did. added: new files; appended: lines added, none deleted or
+    # changed; weakened: anything else, a skip marker added, or any change to a conftest.py.
+    guard_added: list[str] = field(default_factory=list)
+    guard_appended: list[str] = field(default_factory=list)
+    guard_weakened_files: list[str] = field(default_factory=list)
+    tests_before: int | None = None  # JUnit testcases that ran at the merge-base, over the JUnit checks
+    tests_after: int | None = None
 
     @property
     def guard_touched(self) -> bool:
         return bool(self.guard_files)
+
+    @property
+    def fewer_tests(self) -> bool:
+        return self.tests_before is not None and self.tests_after is not None and self.tests_after < self.tests_before
+
+    @property
+    def guard_weakened(self) -> bool:
+        """What sends a commit to a person (T04): a guarded file weakened, or fewer JUnit tests ran than at the
+        merge-base. Tests only added are not."""
+        return bool(self.guard_weakened_files) or self.fewer_tests
 
 
 @dataclass
@@ -202,6 +224,13 @@ class Verification:
             "guard_touched": self.integrity.guard_touched,
             "guard_files": self.integrity.guard_files[:MAX_GUARD_FILES],
             "checks_changed": self.integrity.checks_changed,
+            "guard_weakened": self.integrity.guard_weakened,
+            **({"guard_weakened_files": self.integrity.guard_weakened_files[:MAX_GUARD_FILES]}
+               if self.integrity.guard_weakened_files else {}),
+            **({"guard_added_files": (self.integrity.guard_added + self.integrity.guard_appended)[:MAX_GUARD_FILES]}
+               if self.integrity.guard_added or self.integrity.guard_appended else {}),
+            **({"tests_before": self.integrity.tests_before, "tests_after": self.integrity.tests_after}
+               if self.integrity.tests_before is not None and self.integrity.tests_after is not None else {}),
             **({"prepared": prep} if self.prepared is not None and (prep := self.prepared.metrics()) else {}),
             **({"environment": True} if self.environment is not None else {}),
             **({"baseline_signature": self.baseline_signature} if self.baseline_signature else {}),
@@ -352,7 +381,7 @@ def pin_checks(lg: Ledger, piece: str | None, specs: dict[str, CheckSpec], guard
     latest = _pins(lg, scope)
     if latest and latest[0].sha256 == sha and latest[0].author == lg.agent:
         return latest[0], False
-    payload = {"piece": scope, "sha256": sha, "source": source, "guard_paths": list(guard_paths),
+    payload = {"piece": scope, "sha256": sha, "pin_source": source, "guard_paths": list(guard_paths),
                "verify": verify or {},
                "checks": {n: {"cmd": s.cmd, "junit": s.junit, "timeout": s.timeout} for n, s in specs.items()}}
     what = "the project" if scope == PROJECT_PIN else f"piece {scope}"
@@ -383,7 +412,7 @@ def _pins(lg: Ledger, scope: str, *, only: UUID | None = None) -> list[Pin]:
         except BenchbookError:
             continue
         out.append(Pin(r["id"], str(r["author"]), scope, specs, guard, verify, str(p.get("sha256") or ""),
-                       str(p.get("source") or "cli"), r["created_at"]))
+                       str(p.get("pin_source") or "cli"), r["created_at"]))
     return out
 
 
@@ -459,14 +488,54 @@ def read_base(repo: Path, ref: str, commit: str, pin: Callable[[], Pin | None] |
 def integrity(repo: Path, base: Base, commit: str, pin_moved: bool = False) -> Integrity:
     """Step 2. pin_moved: the pinned checks changed under the work (pin_changed), which counts as a [checks] change."""
     guard_files = matching(changed_paths(repo, base.merge_base, commit), base.guard_paths)
+    added, appended, weakened = classify_guard(repo, base.merge_base, commit, guard_files)
     try:
         found = config_at(repo, commit)
     except _Unreadable:
-        return Integrity(guard_files, True)
+        return Integrity(guard_files, True, added, appended, weakened)
     before = config_at(repo, base.merge_base)
     old = before[0].get("checks") if before else None
     new = found[0].get("checks") if found else None
-    return Integrity(guard_files, old != new or pin_moved)  # parsed tables: comments and layout are no change
+    # parsed tables: comments and layout are no change
+    return Integrity(guard_files, old != new or pin_moved, added, appended, weakened)
+
+
+def classify_guard(repo: Path, merge_base: str, commit: str,
+                   files: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
+    """T04: (added, appended, weakened) of the changed guarded files. A new file is added and a file with lines added
+    and none deleted is appended, unless an added line carries a SKIP_MARKERS entry or the file is a conftest.py;
+    everything else (deleted, rewritten, binary) is weakened."""
+    if not files:
+        return [], [], []
+    out = _git(repo, "diff", "--numstat", "--no-renames", "-z", merge_base, commit, "--", *files).stdout
+    deleted: dict[str, int | None] = {}
+    for entry in out.split("\0"):
+        parts = entry.split("\t")
+        if len(parts) == 3 and parts[2]:
+            deleted[parts[2]] = int(parts[1]) if parts[1].isdigit() else None  # "-": binary
+    status = {}
+    names = _git(repo, "diff", "--name-status", "--no-renames", "-z", merge_base, commit, "--", *files).stdout
+    items = [x for x in names.split("\0") if x]
+    for st, path in zip(items[::2], items[1::2], strict=False):
+        status[path] = st[:1]
+    added: list[str] = []
+    appended: list[str] = []
+    weakened: list[str] = []
+    for f in files:
+        st, dels = status.get(f, ""), deleted.get(f)
+        if Path(f).name in ALWAYS_WEAKENING or st not in ("A", "M") or dels is None or (st == "M" and dels > 0):
+            weakened.append(f)
+        elif _adds_skip(repo, merge_base, commit, f):
+            weakened.append(f)
+        else:
+            (added if st == "A" else appended).append(f)
+    return added, appended, weakened
+
+
+def _adds_skip(repo: Path, merge_base: str, commit: str, path: str) -> bool:
+    diff = _git(repo, "diff", "-U0", "--no-renames", "--no-color", merge_base, commit, "--", path).stdout
+    return any(line.startswith("+") and not line.startswith("+++") and any(m in line for m in SKIP_MARKERS)
+               for line in diff.splitlines())
 
 
 # ---------------------------------------------------------------------------------------------------- running
@@ -637,6 +706,26 @@ def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
     return out, None
 
 
+def count_tests(repo: Path, b: Base, results: list[CheckResult], integ: Integrity,
+                env: dict[str, str] | None) -> BaseException | None:
+    """T04: the JUnit testcases that ran here and at the merge-base, summed over the JUnit checks that reported a
+    count, into integ.tests_before and tests_after. Run only when guarded files changed; the merge-base runs come
+    from the baseline cache. Returns an interruption of that run."""
+    counted = [r for r in results if b.checks[r.name].junit and r.tests is not None]
+    if not counted:
+        return None
+    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in counted], env)
+    before = after = 0
+    seen = False
+    for r in counted:
+        was = runs[r.name].tests if r.name in runs else None
+        if isinstance(was, int) and r.tests is not None:
+            before, after, seen = before + was, after + r.tests, True
+    if seen and interrupted is None:
+        integ.tests_before, integ.tests_after = before, after
+    return interrupted
+
+
 def same_failure(r: CheckResult, base: BaseRun) -> bool:
     """Whether a failing check fails the same way at the merge-base: an equal signature element, or (JUnit) every
     test failing here fails there too."""
@@ -648,19 +737,35 @@ def same_failure(r: CheckResult, base: BaseRun) -> bool:
     return bool(mine) and len(r.failed_tests) < MAX_FAILED_SHOWN and mine <= set(base.failed)
 
 
-def classify_environment(repo: Path, b: Base, results: list[CheckResult],
-                         env: dict[str, str] | None) -> tuple[str | None, str | None, BaseException | None]:
-    """T03: re-run the failing checks at the merge-base. (the environment reason when every failing check fails the
-    same way there, the merge-base's signature of those checks, an interruption of the baseline run)."""
+# The checks an implementer's own clean run of PIECE at COMMIT passed (check run, the Bash hook: metrics.via). A raw
+# Bash pass of a JUnit check proves nothing (docs/claude-code.md) and is left out, as the completion gate does.
+_PASSED_ELSEWHERE = (
+    "SELECT DISTINCT c.key FROM benchbook.experiments_valid e,"
+    " jsonb_each_text(CASE WHEN jsonb_typeof(e.metrics -> 'checks') = 'object' THEN e.metrics -> 'checks'"
+    " ELSE '{}'::jsonb END) AS c(key, value)"
+    " WHERE e.project_id = %s AND e.config ->> 'piece' = %s AND e.code_ref = %s AND e.run_status = 'ok'"
+    " AND e.metrics ->> 'via' IS NOT NULL AND e.metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb"
+    " AND c.value = 'ok' AND (c.key <> ALL(%s::text[]) OR e.metrics ->> 'via' IS DISTINCT FROM 'bash-hook')")
+
+
+def passed_elsewhere(lg: Ledger, piece: str, commit: str, b: Base) -> set[str]:
+    junit = [n for n, s in b.checks.items() if s.junit]
+    return {str(r["key"]) for r in lg.sql_internal(_PASSED_ELSEWHERE, (lg.project_id, piece, commit, junit))}
+
+
+def classify_environment(repo: Path, b: Base, results: list[CheckResult], env: dict[str, str] | None,
+                         elsewhere: set[str]) -> tuple[str | None, str | None, BaseException | None]:
+    """T03: a failing check is an environment failure when the implementer's own clean run of this commit passed it
+    (elsewhere) and it fails the same way at the merge-base, which is then re-run. A check that fails at the
+    merge-base by design (the piece's goal) and was never seen passing stays the piece's failure. Returns (the
+    reason when every failing check is an environment failure, the merge-base's signature of those checks, an
+    interruption of the baseline run)."""
     failing = [r for r in results if r.status in ("fail", "timeout")]
-    if not failing:
+    if not failing or not all(r.name in elsewhere for r in failing):
         return None, None, None
     runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in failing], env)
     for r in failing:
-        # A JUnit check in which some test still passes is a suite that runs: the commit left a failing test
-        # failing (a test written before the fix, say), which is the piece's, not the environment's.
-        runs_here = b.checks[r.name].junit and r.tests is not None and r.tests > len(r.failed_tests)
-        r.environment = not runs_here and r.name in runs and same_failure(r, runs[r.name])
+        r.environment = r.name in runs and same_failure(r, runs[r.name])
     if interrupted is not None or not all(r.environment for r in failing):
         return None, None, interrupted
     names = ", ".join(r.name for r in failing)
@@ -760,7 +865,10 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env(), b.prep, prepared)
     environment, base_sig = prepared.error, None
     if interrupted is None and environment is None and sha != b.merge_base:  # the base can't tell a commit from itself
-        environment, base_sig, interrupted = classify_environment(repo, b, results, check_env())
+        environment, base_sig, interrupted = classify_environment(repo, b, results, check_env(),
+                                                                  passed_elsewhere(lg, piece, sha, b))
+    if interrupted is None and environment is None and integ.guard_files and sha != b.merge_base:
+        interrupted = count_tests(repo, b, results, integ, check_env())
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig)
     found = None if given is None else given[0]
@@ -930,12 +1038,13 @@ def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
     assert info is not None
     status, claim, attempts = info["status"], rec.claim_id, info["attempts"]
     human = f"benchbook decide {short('claim', claim)} verified|refuted --oracle human --as human --rationale ..."
-    if touched := [a for a in attempts if a["guard_touched"] is True or a["checks_changed"] is True]:
-        files = sorted({f for a in touched for f in a["guard_files"]})
+    if touched := [a for a in attempts if a["guard_weakened"] is True or a["checks_changed"] is True]:
+        files = sorted({f for a in touched for f in a["weakened_files"]})
         changed = any(a["checks_changed"] is True for a in touched)
-        what = " and ".join(([f"{len(files)} guarded file(s)"] if files else []) + (["[checks]"] if changed else []))
-        return Outcome(None, f"no decision: the commit changed {what or 'a guarded path'}, so a re-run cannot verify "
-                             f"it; a person has to decide ({human})", [a["id"] for a in touched], person=True,
+        what = " and ".join(([f"{len(files)} guarded test file(s) in a way that can weaken them"] if files else [])
+                            + (["[checks]"] if changed else []))
+        return Outcome(None, f"no decision: the commit changed {what or 'its tests (fewer ran)'}, so a re-run cannot "
+                             f"verify it; a person has to decide ({human})", [a["id"] for a in touched], person=True,
                        guard_files=files, checks_changed=changed)
     mine = next((a for a in attempts if a["id"] == rec.experiment_id), None)
     if mine is None:  # the claim names another piece or commit than this run (an older claim with the same text)

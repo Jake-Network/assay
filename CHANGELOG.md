@@ -2,10 +2,15 @@
 
 ## Unreleased: code pack
 
-- Environment failures: a failing check is run again at the merge-base (cached per merge-base and check definition
-  in the state directory). When every failing check fails the same way there, and no test of a failing JUnit check
-  passed, the attempt is an environment failure: `run_status` error, `metrics.environment` and
-  `baseline_signature`, no refutes link, no discarded approach.
+- Environment failures: a failing check that the implementer's own clean run of the commit passed (`via`) is run
+  again at the merge-base (cached per merge-base and check definition in the state directory). When every failing
+  check fails the same way there, the attempt is an environment failure: `run_status` error,
+  `metrics.environment` and `baseline_signature`, no refutes link, no discarded approach.
+- Tests added are not tests weakened: guarded files are split into added (new files, lines only added) and weakened
+  (lines deleted or changed, skip markers, any conftest.py change), and fewer JUnit testcases than at the
+  merge-base is a weakening. `guard_weakened` (plus `guard_weakened_files`, `guard_added_files`, `tests_before`,
+  `tests_after`) replaces `guard_touched` in the all_pass rule, check verify's decision and the PR summary, which
+  now says "added" and "weakened" apart. Older attempts are read by `guard_touched`.
 - `[verify] copy` and `prepare` (config.toml or the pin) prepare check verify's clean worktree: gitignored files are
   copied from the repository root (names recorded, never content) and a command runs first. A failed preparation
   runs no check and is recorded as an environment failure (`run_status` error, `metrics.environment`), with no link

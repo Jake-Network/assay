@@ -1173,7 +1173,8 @@ class Ledger:
         """A completion is verified by re-runs, not by its implementer's word or its own runs (docs/code.md):
         at least min_runs cited attempts of the piece at the commit, by agents other than the implementer
         (min_authors counts the implementer), that ran every declared check (metrics.checks_declared: a --checks run
-        of some is partial) and passed them all, with guard_touched and checks_changed false.
+        of some is partial) and passed them all, with guard_weakened and checks_changed false (T04: tests only
+        added do not count; an attempt from before guard_weakened is read by guard_touched).
         And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, touched a
         guarded path or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
         that disagree are a person's call."""
@@ -1189,10 +1190,10 @@ class Ledger:
         if not experiment_ids or not experiment_ids <= set(by_id):
             raise InvalidTransition(f"rerun evidence must be valid finished attempts of {at} "
                                     "(config.piece and code_ref of the completion)")
-        if touched := [a for a in attempts if a["guard_touched"] is True or a["checks_changed"] is True]:
-            files = sorted({f for a in touched for f in a["guard_files"]})
-            what = (f"changed guarded files ({', '.join(files[:10])}{' ...' if len(files) > 10 else ''})"
-                    if files else "touched a guarded path")
+        if touched := [a for a in attempts if a["guard_weakened"] is True or a["checks_changed"] is True]:
+            files = sorted({f for a in touched for f in a["weakened_files"]})
+            what = (f"changed guarded files in a way that can weaken them ({', '.join(files[:10])}"
+                    f"{' ...' if len(files) > 10 else ''})" if files else "ran fewer tests or touched a guarded path")
             if any(a["checks_changed"] is True for a in touched):
                 what = (what + " and " if files else "") + "changed [checks]"
             raise InvalidTransition(f"the commit of {at} {what} (attempt "
@@ -1208,13 +1209,13 @@ class Ledger:
         # author alone does not show whose run it was: it never counts as independent (its failure still blocks).
         independent = [by_id[e] for e in experiment_ids
                        if by_id[e]["author"] not in impl and by_id[e]["via"] is None and by_id[e]["complete"]
-                       and by_id[e]["guard_touched"] is False and by_id[e]["checks_changed"] is False]
+                       and by_id[e]["guard_weakened"] is False and by_id[e]["checks_changed"] is False]
         authors = {a["author"] for a in independent}
         if len(independent) < pol.min_runs or len(authors) + 1 < pol.min_authors:
             raise InvalidTransition(
                 f"rule all_pass needs >= {pol.min_runs} passing re-run(s) of every declared check of {at} by "
                 f">= {pol.min_authors - 1} agent(s) other than the implementer ({', '.join(sorted(impl))}), with "
-                f"guard_touched and checks_changed false; the evidence has {len(independent)} by {len(authors)} "
+                f"guard_weakened and checks_changed false; the evidence has {len(independent)} by {len(authors)} "
                 f"({', '.join(sorted(authors)) or 'none'}). The implementer's own runs do not count, nor do runs "
                 f"recorded from its checkout (check run, the Bash hook), nor runs of only some checks (--checks); "
                 f"run benchbook check verify as another agent, or {human}")
@@ -1635,11 +1636,20 @@ def attempt_summary(id: UUID, author: str, metrics: dict[str, Any]) -> dict[str,
     complete = (isinstance(declared, list) and bool(declared) and all(isinstance(n, str) for n in declared)
                 and isinstance(ran, dict) and set(declared) <= set(ran))
     files = metrics.get("guard_files")
+    guard_files = [f for f in files if isinstance(f, str)] if isinstance(files, list) else []
+    # T04: what blocks a re-run is a weakened test, not any change to one. An attempt from before guard_weakened
+    # existed is read as it was: every guarded change counts.
+    weakened = metrics.get("guard_weakened")
+    if isinstance(weakened, bool):
+        wf = metrics.get("guard_weakened_files")
+        weakened_files = [f for f in wf if isinstance(f, str)] if isinstance(wf, list) else []
+    else:
+        weakened, weakened_files = metrics.get("guard_touched"), guard_files
     return {"id": id, "author": author, "passed": ok, "complete": complete,
             # set on a run in the implementer's own checkout (check run, the Bash hook), whoever recorded it
             "via": metrics.get("via"),
             "guard_touched": metrics.get("guard_touched"), "checks_changed": metrics.get("checks_changed"),
-            "guard_files": [f for f in files if isinstance(f, str)] if isinstance(files, list) else []}
+            "guard_files": guard_files, "guard_weakened": weakened, "weakened_files": weakened_files}
 
 
 def partition_text(v: Any) -> str | None:
