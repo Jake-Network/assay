@@ -18,12 +18,17 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from benchbook.db.conn import stop_embedded
+from benchbook.errors import BenchbookError
+
 from .. import real
 from ..code.run import git, ledger_env, write_json
 from . import arms, probes, report
 from .tasks import Phase, Task, input_tasks, inspect
 
 REGISTRATION = Path(__file__).with_name("PREREGISTRATION.md")
+MIN_CLAUDE_VERSION = (2, 1, 277)
+USD_TOLERANCE = 1e-9
 WORK_SCOPE = ("Work only in the task checkout and use the arm's provided mechanism for prior context. "
               "Leave the benchmark's evaluator, run logs, and oracle receipts to the harness.")
 
@@ -43,7 +48,7 @@ class Batch:
         resume: bool, probe: bool,
     ) -> list[tuple[int, dict[str, Any]]]:
         cap = self.args.probe_budget_usd if probe else self.args.max_budget_usd
-        if self.spent + cap > self.args.total_budget_usd + 1e-9:
+        if self.spent + cap > self.args.total_budget_usd + USD_TOLERANCE:
             raise real.BenchRunError(f"total budget reached before {target.name}")
         cmd = arms.command(arm, prompt, session, resume=resume, model=self.args.model, budget=cap,
                            max_turns=self.args.probe_turns if probe else self.args.max_turns,
@@ -57,12 +62,12 @@ class Batch:
         events = real._read_stream(target)
         metrics = own_spend(read_call(events, session), self.sessions.get(session) if resume else None)
         self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"])
-        if metrics["cost_usd"] > cap:
-            raise real.BenchRunError(f"{target.name} exceeded its cap")
         self.spent += metrics["cost_usd"] - cap
         self.record_spend()
         metrics["seconds"] = time.monotonic() - started
         write_json(target / "metrics.json", metrics)
+        if metrics["cost_usd"] > cap + USD_TOLERANCE:
+            raise real.BenchRunError(f"{target.name} exceeded its cap")
         return events
 
     def record_spend(self) -> None:
@@ -92,7 +97,7 @@ def own_spend(receipt: dict[str, Any], before: tuple[float, int] | None) -> dict
     """A call's own cost and tokens from its receipt, which for a resumed session covers the whole session so far
     (before: the session's previous receipt). The session totals are kept beside them."""
     cost, tokens = before or (0.0, 0)
-    if receipt["cost_usd"] < cost - 1e-9 or receipt["tokens"] < tokens:
+    if receipt["cost_usd"] < cost - USD_TOLERANCE or receipt["tokens"] < tokens:
         raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
     return {**receipt, "cost_usd": max(receipt["cost_usd"] - cost, 0.0), "tokens": receipt["tokens"] - tokens,
             "session_cost_usd": receipt["cost_usd"], "session_tokens": receipt["tokens"]}
@@ -221,19 +226,30 @@ def trial(batch: Batch, task: Task, arm: str, run: int) -> dict[str, Any]:
     git(work, "remote", "remove", "origin")
     git(work, "branch", "boundary-base", task.base)
     env = compile_env(arm, target, batch.args)
-    if arm == "F" and not batch.args.dry:
-        subprocess.run([sys.executable, "-m", "benchbook", "init", "--project", "boundary", "--pack", "code", "--yes"],
-                       cwd=work, env=env, check=True, capture_output=True, timeout=600)
-        # A registered manifest declares the same checks for every arm; the project mapping lives in the environment.
-        if git(work, "status", "--porcelain", "--untracked-files=no").stdout:
-            raise ValueError("benchbook init changed tracked config; commit the registered checks and project mapping")
-    harness = Trial(batch, task, arm, target, work, env)
     try:
-        result = harness.run()
+        if arm == "F" and not batch.args.dry:
+            subprocess.run(
+                [sys.executable, "-m", "benchbook", "init", "--project", "boundary", "--pack", "code", "--yes"],
+                cwd=work, env=env, check=True, capture_output=True, timeout=600,
+            )
+            # The registered manifest declares the same checks for every arm; the project mapping lives in the env.
+            if git(work, "status", "--porcelain", "--untracked-files=no").stdout:
+                raise ValueError("benchbook init changed tracked config; commit the registered checks and project"
+                                 " mapping")
+        result = Trial(batch, task, arm, target, work, env).run()
     finally:
         if arm == "D" and not batch.args.dry:
             stopped = subprocess.run(["claude-mem", "stop"], env=env, capture_output=True, timeout=30, text=True)
             (target / "memory-worker-stop.log").write_text(stopped.stdout + stopped.stderr, encoding="utf-8")
+        if arm == "F" and not batch.args.dry:
+            trial_error = sys.exception()
+            try:
+                stop_embedded(Path(env["BENCHBOOK_DATA_DIR"]))
+            except (BenchbookError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+                message = f"could not stop the trial's embedded PostgreSQL: {exc}"
+                if trial_error is None:
+                    raise real.BenchRunError(message) from exc
+                print(message, file=sys.stderr)
     return {"task": task.id, "arm": arm, "run": run, "wall_seconds": time.monotonic() - started, **result}
 
 
@@ -294,7 +310,14 @@ def run(args: argparse.Namespace, chosen: list[str]) -> None:
             if manifest is None or not manifest.is_file() or shutil.which("claude-mem") is None:
                 raise ValueError("--execute with arm D needs --claude-mem-plugin and the claude-mem launcher")
             args.claude_mem_plugin = args.claude_mem_plugin.resolve()
-        version = subprocess.run(["claude", "--version"], capture_output=True, check=True, timeout=30, text=True)
+        version = subprocess.run(
+            ["claude", "--version"], capture_output=True, check=True, timeout=30, text=True,
+        ).stdout.strip()
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\s|$)", version)
+        if match is None or tuple(map(int, match.groups())) < MIN_CLAUDE_VERSION:
+            required = ".".join(map(str, MIN_CLAUDE_VERSION))
+            raise ValueError(f"--execute needs Claude Code {required} or newer for cumulative receipts "
+                             f"(found {version!r})")
     if not args.execute and not args.dry:
         for arm in chosen:
             print(f"{arm} {arms.ARMS[arm].label}\n  {arms.ARMS[arm].instructions}")
@@ -302,7 +325,8 @@ def run(args: argparse.Namespace, chosen: list[str]) -> None:
         return
 
     out.mkdir(parents=True, exist_ok=False)
-    data: dict[str, Any] = {"dry": args.dry, "trials": [], "fan_in": [], "compact_window": args.compact_window}
+    data: dict[str, Any] = {"dry": args.dry, "trials": [], "fan_in": [], "compact_window": args.compact_window,
+                            "arms": chosen}
     if args.dry:
         from .scripted import capture, fixture, scripted_fan_in
 
@@ -315,7 +339,7 @@ def run(args: argparse.Namespace, chosen: list[str]) -> None:
         capture = real._capture
         shutil.copyfile(args.registration, out / "registration.md")
         shutil.copyfile(args.tasks, out / "tasks.json")
-        data.update(claude_version=version.stdout.strip(), model=args.model, arms=chosen, repetitions=args.runs,
+        data.update(claude_version=version, model=args.model, repetitions=args.runs,
                     max_budget_usd=args.max_budget_usd, probe_budget_usd=args.probe_budget_usd,
                     total_budget_usd=args.total_budget_usd, wall_clock=args.wall_clock, max_turns=args.max_turns,
                     probe_turns=args.probe_turns,

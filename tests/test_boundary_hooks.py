@@ -125,13 +125,12 @@ def test_an_empty_ledger_gives_nothing_but_writes_state(db_url: str, code: str, 
     assert "- none recorded" in (repo / ".benchbook" / "STATE.md").read_text()
 
 
-def test_a_silent_ledger_gives_the_last_state(recorded: dict[str, Any], env: Path,
-                                              capsys: pytest.CaptureFixture[str],
-                                              monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_connection_refusal_gives_the_last_state(recorded: dict[str, Any], env: Path,
+                                                   capsys: pytest.CaptureFixture[str],
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     repo = recorded["repo"]
     data = fixture("session_start_startup.json", repo)
     before = context(run("session-start", data, capsys, monkeypatch))
-    compile_brief = boundary_hooks.compile_brief
 
     def refused(w: Any) -> str:  # the same ledger, down: its server refuses connections
         raise psycopg.OperationalError("connection failed: connect: Connection refused")
@@ -141,7 +140,23 @@ def test_a_silent_ledger_gives_the_last_state(recorded: dict[str, Any], env: Pat
     assert down.startswith("benchbook: the ledger did not answer (unreachable") and before in down
     assert len(down) <= boundary_hooks.MAX_CHARS
     assert run("pre-compact", fixture("pre_compact.json", repo), capsys, monkeypatch) == ""
-    monkeypatch.setattr(boundary_hooks, "compile_brief", compile_brief)
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_only_an_embedded_timeout_gives_the_last_state(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                                       monkeypatch: pytest.MonkeyPatch, remote: bool) -> None:
+    git(tmp_path, "init", "-q")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "app")
+    for name in ("BENCHBOOK_DATABASE_URL", "ASSAY_DATABASE_URL", "BENCHBOOK_TOKEN", "ASSAY_TOKEN", "PGSERVICE"):
+        monkeypatch.delenv(name, raising=False)
+    if remote:
+        monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://reviewer@127.0.0.1:5432/app")
+    else:
+        monkeypatch.setenv("BENCHBOOK_DATA_DIR", str(tmp_path / "pg"))
+    data = fixture("session_start_startup.json", tmp_path)
+    monkeypatch.setattr(boundary_hooks, "compile_brief", lambda w: "# brief\n- a finding")
+    assert context(run("session-start", data, capsys, monkeypatch)) == "# brief\n- a finding"
 
     def slow(w: Any) -> str:
         time.sleep(3)
@@ -150,10 +165,15 @@ def test_a_silent_ledger_gives_the_last_state(recorded: dict[str, Any], env: Pat
     monkeypatch.setattr(boundary_hooks, "compile_brief", slow)
     monkeypatch.setattr(boundary_hooks, "TIMEOUT", 0.2)
     t = time.monotonic()
-    late = context(run("session-start", data, capsys, monkeypatch))
-    assert time.monotonic() - t < 2 and late.startswith("benchbook: the ledger did not answer (no answer within 0.2 s)")
+    late = run("session-start", data, capsys, monkeypatch)
+    assert time.monotonic() - t < 2
+    if remote:
+        assert late == ""
+    else:
+        assert context(late).startswith("benchbook: the ledger did not answer (no answer within 0.2 s)")
     assert boundary_hooks.abandoned
-    (repo / ".benchbook" / "STATE.md").unlink()
+    monkeypatch.setattr(boundary_hooks, "abandoned", False)
+    (tmp_path / ".benchbook" / "STATE.md").unlink()
     assert run("session-start", data, capsys, monkeypatch) == ""  # nothing to fall back on
 
 
@@ -187,6 +207,45 @@ def test_the_last_state_is_given_only_for_this_project_on_this_ledger_when_it_is
 
         monkeypatch.setattr(boundary_hooks, "compile_brief", refuse)
     assert run("session-start", data, capsys, monkeypatch) == ""
+
+
+def test_state_fallback_tracks_libpq_database_and_skips_tokens_and_services(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    git(tmp_path, "init", "-q")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "app")
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://reviewer@127.0.0.1:5432")
+    for name in ("BENCHBOOK_TOKEN", "ASSAY_TOKEN", "PGSERVICE", "PGHOSTADDR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PGDATABASE", "private_a")
+    data = fixture("session_start_startup.json", tmp_path)
+    brief = "# brief\n- private_a finding"
+    monkeypatch.setattr(boundary_hooks, "compile_brief", lambda w: brief)
+    assert context(run("session-start", data, capsys, monkeypatch)) == brief
+
+    def down(w: Any) -> str:
+        raise psycopg.OperationalError("connection failed: connect: Connection refused")
+
+    monkeypatch.setattr(boundary_hooks, "compile_brief", down)
+    monkeypatch.setenv("PGDATABASE", "private_b")
+    assert run("session-start", data, capsys, monkeypatch) == ""
+    monkeypatch.setenv("PGDATABASE", "private_a")
+    assert brief in context(run("session-start", data, capsys, monkeypatch))
+
+    with monkeypatch.context() as m:
+        m.setenv("BENCHBOOK_TOKEN", "not-authenticated")
+        assert run("session-start", data, capsys, m) == ""
+    monkeypatch.setenv("PGSERVICE", "other")
+    assert run("session-start", data, capsys, monkeypatch) == ""
+
+
+def test_ipv6_host_and_port_do_not_collide(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://reader@[2001:db8::1]:5432/benchbook")
+    first = boundary_hooks.ledger_id()
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://reader@[2001:db8::1:5432]/benchbook")
+    assert first and boundary_hooks.ledger_id() not in {None, first}
 
 
 def recorded_project(repo: Path) -> str:

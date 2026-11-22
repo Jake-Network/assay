@@ -138,7 +138,7 @@ WITH {PIECES}, last AS (
          c.payload -> 'paths' AS paths, s.last_oracle, s.id, s.decided_at
   FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
   WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'verified'
-    AND {_COMPLETION_SCOPE}
+    AND NOT s.evidence_invalidated AND {_COMPLETION_SCOPE}
   ORDER BY c.payload ->> 'piece', s.decided_at DESC, s.id
 )
 SELECT *, count(*) OVER () AS total FROM last ORDER BY decided_at DESC, piece LIMIT %(n)s"""
@@ -153,24 +153,28 @@ def changed_scope(repo: Path, base: str | None = None) -> list[str]:
     from ...checks import DEFAULT_BASE, _git, path_prefixes
 
     def out(*args: str) -> str:
-        return _git(repo, *args, check=False).stdout.strip()
+        return _git(repo, *args, check=False).stdout
 
     try:
         ref = base or localcfg.load(repo).guard_base or DEFAULT_BASE
     except Exception:  # noqa: BLE001 - an unreadable config.toml leaves the default base
         ref = DEFAULT_BASE
-    head = out("rev-parse", "--verify", "--quiet", "HEAD")
-    tip = out("rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}")
-    branch = out("symbolic-ref", "--quiet", "--short", "HEAD")
-    if not head or not tip or head == tip or branch in (ref, ref.rsplit("/", 1)[-1]):
+    head = out("rev-parse", "--verify", "--quiet", "HEAD").strip()
+    tip = out("rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}").strip()
+    branch_ref = out("symbolic-ref", "--quiet", "HEAD").strip()
+    base_ref = out("rev-parse", "--symbolic-full-name", "--verify", "--quiet", "--end-of-options", ref).strip()
+    if base_ref.startswith("refs/remotes/"):
+        base_ref = "refs/heads/" + base_ref.split("/", 3)[-1]
+    if not head or not tip or (branch_ref and branch_ref == base_ref):
         return []
-    mb = out("merge-base", head, tip)
+    mb = out("merge-base", head, tip).strip()
     if not mb:
         return []
-    paths = [*out("diff", "--name-only", "--no-renames", mb, head).splitlines(),
-             *out("diff", "--name-only", "--no-renames", "HEAD").splitlines(),
-             *out("ls-files", "--others", "--exclude-standard").splitlines()]
-    tags = [FILE_TAG + p for p in path_prefixes([p for p in paths if p])]
+    paths = [*out("diff", "--name-only", "--no-renames", "-z", mb, head).split("\0"),
+             *out("diff", "--name-only", "--no-renames", "-z", "HEAD").split("\0"),
+             *out("ls-files", "--others", "--exclude-standard", "-z").split("\0")]
+    tags = [FILE_TAG + p for p in path_prefixes(paths)]
+    branch = branch_ref.removeprefix("refs/heads/")
     return tags + ([f"piece:{branch}"] if branch else [])
 
 

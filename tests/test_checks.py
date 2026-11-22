@@ -702,8 +702,8 @@ def test_a_test_left_failing_while_others_pass_is_the_pieces(repo: Path, vtmp: P
     assert v.environment is None and not v.results[0].environment and rec.relation == "refutes"
 
 
-def test_the_merge_base_run_is_cached(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
-                                      monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_merge_base_runs_fresh_for_each_environment_failure(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     repo = make_env_repo(tmp_path / "repo", "")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     calls: list[str] = []
@@ -721,10 +721,7 @@ def test_the_merge_base_run_is_cached(tmp_path: Path, vtmp: Path, lead_lg: Ledge
     checks.verify(lead_lg, "media", one, repo=repo, reported_by="impl")
     v, _ = checks.verify(lead_lg, "other", two, repo=repo, reported_by="impl")
     base = git(repo, "rev-parse", "main")
-    # The cache cannot see the environment: the merge-base run an environment failure rests on is run every time
-    # (and written, for the test counts of T04, which do read it).
     assert calls == [one, base, two, base] and v.environment is not None
-    assert list((tmp_path / "state" / "benchbook" / "baseline").glob("*.json"))
 
 
 def service_repo(root: Path, flag: Path, extra: str = "") -> Path:
@@ -736,7 +733,7 @@ def service_repo(root: Path, flag: Path, extra: str = "") -> Path:
 
 def test_a_merge_base_failure_from_before_the_environment_recovered_is_not_reused(
         tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The service is down: piece one fails at the commit and at the merge-base (an environment failure, cached).
+    """The service is down: piece one fails at the commit and at the merge-base (an environment failure).
     The service comes back, and piece two breaks the check for real: the merge-base passes now, so it refutes."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     flag = tmp_path / "service-up"
@@ -789,3 +786,74 @@ def test_a_retried_request_finishes_from_the_attempt_it_recorded(tmp_path: Path,
     assert again.discarded_id == first.discarded_id
     assert "re-run failed" in _result_line(v, again)
     assert row(lead_lg, "experiments", receipt)["metrics"]["checks"] == {"service": "fail"}
+
+
+
+def test_guard_compares_junit_counts_in_the_current_environment(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.conftest import CONFIG
+
+    repo = make_repo(tmp_path / "repo", CONFIG)
+    tests = repo / "tests"
+    (tests / "test_optional.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "if os.getenv('BENCHBOOK_TEST_EXTRA') and not Path('disable-optional').exists():\n"
+        "    def test_optional():\n        assert True\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "tests/test_optional.py")
+    git(repo, "commit", "-m", "Add an environment-dependent test")
+    added = {"impl.txt": "fixed\n", "tests/test_notes.py": "# a guarded addition\n"}
+    first = piece(repo, "first", added)
+    monkeypatch.delenv("BENCHBOOK_TEST_EXTRA", raising=False)
+    before, _ = checks.verify(lead_lg, "first", first, repo=repo, reported_by="impl")
+    assert before.integrity.tests_before == before.integrity.tests_after == 2
+
+    monkeypatch.setenv("BENCHBOOK_TEST_EXTRA", "1")
+    second = piece(repo, "second", {**added, "disable-optional": ""})
+    after, rec = checks.verify(lead_lg, "second", second, repo=repo, reported_by="impl")
+    assert after.integrity.tests_before == 3 and after.integrity.tests_after == 2
+    assert after.integrity.fewer_tests_in == ["unit"]
+    assert rec.outcome is not None and rec.outcome.person
+
+
+def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchbook import hooks, session_notes, verify_requests
+
+    flag = tmp_path / "service-up"
+    prepare = json.dumps(f"test -f {shlex.quote(str(flag))}")
+    repo = make_repo(tmp_path / "repo", '[checks.unit]\ncmd = "true"\n[guard]\nbase = "main"\n'
+                     f'[verify]\nprepare = {prepare}\n')
+    sha = piece(repo, "media", {"impl.txt": "fixed\n"})
+    data = {"piece": "media", "commit": sha, "agent_type": "impl", "repo": str(repo), "session_id": "session",
+            "report_sha256": "a" * 64}
+    monkeypatch.setenv("BENCHBOOK_AGENT", lead_lg.agent)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    project = lead_lg.project_id
+    verify_requests.process(data, project, uuid.uuid4(), spool)
+    assert "environment failure" in session_notes.deliver("session")
+
+    flag.touch()
+    verify_requests.process(data, project, uuid.uuid4(), spool)
+    assert session_notes.deliver("session") == ""
+    receipt = uuid.uuid4()
+    report = {**data, "report_sha256": "b" * 64}
+    write_info = hooks._write_info
+
+    with monkeypatch.context() as fault:
+        def fail_result(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path.parent.name == "verify-results":
+                raise OSError("cannot write result")
+            write_info(path, *args, **kwargs)
+
+        fault.setattr(hooks, "_write_info", fail_result)
+        with pytest.raises(OSError, match="cannot write result"):
+            verify_requests.process(report, project, receipt, spool)
+    flag.unlink()
+    verify_requests.process(report, project, receipt, spool)
+    note = session_notes.deliver("session")
+    assert "re-run passed" in note and "checked: re-run" in note
+    attempts = lead_lg.sql_internal("SELECT id FROM benchbook.experiments WHERE project_id=%s", (project,))
+    assert len(attempts) == 2

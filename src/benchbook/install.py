@@ -8,7 +8,7 @@ Cursor and Gemini CLI, it merges the packaged hooks into the user's settings.
 uninstall removes the plugins (or prints how), the state directory's spool and logs, this checkout's .benchbook/ when
 git answers that it tracks nothing there (a failing git, a broken index or a directory outside git keeps it) and its
 .git/info/exclude line, and benchbook's entries in installed hook manifests. The embedded database is removed only
-with --purge, and only when its directory holds a PostgreSQL cluster (PG_VERSION) whose server is confirmed stopped.
+with --purge, and only when its directory holds a PostgreSQL cluster whose server is confirmed stopped.
 Every step is listed as it is done; --dry-run lists them only."""
 from __future__ import annotations
 
@@ -207,7 +207,7 @@ def _untracked(root: Path, name: str) -> tuple[bool, str]:
 
 
 def _purge_database(plan: Plan) -> None:
-    """--purge: remove the embedded cluster, only when the data directory is one (PG_VERSION) and its server is
+    """--purge: remove the embedded cluster, only when the data directory is one and its server is
     confirmed stopped. BENCHBOOK_DATA_DIR can name any directory; a directory that is not a cluster is kept."""
     from .db.conn import data_dir, is_cluster, stop_embedded
 
@@ -216,14 +216,16 @@ def _purge_database(plan: Plan) -> None:
         plan.done.append(f"no embedded database at {d}")
         return
     if d.is_symlink() or not is_cluster(d):
-        plan.done.append(f"kept {d}: not a PostgreSQL data directory (no PG_VERSION), so --purge leaves it")
+        plan.done.append(f"kept {d}: not a PostgreSQL data directory, so --purge leaves it")
         return
     if plan.dry_run:
         plan.done.append(f"would stop the embedded database in {d}")
         plan.remove(d, "the embedded database")
         return
     try:
-        stop_embedded(d)
+        if not stop_embedded(d):
+            plan.done.append(f"kept {d}: the PostgreSQL data directory could not be confirmed before stopping it")
+            return
     except Exception as e:  # noqa: BLE001 - whatever went wrong, the cluster is not known to be stopped
         plan.done.append(f"kept the embedded database {d}: its server was not confirmed stopped "
                          f"({type(e).__name__}: {str(e).strip()[:300]}); run benchbook db stop, then --purge again")

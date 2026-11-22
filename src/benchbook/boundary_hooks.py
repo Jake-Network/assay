@@ -4,11 +4,10 @@
   (`changed_scope`, the code pack's `brief --here`), at most 1,500 tokens and 6,000 characters, as additionalContext.
   The same text goes to `.benchbook/STATE.md`, the time, HEAD, project and ledger on its first line, for harnesses
   without hooks and for people. When the ledger cannot be reached (no answer within 5 seconds, a refused
-  connection), the last STATE.md is given instead, under a line saying so, but only when it was written for this
-  project from this ledger (the database URL without its password, or the embedded cluster's directory). A ledger
-  that answers and refuses (a revoked token, a failed login, an unknown project) gets nothing: it is not down, and a
-  brief it would not give is not handed out from the cache. A brief whose sections are all empty is written to
-  STATE.md but not given.
+  connection), the last STATE.md can be given instead. This requires the same project and database target and a
+  session without a Benchbook token. For a remote database it also requires an identifiable connection target and
+  a transport error, as a deadline alone could hide a login refusal. A brief whose sections are all empty is
+  written to STATE.md but not given.
 - `benchbook hook pre-compact` (PreCompact): the same brief cut to three lines per section, as one paragraph of at
   most 1,000 characters on stdout, which Claude Code reads as instructions for the compaction summary. Nothing when
   the ledger does not answer.
@@ -205,30 +204,35 @@ def _git(repo: Path | None, *args: str) -> str:
         return ""
 
 
-def ledger_id() -> str:
-    """Which ledger a brief came from, as 16 hex digits: the hash of BENCHBOOK_DATABASE_URL without its password, or
-    of the embedded cluster's directory."""
+def ledger_id() -> str | None:
+    """Fingerprint the connection target and login without storing credentials. Unknown targets cannot be reused."""
     import hashlib
 
-    url = config.env("DATABASE_URL")
-    if url:
-        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    if url := config.env("DATABASE_URL"):
+        from psycopg import ProgrammingError
+        from psycopg.conninfo import conninfo_to_dict
+        from psycopg.pq import Conninfo
 
         try:
-            p = urlsplit(url)
-            netloc = (f"{p.username}@" if p.username else "") + (p.hostname or "") + (f":{p.port}" if p.port else "")
-            query = urlencode([(k, v) for k, v in parse_qsl(p.query) if k.lower() != "password"])
-            key = "url:" + urlunsplit((p.scheme, netloc, p.path, query, ""))
-        except ValueError:
-            key = "raw:" + url
+            supplied = conninfo_to_dict(url)
+        except ProgrammingError:
+            return None
+        defaults = {opt.keyword.decode(): os.fsdecode(opt.val) for opt in Conninfo.get_defaults() if opt.val}
+        if supplied.get("service") or defaults.get("service"):
+            return None  # libpq can get the endpoint and login from a service file
+        fields = ("host", "hostaddr", "port", "user", "dbname")
+        host, addr, port, user, database = [str(supplied.get(name) or defaults.get(name, "")) for name in fields]
+        if not (host or addr) or not port or not user or any("," in value for value in (host, addr, port)):
+            return None  # implicit socket directory or a list of candidate endpoints
+        key = ["postgresql", host, addr, port, user, database or user]
     else:
         from .db.conn import data_dir
 
-        key = f"embedded:{data_dir().resolve()}"
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+        key = ["embedded", str(data_dir().resolve())]
+    return hashlib.sha256(json.dumps(key).encode("utf-8")).hexdigest()
 
 
-_STATE_HEAD = re.compile(r"benchbook state · written [^·]+ · HEAD \S+ · project (\S+) · ledger ([0-9a-f]{16}) · ")
+_STATE_HEAD = re.compile(r"benchbook state · written [^·]+ · HEAD \S+ · project (\S+) · ledger ([0-9a-f]{64}) · ")
 
 
 def write_state(w: Where, brief: str) -> None:
@@ -241,8 +245,10 @@ def write_state(w: Where, brief: str) -> None:
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%MZ")
     w.local.mkdir(parents=True, exist_ok=True)
     tmp = w.state.with_name(f".{STATE_FILE}.{os.getpid()}.tmp")
-    tmp.write_text(f"benchbook state · written {stamp} · HEAD {head} · project {w.project} · ledger {ledger_id()} · "
-                   f"rewritten at each session start\n\n{brief}", encoding="utf-8")
+    target = ledger_id() if not config.env("TOKEN") else None
+    tmp.write_text(f"benchbook state · written {stamp} · HEAD {head} · project {w.project} · "
+                   f"ledger {target or 'unavailable for fallback'} · rewritten at each session start\n\n{brief}",
+                   encoding="utf-8")
     os.replace(tmp, w.state)
     if w.repo is not None:
         _exclude(w.repo, w.state)
@@ -272,6 +278,8 @@ def from_state(w: Where, why: str) -> str:
     written for another project or from another ledger (or by a version that did not say which)."""
     from datetime import UTC, datetime
 
+    if config.env("TOKEN"):
+        return ""
     try:
         text = w.state.read_text(encoding="utf-8")
         written = datetime.fromtimestamp(w.state.stat().st_mtime, UTC).strftime("%Y-%m-%d %H:%MZ")
@@ -290,22 +298,19 @@ def from_state(w: Where, why: str) -> str:
                 MAX_CHARS)
 
 
-_AUTH_WORDS = ("authentication", "password", "pg_hba.conf", "permission denied", "role ")
-
-
 def unreachable(e: BaseException) -> bool:
-    """Whether the ledger failed by not answering (down, slow, refusing connections), as opposed to answering with a
-    refusal: a failed login (SQLSTATE class 28 or its message), a revoked token, an unknown project, a bug."""
-    if isinstance(e, TimeoutError):
-        return True
+    """Require a transport error that proves the server did not answer."""
     import psycopg
 
-    if not isinstance(e, psycopg.OperationalError):
-        return False
-    if (getattr(e, "sqlstate", None) or "").startswith("28"):
+    if not isinstance(e, psycopg.OperationalError) or e.sqlstate is not None:
         return False
     text = str(e).lower()
-    return not any(word in text for word in _AUTH_WORDS)
+    if any(word in text for word in ("fatal:", "authentication", "password", "pg_hba.conf", "permission denied")):
+        return False
+    return any(detail in text for detail in ("connection refused", "network is unreachable", "no route to host",
+                                              "could not translate host name")) or (
+        "on socket " in text and "no such file or directory" in text
+    )
 
 
 class LedgerFailed(Exception):
@@ -322,7 +327,7 @@ def _brief_or_none(w: Where, event: str) -> str:
         brief = within(lambda: compile_brief(w), TIMEOUT)
     except TimeoutError as e:
         _log(f"{event}: {e}; ledger did not answer")
-        raise LedgerFailed(True) from e
+        raise LedgerFailed(not config.env("DATABASE_URL")) from e
     except Exception as e:  # noqa: BLE001 - reported, and given no brief
         down = unreachable(e)
         _log(f"{event}: the ledger {'could not be reached' if down else 'failed'}: {type(e).__name__}: "

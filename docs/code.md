@@ -429,11 +429,6 @@ command says "environment: unit fails the same way at the merge-base a1b2c3d4e5f
 Otherwise the failure refutes as before. The merge-base run happens only when condition 1 holds, and a commit that is
 its own merge-base is not compared. Declaring `[verify] copy` (above) avoids the question for known files.
 
-The merge-base results are cached per repository in the state directory (`baseline/<hash>.json`), keyed by
-merge-base, check name, the check's definition and the content of the `[verify] copy` files. The cache cannot see
-the environment (a service that is back up), so condition 2 always runs the merge-base again; the test counts below
-read the cache.
-
 ### Added tests and weakened tests
 
 A piece usually adds tests. `check verify` splits the guarded files a commit changed (`[guard] paths`, by default
@@ -450,8 +445,8 @@ A piece usually adds tests. `check verify` splits the guarded files a commit cha
 `guard_weakened` is true for the last four. The all_pass rule, `check verify`'s decision and the PR summary block
 on `guard_weakened` and `checks_changed`, not on `guard_touched`, which keeps its meaning (any guarded file
 changed). An attempt recorded before `guard_weakened` existed is read by `guard_touched`, as before. The testcase
-counts come from the merge-base run of the JUnit checks, which happens only when a guarded file changed (cached as
-above). The PR summary's "tests changed" column says "added" and "weakened" apart.
+counts come from a fresh merge-base run of the JUnit checks in the same environment as the candidate. This
+comparison runs when a guarded file changed. The PR summary's "tests changed" column says "added" and "weakened" apart.
 
 ## The numbers
 
