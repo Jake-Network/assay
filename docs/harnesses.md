@@ -85,7 +85,9 @@ when the hook runs". "Matcher Configuration", for preToolUse / postToolUse / pos
 **Boundary context.** Cursor documents `sessionStart.additional_context` as “Additional context to add to the
 conversation's initial system context”. The hook resolves the checkout from the first workspace root when the
 event has no `cwd`. `postToolUse` and `postToolUseFailure` accept `additional_context` for
-pending notes. They identify the same session with `conversation_id`. [Cursor hooks reference](https://cursor.com/docs/hooks)
+pending notes. They identify the same session with `conversation_id`. The same reference says sessionStart "runs as
+fire-and-forget; the agent loop does not wait for or enforce a blocking response", so a brief that takes long may
+miss the first model request. [Cursor hooks reference](https://cursor.com/docs/hooks)
 
 **Shell result.** cursor_hooks.md, "postToolUse": "Called after successful tool execution", example input
 `"tool_name": "Shell"`, `"tool_input": { "command": "npm test" }`,

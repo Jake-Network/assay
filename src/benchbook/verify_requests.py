@@ -46,8 +46,14 @@ def reported_piece(repo: Path, commit: str, report: str) -> str | None:
 
 
 def enqueue(data: dict[str, Any]) -> str:
+    """Queue a re-run for a report that names a commit. The report is the foreground Agent result (PostToolUse) or,
+    for an agent Claude Code ran in the background, its SubagentStop (agent_type and last_assistant_message): since
+    2.x an Agent call without run_in_background comes back async_launched too (T08, 2.1.330)."""
     response = data.get("tool_response")
-    if data.get("tool_name") not in ("Agent", "Task") or (
+    if data.get("hook_event_name") == "SubagentStop":
+        if not data.get("agent_type"):  # compaction runs as an untyped subagent
+            return ""
+    elif data.get("tool_name") not in ("Agent", "Task") or (
             isinstance(response, dict) and response.get("status") == "async_launched"):
         return ""
     session = data.get("session_id", "")
@@ -71,7 +77,18 @@ def enqueue(data: dict[str, Any]) -> str:
     hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True, "data": request})
     hooks._log_notices()
     hooks.start_processor(spool)
-    return f"benchbook: re-running the checks of {piece} at {commit[:7]} in the background"
+    line = f"benchbook: re-running the checks of {piece} at {commit[:7]} in the background"
+    if data.get("hook_event_name") == "SubagentStop":
+        # SubagentStop gives the lead no context: leave the line for the next hook that does (the task-notification's
+        # UserPromptSubmit follows right after).
+        notes = session_notes.notes_dir(session)
+        if notes is not None:
+            notes.mkdir(parents=True, exist_ok=True, mode=0o700)
+            name = "queued-" + hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest() + ".txt"
+            if not (notes / name).exists() and not (notes / session_notes.DELIVERED / name).exists():
+                session_notes.write_note(notes / name, line)
+        return ""
+    return line
 
 
 def _result_line(run: Verification, record: Recorded) -> str:

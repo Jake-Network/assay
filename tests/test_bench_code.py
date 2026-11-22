@@ -286,7 +286,8 @@ def test_dry_run_end_to_end_pins_the_three_numbers(tmp_path: Path, db_url: str) 
     assert sorted((c["author"], c["kind"]) for c in claims if c["kind"] == "completion") == \
         [("implementer", "completion")] * 3
     # the refuted completion's failing re-run left its discarded-approach claim (failures.py), and nothing else did
-    assert [c["tags"] for c in claims if c["kind"] != "completion"] == [["discarded", "piece:toy__calc-2"]]
+    assert [c["tags"] for c in claims if c["kind"] != "completion"] == [
+        ["discarded", "piece:toy__calc-2", "file:calc.py"]]  # T06: the paths its commit changed
     assert json.loads((out / "preflight.json").read_text())["toy__calc-2"]["ok"] is True
 
 

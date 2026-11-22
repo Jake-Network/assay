@@ -85,6 +85,8 @@ def main(event: str, harness: str | None = None) -> None:
             from .verify_requests import enqueue
 
             text = enqueue(data)
+            if data.get("hook_event_name") == "SubagentStop":
+                return  # SubagentStop has no context for the lead; pending notes wait for a hook that has
         if event in ("session-start", "agent-result"):
             notes = session_notes.deliver(data.get("session_id"), min(MAX_CHARS, 10_000 - len(text) - 2))
             text = "\n\n".join(part for part in (text, notes) if part)

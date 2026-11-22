@@ -1,0 +1,26 @@
+{
+  "session_id": "s-subagent-stop-background",
+  "transcript_path": "/home/user/.claude/projects/p/s-subagent-stop-background.jsonl",
+  "cwd": "{CWD}",
+  "prompt_id": "3477a33f-2d24-4208-8825-54060c35bcdc",
+  "permission_mode": "default",
+  "agent_id": "ae785e1382aca2ff8",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/user/.claude/projects/p/s-subagent-stop-background/subagents/agent.jsonl",
+  "last_assistant_message": "{REPORT}",
+  "background_tasks": [
+    {
+      "id": "ae785e1382aca2ff8",
+      "type": "subagent",
+      "status": "running",
+      "description": "Foreground marker reply",
+      "agent_type": "general-purpose"
+    }
+  ],
+  "session_crons": []
+}

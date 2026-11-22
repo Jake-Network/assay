@@ -269,12 +269,13 @@ The `benchbook` plugin also gives the model what the ledger says at the points w
 | `benchbook hook session-start` | SessionStart (every source: startup, resume, clear, compact) | the brief scoped by what this branch changed (`brief --here`), at most 1,500 tokens and 6,000 characters, as `additionalContext`; nothing when every section is empty |
 | `benchbook hook pre-compact` | PreCompact | one paragraph of at most 1,000 characters, "Keep these ids and statuses verbatim in the summary: ...", three lines per section, on plain stdout (instructions for the compaction summary) |
 | `benchbook hook notes` | UserPromptSubmit | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once; they move to `delivered/` |
-| `benchbook hook agent-result` | PostToolUse (Agent or Task) | queues a re-run when a foreground report identifies its commit and piece; delivers any results already waiting for this session |
+| `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
 
 The detached processor verifies the reported commit using the project's declared checks. It stores the report's
 hash and structured identifiers. Repeated reports for the same project, piece and commit share one completed
 re-run within the database and writer's spool. SessionStart, UserPromptSubmit, and subsequent Agent or Bash
-results can deliver the pending note once. The initial asynchronous launch payload does not queue a check.
+results can deliver the pending note once. The asynchronous launch payload does not queue a check: the background
+agent's SubagentStop does.
 
 Each brief is also written to `.benchbook/STATE.md` (first line: when and at which HEAD), for harnesses without
 hooks and for people; when the benchbook folder is tracked, STATE.md is added to `.git/info/exclude`. The ledger
@@ -291,22 +292,24 @@ conditions in the [benchmark preregistration](../bench/boundary/PREREGISTRATION.
 
 The session-start, compaction and Agent-result hooks rely on the inputs and outputs below. The "documented" column is
 from the hook reference (code.claude.com/docs/en/hooks, read 2026-11-22); `scripts/qa_boundary_hooks.sh`
-(MANUAL_QA.md, scenario 5) checks them on a real session and fills the last column. Until it has run, the fixtures in
-`tests/fixtures/hooks/` (`session_start_startup.json`, `session_start_compact.json`, `pre_compact.json`,
-`post_tool_use_agent.json`, `post_tool_use_agent_async.json`, `user_prompt_submit.json`) are written from the
-documented examples.
+(MANUAL_QA.md, scenario 5) checks them on a real session and fills the last column (2026-11-22, Claude Code
+2.1.330, haiku). The fixtures in `tests/fixtures/hooks/` are the inputs it saw, with session ids, paths and report
+text replaced (`session_start_startup.json`, `session_start_compact.json`, `pre_compact.json`,
+`post_tool_use_agent_async.json`, `user_prompt_submit.json`, `user_prompt_submit_task_notification.json`,
+`subagent_stop_background.json`, `subagent_stop_compaction.json`), except `post_tool_use_agent.json` (a completed
+foreground result), which no default session produced and which stays the documented example.
 
 | question | documented | observed (Claude Code version) |
 |---|---|---|
-| SessionStart `source` values | `startup`, `resume`, `clear`, `compact`, `fork` | not yet run |
-| SessionStart `additionalContext` reaches the model, also after compaction | yes; `compact` is the documented way to re-inject | not yet run |
-| PreCompact input | `trigger` (`manual`/`auto`), `custom_instructions` (may be null) | not yet run |
-| PreCompact stdout | instructions for the compaction summary, cut at 10,000 characters | not yet run |
-| PostToolUse on the Agent tool | `tool_name` `Agent` (no `Task` alias); `tool_response.status` `completed` with `content`, or `async_launched` with `outputFile` | not yet run |
-| UserPromptSubmit when a background subagent reports | fires | not yet run |
-| PostToolUse (Bash) `additionalContext` reaches the model | yes | not yet run |
-| Both plugins load from repeated `--plugin-dir` | not documented | not yet run |
-| MCP tool prefix of the `benchbook-mcp` plugin | `mcp__plugin_<plugin>_<server>__`; a hyphen in the plugin name not addressed | not yet run |
+| SessionStart `source` values | `startup`, `resume`, `clear`, `compact`, `fork` | `startup`, `resume` (each `--resume`), `compact` seen; `model` present on `compact`, absent on `startup` (2.1.330) |
+| SessionStart `additionalContext` reaches the model, also after compaction | yes; `compact` is the documented way to re-inject | yes, before and after `/compact` (2.1.330) |
+| PreCompact input | `trigger` (`manual`/`auto`), `custom_instructions` (may be null) | as documented, plus `prompt_id`; `trigger` `manual` for `/compact` (2.1.330) |
+| PreCompact stdout | instructions for the compaction summary, cut at 10,000 characters | followed: the phrase it asked for is in PostCompact's `compact_summary` (2.1.330). Compaction also ends with a SubagentStop whose `agent_type` is `""` and whose `last_assistant_message` is the summary |
+| PostToolUse on the Agent tool | `tool_name` `Agent` (no `Task` alias); `tool_response.status` `completed` with `content`, or `async_launched` with `outputFile` | `Agent`; **both calls `async_launched`**, the one without `run_in_background` too (`isAsync: true`). The report came with SubagentStop (`agent_type`, `last_assistant_message`), then a UserPromptSubmit whose `prompt` is a `<task-notification>` holding it in `<result>` (2.1.330) |
+| UserPromptSubmit when a background subagent reports | fires | fires once per finished agent, right after its SubagentStop (2.1.330) |
+| PostToolUse (Bash) `additionalContext` reaches the model | yes | yes (2.1.330) |
+| Both plugins load from repeated `--plugin-dir` | not documented | yes: `benchbook` and `benchbook-mcp` (2.1.330) |
+| MCP tool prefix of the `benchbook-mcp` plugin | `mcp__plugin_<plugin>_<server>__`; a hyphen in the plugin name not addressed | `mcp__plugin_benchbook-mcp_benchbook__`: the hyphen stays. The server is still `pending` at `init` and connects during the first turn (2.1.330) |
 
 ## Installs from before the rename (assay)
 

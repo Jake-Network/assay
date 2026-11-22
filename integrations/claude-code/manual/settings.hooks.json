@@ -40,6 +40,11 @@
             "type": "command",
             "command": "benchbook hook subagent-stop",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "benchbook hook agent-result",
+            "timeout": 5
           }
         ]
       }

@@ -66,7 +66,9 @@ def answer(harness: str) -> str:
 # Command-hook output is event-specific. OpenCode and Pi read plain text in our extension and hand it to their SDK.
 CONTEXT_EVENTS = {CLAUDE_CODE: {"session-start": "SessionStart", "notes": "UserPromptSubmit",
                                 "agent-result": "PostToolUse"},
-                  "codex": {"session-start": "SessionStart", "notes": "PostToolUse"}}
+                  "codex": {"session-start": "SessionStart", "notes": "PostToolUse"},
+                  # Gemini CLI reads only additionalContext; its output types still declare hookEventName
+                  "gemini": {"session-start": "SessionStart", "notes": "AfterTool"}}
 PLAIN_EVENTS = {CLAUDE_CODE: frozenset({"pre-compact"}),
                 "opencode": frozenset({"session-start", "notes"}),
                 "pi": frozenset({"session-start", "notes"})}
@@ -81,11 +83,8 @@ def context_answer(harness: str, event: str, text: str) -> str:
     if (name := CONTEXT_EVENTS.get(harness, {}).get(event)) is not None:
         return json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext": text}},
                           ensure_ascii=False) + "\n"
-    if event in ("session-start", "notes"):
-        if harness == "cursor":
-            return json.dumps({"additional_context": text}, ensure_ascii=False) + "\n"
-        if harness == "gemini":
-            return json.dumps({"hookSpecificOutput": {"additionalContext": text}}, ensure_ascii=False) + "\n"
+    if event in ("session-start", "notes") and harness == "cursor":
+        return json.dumps({"additional_context": text}, ensure_ascii=False) + "\n"
     return answer(harness)
 
 
