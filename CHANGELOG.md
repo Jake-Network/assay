@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- `benchbook get <id>` prints at most 400 tokens of text (status, `checked:` label, statement, five links each way, the
+  last three decisions, cut items counted); `--json` is unchanged. Lookups are logged to `lookups.jsonl` in the
+  state directory. Pack.toml `[brief.labels]` names the oracles ("re-run", "person", ...).
 - `benchbook brief --here` scopes the code brief by what the current branch changed since its base (`file:<dir>/`
   prefixes, at most 20, and `piece:<branch>`). Discarded approaches and completion claims carry the directories their
   commit changed (`payload.paths`, `file:` tags; the spool's check attempts too), and the brief finds discarded
