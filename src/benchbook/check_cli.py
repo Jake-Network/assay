@@ -87,6 +87,33 @@ def verify(
         raise typer.Exit(1)
 
 
+@check_app.command("pin")
+def pin(
+    piece: Annotated[str | None, typer.Argument(help="The piece whose checks to pin (default: the project's)")] = None,
+    check: Annotated[list[str] | None, typer.Option(
+        "--check", help="NAME=CMD to pin instead of config.toml's [checks] (repeatable); {junit} in CMD reads a JUnit "
+                        "report")] = None,
+) -> None:
+    """Pin the checks check verify runs for PIECE (or every piece) in the ledger, so nothing has to be committed.
+
+    Without --check the [checks], [guard] and [verify] tables of the working tree's config.toml are pinned. check
+    verify reads a pin only when the merge-base has no committed config.toml, ignores pins written by the piece's
+    implementer, and sends the piece to a person when the pin changed after its first attempt (docs/code.md)."""
+    from .checks import parse_check_options, pin_checks
+    from .cli import emit, ledger
+    from .config import load
+    from .ids import short
+
+    cfg = load()
+    specs = parse_check_options(check) if check else cfg.checks
+    p, new = pin_checks(ledger(), piece, specs, cfg.guard_paths, None, source="cli" if check else "config")
+    scope = "the project" if piece is None else f"piece {piece}"
+    emit({"ok": True, "pin": short("claim", p.id), "piece": p.piece, "new": new, "sha256": p.sha256,
+          "checks": list(p.checks)},
+         f"{'pinned' if new else 'already pinned'} {', '.join(p.checks)} for {scope} ({short('claim', p.id)}, "
+         f"{p.sha256[:12]})")
+
+
 def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
     from .ids import short
 

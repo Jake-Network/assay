@@ -223,14 +223,44 @@ def write_config(root: Path, project: str, budget: int = 2000) -> Path:
     files (autoresearch state, queued runs) live there, and `git mv .assay .benchbook` moves them together."""
     p = local_dir(root) / CONFIG_FILE
     p.parent.mkdir(parents=True, exist_ok=True)
+    line = f'project = "{project}"'
+    if p.is_file():  # keep what is there ([checks], [guard], ...); only the project line changes
+        old = p.read_text(encoding="utf-8")
+        new, n = re.subn(r'(?m)^project\s*=.*$', lambda _: line, old, count=1)
+        p.write_text(new if n else f"{line}\n{old}", encoding="utf-8")
+        return p
     p.write_text(
-        f'project = "{project}"\n'
+        f"{line}\n"
         "# database_url is never stored here. Set BENCHBOOK_DATABASE_URL for a shared Postgres;\n"
         "# without it benchbook uses the local embedded Postgres.\n"
         f"default_budget_tokens = {budget}\n",
         encoding="utf-8",
     )
     return p
+
+
+def exclude_local_dir(root: Path) -> bool:
+    """Add the benchbook folder to .git/info/exclude when git does not track it, so nothing has to be committed.
+    True when a line was added."""
+    import subprocess
+
+    rel = local_dir(root).name + "/"
+    try:
+        tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--", rel], capture_output=True, text=True,
+                                 check=True).stdout.strip()
+        path = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "info/exclude"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return False  # not a git repository
+    if tracked:
+        return False
+    exclude = Path(path) if Path(path).is_absolute() else root / path
+    text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    if any(x.strip() in (rel, "/" + rel, rel.rstrip("/"), "/" + rel.rstrip("/")) for x in text.splitlines()):
+        return False
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + f"/{rel}\n", encoding="utf-8")
+    return True
 
 
 # [checks] and [guard] are parsed here, with the standard library only: the command hooks that will match shell
