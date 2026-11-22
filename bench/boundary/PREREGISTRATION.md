@@ -109,3 +109,11 @@ as the difference from the session's previous receipt, against the call's cap an
 Comparative totals include only task repetitions that every selected arm completes. The report lists any unmatched
 completed trials, and `metrics.json` retains their individual measurements. Keep the partial output and preregister
 any rerun before paying for it.
+
+## Amendments
+
+- **2026-11-23, H5 sweep.** The first sweep (`h5-sweep`) stopped at workers 8, C run 3: the account's five-hour usage
+  limit ended the lead's session (HTTP 429, `usage_limit_reached`) after USD 1.98, and `bench.run` stopped the
+  sweep there. `bench.run` does not resume an output directory, so the rest runs in two new ones with the same
+  command and caps: one replacement C run at workers 8 (`h5-sweep-c8r`) and A,C × workers 16,30 × 3 runs
+  (`h5-sweep-16-30`). The stopped run is reported, not counted as a completed repetition. Total cap unchanged (USD 90).
