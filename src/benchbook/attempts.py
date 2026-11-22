@@ -85,10 +85,15 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
     result = CheckResult(name, status, data.get("exit_code"), int(data.get("duration_ms") or 0), failed,
                          data.get("last_line_hash"), signature=part if isinstance(part, str) and part else None)
     found = _integrity(Path(str(data["repo"])), sha)
+    paths: list[str] = []
     if isinstance(found, str):
         base, integ, note = Base("", "", "", "", {}, [], False), Integrity([], False), found
     else:
         (base, integ), note = found, None
+        try:  # T06: the directories the commit changed, as check verify records them
+            paths = checks.path_prefixes(checks.changed_paths(Path(str(data["repo"])), base.merge_base, sha))
+        except BenchbookError:
+            paths = []
     source = f"{SOURCES[event]}: {name} in {data['repo']}"
     if event == "bash-result":
         ids = {k: data.get(k) for k in ("harness", "session_id", "tool_use_id", "agent_type") if data.get(k)}
@@ -98,8 +103,8 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
     return LocalRun(str(data["piece"]), sha, base, integ, [result], result.duration_ms, data.get("interrupted"),
                     approach, declared=list(base.checks),
                     via=str(data.get("via") or ("bash-hook" if event == "bash-result" else "check-run")),
-                    dirty=bool(data.get("dirty")), changed=int(data.get("changed") or 0), integrity_note=note,
-                    source_note=source)
+                    paths=paths, dirty=bool(data.get("dirty")), changed=int(data.get("changed") or 0),
+                    integrity_note=note, source_note=source)
 
 
 def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: UUID) -> str:

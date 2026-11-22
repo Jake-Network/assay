@@ -597,6 +597,7 @@ In a code project `benchbook brief` (MCP `benchbook_brief`) is the code pack's
 ```bash
 benchbook brief --tags mod:media                     # comma separated; --budget N (default 2000 tokens)
 benchbook brief --tags mod:media,file:src/app/modules/media/
+benchbook brief --here                               # what this branch changed: file:<dir>/ tags and piece:<branch>
 ```
 
 It shows, in this order:
@@ -612,8 +613,15 @@ It shows, in this order:
 prefix: the `file:` tags of findings and the paths pieces occupy. A piece is in scope when one of its tasks (`piece
 start`, any status) carries a matching tag or occupies a matching path; discarded approaches and verified commits
 are found through their piece (and a discarded approach also through its own `mod:` tags). Findings are matched by
-their own tags only, as in the [query](#reading-open-findings). A piece never started with `piece start` has no
-task, so it is found only without `--tags`. Without `--tags` the brief covers the whole project. With several tags
+their own tags only, as in the [query](#reading-open-findings). Discarded approaches and completions also carry the
+directories their commit changed since the merge-base (`payload.paths` and `file:<dir>/` tags, at most 20), so a
+piece never started with `piece start` is found by path, and a `piece:<name>` tag matches them directly.
+
+**`--here`** computes the scope from the checkout: the directories the current branch changed since its merge-base
+with the base ref (`[guard] base`, else `origin/main`) plus the working tree's changes and untracked files, each
+file reduced to its directory and the deepest lifted to their parent until at most 20 remain, as `file:` tags, plus
+`piece:<branch>`. On the base branch itself the scope is empty and the brief covers the whole project. The boundary
+hooks use the same scope. Without `--tags` the brief covers the whole project. With several tags
 the sections hold the union.
 
 **Budget.** At most 8 items per section (pack.toml `[brief]`), each line cut to a fixed length; then items are

@@ -46,6 +46,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "paths": {
+      "description": "Directory prefixes the commit changed since the merge-base (at most 20); the brief scopes by them.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 20
     }
   }
 }

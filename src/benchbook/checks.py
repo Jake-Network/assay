@@ -172,6 +172,7 @@ class Verification:
     environment: str | None = None
     prepared: Prepared | None = None
     baseline_signature: str | None = None  # how the failing checks failed at the merge-base (T03)
+    paths: list[str] = field(default_factory=list)  # directory prefixes the commit changed since the merge-base (T06)
 
     @property
     def passed(self) -> int:
@@ -323,6 +324,35 @@ def config_at(repo: Path, sha: str) -> tuple[dict[str, Any], str] | None:
             except tomllib.TOMLDecodeError as e:
                 raise _Unreadable(f"{rel} at {sha[:12]}: {e}") from e
     return None
+
+
+MAX_SCOPE_PATHS = 20
+
+
+def _parent(prefix: str) -> str:
+    """"a/b/c/" -> "a/b/", "a/" or "x.py" -> "" (the whole repository)."""
+    head = prefix.rstrip("/").rpartition("/")[0]
+    return head + "/" if head else ""
+
+
+def path_prefixes(paths: Sequence[str], limit: int = MAX_SCOPE_PATHS) -> list[str]:
+    """Changed files as the directory prefixes the brief scopes by (T06): each file's directory ("media/x.py" ->
+    "media/"; a file at the root stays itself), prefixes inside another dropped, and the deepest lifted to their
+    parent until at most limit remain. [""] is the whole repository."""
+    def reduce(ps: set[str]) -> list[str]:
+        if "" in ps:
+            return [""]
+        out: list[str] = []
+        for p in sorted(ps):
+            if not any(p.startswith(q) for q in out if q.endswith("/")):
+                out.append(p)
+        return out
+
+    found = reduce({p.rsplit("/", 1)[0] + "/" if "/" in p else p for p in paths if p})
+    while len(found) > limit:
+        depth = max(p.rstrip("/").count("/") for p in found)
+        found = reduce({_parent(p) if p.rstrip("/").count("/") == depth else p for p in found})
+    return found
 
 
 def changed_paths(repo: Path, merge_base: str, commit: str) -> list[str]:
@@ -860,6 +890,7 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         pin = pinned(lg, piece, impl)
         moved = pin is not None and pin_changed(lg, pin, piece, repo, impl)
     integ = integrity(repo, b, sha, moved)
+    scope = path_prefixes(changed_paths(repo, b.merge_base, sha))
     t0 = time.monotonic()
     prepared = Prepared()
     results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], check_env(), b.prep, prepared)
@@ -870,7 +901,8 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     if interrupted is None and environment is None and integ.guard_files and sha != b.merge_base:
         interrupted = count_tests(repo, b, results, integ, check_env())
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
-                     declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig)
+                     declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
+                     paths=scope)
     found = None if given is None else given[0]
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
@@ -978,6 +1010,8 @@ def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report
                                "reported_checks": report.mentions if report else []}
     if report is not None:
         payload["report"] = {"sha256": report.sha256, "bytes": report.bytes}
+    if v.paths:  # T06: the brief finds the claim by the directories the commit changed
+        payload["paths"] = list(v.paths)
     proposer = lg
     if lg.token is None:
         proposer = lg.as_agent(reporter)
@@ -985,10 +1019,10 @@ def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report
         payload["reported_by"] = reporter
     named = payload.get("reported_by")
     usual, with_reporter = statements(v.piece, v.commit, reporter)
-    tags = [f"piece:{v.piece}", f"commit:{v.commit}"]
+    tags = [f"piece:{v.piece}", f"commit:{v.commit}", *(failures.FILE_TAG + p for p in v.paths)]
 
     def existing() -> UUID | None:
-        for row in lg.sql_internal(_OWN_CLAIMS, (lg.project_id, tags, v.piece, v.commit)):
+        for row in lg.sql_internal(_OWN_CLAIMS, (lg.project_id, tags[:2], v.piece, v.commit)):
             by = (row["payload"] or {}).get("reported_by")
             if reporter_of(row["author"], row["author_role"], by) == reporter or (
                     row["author"] == proposer.agent and by == named):
@@ -1016,7 +1050,7 @@ def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:
     if v.run_status != "ok" or sig is None or getattr(v, "dirty", False):
         return
     try:
-        c = failures.record_discarded(lg, rec.experiment_id, v.piece, sig, v.approach, v.commit)
+        c = failures.record_discarded(lg, rec.experiment_id, v.piece, sig, v.approach, v.commit, v.paths)
     except Exception as e:  # noqa: BLE001 - see the docstring
         rec.discarded_error = f"{type(e).__name__}: {str(e).strip()[:200]}"
         return

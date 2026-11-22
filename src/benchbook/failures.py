@@ -33,6 +33,7 @@ DISCARDED_TAG = "discarded"
 PIECE_TAG = "piece:"
 APPROACH_TAG = "approach:"
 MOD_TAG = "mod:"
+FILE_TAG = "file:"  # a directory prefix the attempt's commit changed (T06)
 CLAIM_KIND = "observation"
 # Domain separator of the discarded-approach dedup hash, stored in claims.statement_hash: changing it would make the
 # same failure after an upgrade a second claim.
@@ -178,11 +179,15 @@ def module_tags(lg: Ledger, piece: str) -> list[str]:
 
 
 def record_discarded(lg: Ledger, attempt_id: UUID, piece: str, sig: str, approach: str | None,
-                     commit: str | None) -> ClaimResult:
-    """The discarded-approach claim of a failed attempt, with the attempt linked supports. Idempotent per key."""
+                     commit: str | None, paths: Sequence[str] = ()) -> ClaimResult:
+    """The discarded-approach claim of a failed attempt, with the attempt linked supports. Idempotent per key.
+    paths: the directory prefixes the commit changed (checks.path_prefixes), as payload.paths and file: tags, so the
+    brief finds the claim by path without a piece start (T06)."""
     tags = [DISCARDED_TAG, PIECE_TAG + piece, *([APPROACH_TAG + approach] if approach else []),
-            *module_tags(lg, piece)]
+            *module_tags(lg, piece), *(FILE_TAG + p for p in paths)]
     payload: dict[str, Any] = {"piece": piece, "signature": sig, "first_attempt": str(attempt_id)}
+    if paths:
+        payload["paths"] = list(paths)
     if approach:
         payload["approach"] = approach
     if commit:

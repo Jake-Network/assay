@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -87,7 +88,8 @@ SELECT s.id, s.tags, s.n_support, c.payload, count(*) OVER () AS total,
 FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
 WHERE s.project_id = %(p)s AND s.kind = 'observation' AND 'discarded' = ANY(s.tags) AND s.n_support > 0
   AND s.status NOT IN ('refuted', 'retracted', 'superseded')
-  AND (%(all)s OR s.tags && %(t)s::text[] OR c.payload ->> 'piece' IN (SELECT piece FROM pieces))
+  AND (%(all)s OR s.tags && %(t)s::text[] OR c.payload ->> 'piece' IN (SELECT piece FROM pieces)
+       OR EXISTS (SELECT 1 FROM unnest(s.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[])))
 ORDER BY last_at DESC NULLS LAST, s.created_at DESC, s.id
 LIMIT %(n)s"""
 FINDINGS = """
@@ -113,10 +115,41 @@ WITH {PIECES}, last AS (
          s.id, s.decided_at
   FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
   WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'verified'
-    AND (%(all)s OR c.payload ->> 'piece' IN (SELECT piece FROM pieces))
+    AND (%(all)s OR c.payload ->> 'piece' IN (SELECT piece FROM pieces) OR c.tags && %(t)s::text[]
+         OR EXISTS (SELECT 1 FROM unnest(c.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[])))
   ORDER BY c.payload ->> 'piece', s.decided_at DESC, s.id
 )
 SELECT *, count(*) OVER () AS total FROM last ORDER BY decided_at DESC, piece LIMIT %(n)s"""
+
+
+def changed_scope(repo: Path, base: str | None = None) -> list[str]:
+    """The brief's scope for the checkout at repo (T06, `benchbook brief --here` and the boundary hooks): the
+    directories the current branch changed since its merge-base with the base ref ([guard] base, else origin/main)
+    plus the working tree's changes, as file:<prefix> tags (checks.path_prefixes), and piece:<branch>. Empty on the
+    base branch itself, or when the base ref or HEAD cannot be read."""
+    from ... import config as localcfg
+    from ...checks import DEFAULT_BASE, _git, path_prefixes
+
+    def out(*args: str) -> str:
+        return _git(repo, *args, check=False).stdout.strip()
+
+    try:
+        ref = base or localcfg.load(repo).guard_base or DEFAULT_BASE
+    except Exception:  # noqa: BLE001 - an unreadable config.toml leaves the default base
+        ref = DEFAULT_BASE
+    head = out("rev-parse", "--verify", "--quiet", "HEAD")
+    tip = out("rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}")
+    branch = out("symbolic-ref", "--quiet", "--short", "HEAD")
+    if not head or not tip or head == tip or branch in (ref, ref.rsplit("/", 1)[-1]):
+        return []
+    mb = out("merge-base", head, tip)
+    if not mb:
+        return []
+    paths = [*out("diff", "--name-only", "--no-renames", mb, head).splitlines(),
+             *out("diff", "--name-only", "--no-renames", "HEAD").splitlines(),
+             *out("ls-files", "--others", "--exclude-standard").splitlines()]
+    tags = [FILE_TAG + p for p in path_prefixes([p for p in paths if p])]
+    return tags + ([f"piece:{branch}"] if branch else [])
 
 
 def clip(s: str, n: int) -> str:

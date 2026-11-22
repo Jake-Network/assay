@@ -332,3 +332,41 @@ def test_reads_that_changed_a_plan(db_url: str, code: str, ledger: dict[str, Any
     [row] = lead.sql(query)["rows"]
     assert row == {"cited": 6, "in_ledger": 5, "discarded_approaches": 1, "findings": 2, "verified_commits": 1,
                    "reads_that_changed_the_plan": 3}
+
+
+# ------------------------------------------------------------------------------------- scope by changed paths (T06)
+
+@pytest.mark.parametrize(("paths", "limit", "want"), [
+    (["media/a.py", "media/sub/b.py", "x.py"], 20, ["media/", "x.py"]),
+    (["a/b/c.py", "a/d/e.py"], 1, ["a/"]),
+    ([f"d{i}/f.py" for i in range(25)], 20, [""]),
+    ([], 20, []),
+])
+def test_path_prefixes(paths: list[str], limit: int, want: list[str]) -> None:
+    assert checks.path_prefixes(paths, limit) == want
+
+
+def test_here_scope_finds_a_discarded_approach_without_piece_start(tmp_path: Path, db_url: str, code: str) -> None:
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import make_repo
+    from tests.conftest import piece as commit_piece
+
+    r = make_repo(tmp_path / "r", 'project = "x"\n[checks.value]\ncmd = "test ! -e media/broken && test ! -e '
+                  'other/broken"\n[guard]\nbase = "main"\n')
+    lead = agent(db_url, code, "lead", "orchestrator")
+    media = commit_piece(r, "feature", {"media/broken": "x\n"})
+    other = commit_piece(r, "elsewhere", {"other/broken": "x\n"})
+    checks.verify(lead, "pm-1", media, repo=r, reported_by="impl")  # no piece start: no task, no mod: tag
+    checks.verify(lead, "pm-2", other, repo=r, reported_by="impl")
+    assert changed_scope(r) == []  # on main
+    git(r, "checkout", "-q", "feature")
+    scope = changed_scope(r)
+    assert scope == ["file:media/", "piece:feature"]
+    out = compile_brief(lead, None, 2000, tags=scope)
+    assert "pm-1" in out and "pm-2" not in out
+    [claim] = lead.sql_internal("SELECT tags, payload FROM benchbook.claims WHERE project_id = %s"
+                                " AND 'discarded' = ANY(tags) AND payload ->> 'piece' = 'pm-1'", (code,))
+    assert "file:media/" in claim["tags"] and claim["payload"]["paths"] == ["media/"]
+    (r / "other").mkdir()
+    (r / "other" / "new.py").write_text("x\n")  # an untracked file joins the scope
+    assert changed_scope(r)[:2] == ["file:media/", "file:other/"]

@@ -217,12 +217,20 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
           budget: Annotated[int | None, typer.Option("--budget")] = None,
           tags: Annotated[str | None, typer.Option(
               help="code pack: only these module tags, e.g. mod:media (comma separated; file:<prefix> by path)")]
-          = None) -> None:
+          = None,
+          here: Annotated[bool, typer.Option(
+              "--here", help="code pack: scope by what this branch changed since its base (file:<dir>/ tags and "
+                             "piece:<branch>), plus --tags")] = False) -> None:
     """Print the context brief (markdown) for this agent."""
     from .config import load
 
+    scope = csv(tags)
+    if here:
+        from .packs.code.brief import changed_scope
+
+        scope = [*changed_scope(_repo_root()), *scope]
     b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
-                       tags=csv(tags) or None)
+                       tags=scope or None)
     emit({"brief": b}, b.rstrip("\n"))
 
 
