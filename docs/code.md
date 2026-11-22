@@ -756,6 +756,12 @@ written, by the hook's background processor, where it already writes the auto-ca
 itself still only queues the report and exits. A report that cites its own records gets its findings recorded too
 (the note is what such a report skips).
 
+`[report] agents` widens the reports read for findings without making them workers: a list of subagent types
+(with or without a plugin prefix), or `["*"]` for every subagent. While `BENCHBOOK_HOOK_AGENTS` is unset, the
+final report of a listed subagent is queued for its findings only: no `[auto-captured]` note is written for it.
+`BENCHBOOK_HOOK_AGENTS`, when set, still decides alone. `benchbook init --pack code` writes
+`out_of_scope_heading = "Out of scope"` and `agents = ["*"]` when config.toml has no `[report]` table yet.
+
 ### What counts as a finding
 
 - **The section**: a markdown heading of any level, or a line that is bold as a whole (`**범위 밖**`,
@@ -763,6 +769,9 @@ itself still only queues the report and exits. A report that cites its own recor
   whitespace collapsing and dropping a trailing colon. A heading section ends at the next heading of the same or a
   higher level (deeper headings inside it are group labels); a bold-line section ends at the next heading of any
   level or the next bold line. A thematic break (`---`) ends either. Every such section in the report is read.
+- **One line**: outside a section, a line `<heading>: <text>` (also as a list item, or with the heading in bold,
+  `**범위 밖:** ...`, and with a full-width colon) is one finding whose text is what follows the colon. `범위 밖: 없음`
+  is nothing.
 - **The items**: each top-level list item (`-`, `*`, `+`, `1.`, `1)`; a `[ ]` checkbox is dropped) is one finding.
   Its first paragraph, wrapped lines included, is the finding's text. Nested items and indented paragraphs are its
   details. Paragraphs between the items, and lines in fenced code blocks, are never findings. An item whose text is

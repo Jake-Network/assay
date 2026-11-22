@@ -171,6 +171,12 @@ def _init_code(root: Path, project: str, out: dict[str, Any]) -> str:
         out["excluded"] = True
         lines.append("  git:    .benchbook/ added to .git/info/exclude (nothing to commit)")
     cfg = load(root)
+    if cfg.path is not None and cfg.out_of_scope_heading is None and "[report]" not in cfg.path.read_text("utf-8"):
+        # T05: every subagent's report is read for an out-of-scope section (findings only, no note)
+        with cfg.path.open("a", encoding="utf-8") as f:
+            f.write('\n[report]\nout_of_scope_heading = "Out of scope"  # or "범위 밖"\nagents = ["*"]\n')
+        lines.append('  report: out-of-scope findings read from every subagent\'s "## Out of scope" section')
+        cfg = load(root)
     if cfg.checks:
         name = STATE["agent"] or env("AGENT") or (None if env("TOKEN") else "lead")
         p, _ = pin_checks(Ledger.open(project=project, agent=name), None, cfg.checks, cfg.guard_paths,

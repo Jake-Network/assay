@@ -253,10 +253,17 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
             from .harnesses import report_input
 
             data = report_input(harness, data)
+        findings_only = False
         if not is_worker(_agent_type(data)):
             # The plugin hook fires for every subagent; BENCHBOOK_HOOK_AGENTS decides which ones are captured. Leave
-            # before reading config, spooling or importing anything heavier.
-            return None
+            # before reading config, spooling or importing anything heavier. Without it, [report] agents may take a
+            # subagent's report for its findings only (T05).
+            if env("HOOK_AGENTS") is not None or event not in REPORT_EVENTS:
+                return None
+            cfg = config.load(Path(data.get("cwd") or os.getcwd()))
+            if not cfg.out_of_scope_heading or not _listed(_agent_type(data), cfg.report_agents):
+                return None
+            findings_only = True
         cwd = Path(data.get("cwd") or os.getcwd())
         cfg = config.load(cwd)
         project = cfg.project
@@ -265,6 +272,8 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
             # The capture decision is made here, under the environment Claude Code ran the hook with. A later
             # `benchbook hook replay` from a shell with another BENCHBOOK_HOOK_AGENTS must not undo it.
             entry = {"event": event, "project": project, "data": data, "spooled_at": time.time(), "accepted": True}
+            if findings_only:
+                entry["findings_only"] = True
             if cfg.out_of_scope_heading:  # read with the project, so a replay looks for the section this run had
                 entry["out_of_scope_heading"] = cfg.out_of_scope_heading
             _write_spool(spool, entry)
@@ -419,6 +428,16 @@ def is_worker(agent_type: str | None, *, require_type: bool = True) -> bool:
     if not agent_type:
         return not require_type
     return agent_type in types or agent_type.rsplit(":", 1)[-1] in types
+
+
+REPORT_EVENTS = ("subagent-stop", "subagent-handback")
+
+
+def _listed(agent_type: str | None, agents: list[str]) -> bool:
+    """[report] agents: "*" lists every subagent, typed or not; a type matches with or without its plugin prefix."""
+    if "*" in agents:
+        return True
+    return bool(agent_type) and (agent_type in agents or str(agent_type).rsplit(":", 1)[-1] in agents)
 
 
 def _is_handback(data: dict[str, Any]) -> bool:
@@ -638,7 +657,8 @@ def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: dateti
 
 
 def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project: str | None = None,
-            fired_at: float | None = None, accepted: bool = False, out_of_scope_heading: str | None = None) -> str:
+            fired_at: float | None = None, accepted: bool = False, out_of_scope_heading: str | None = None,
+            findings_only: bool = False) -> str:
     """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'. accepted: the hook entry point already decided
     to capture this event (spool entries record it), so the current BENCHBOOK_HOOK_AGENTS is not consulted again.
     out_of_scope_heading: [report] out_of_scope_heading as the hook read it; without a project the config of the
@@ -677,6 +697,8 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     if out_of_scope_heading and lg.pack.name == "code":
         _capture_findings(lg, event, text, out_of_scope_heading, data, when,
                           {k: v for k, v in source.items() if v})
+    if findings_only:  # taken by [report] agents, not as a worker: no note of the report itself (T05)
+        return "findings-only"
     if _cites_own_record(lg, text, data, when):
         return "cited"
     head = " ".join(text.split())[:STATEMENT_HEAD]
@@ -820,7 +842,8 @@ def process_file(path: Path) -> str:
             heading = spooled.get("out_of_scope_heading")
             result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
                              fired_at=spooled.get("spooled_at"), accepted=accepted,
-                             out_of_scope_heading=heading if isinstance(heading, str) else None)
+                             out_of_scope_heading=heading if isinstance(heading, str) else None,
+                             findings_only=spooled.get("findings_only") is True)
         log(f"{event}: {result}")
         if adopted_id is not None:  # before the removal: _adopt must never copy it again
             with (path.parent / ADOPTED_DONE).open("a", encoding="utf-8") as f:
