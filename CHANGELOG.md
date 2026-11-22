@@ -2,6 +2,11 @@
 
 ## Unreleased: code pack
 
+- Boundary hooks in the `benchbook` plugin: `benchbook hook session-start` (SessionStart) gives the branch's brief
+  (1,500 tokens, 6,000 characters) as additionalContext and writes it to `.benchbook/STATE.md`, which it gives instead
+  when the ledger does not answer within 5 seconds; `pre-compact` (PreCompact) gives a 1,000-character paragraph of
+  ids and statuses to keep in the compaction summary; `notes` (UserPromptSubmit) delivers notes queued for the
+  session once. `harnesses.context_answer` holds each harness's answer form. docs/claude-code.md, "The boundary hooks".
 - `scripts/qa_boundary_hooks.sh` (MANUAL_QA.md, scenario 5) checks on real sessions what the boundary hooks rely on:
   SessionStart sources and injected context before and after compaction, PreCompact's input and output, PostToolUse
   on the Agent tool (foreground and background), repeated `--plugin-dir` and the `benchbook-mcp` tool prefix.

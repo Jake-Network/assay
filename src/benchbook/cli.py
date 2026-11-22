@@ -588,13 +588,18 @@ HARNESS_HELP = "The harness running the hook: claude-code (default), codex, curs
 def hook(event: str, harness: Annotated[str | None, typer.Option(help=HARNESS_HELP)] = None) -> None:
     """Harness hook entry point. Always exits 0, except `replay`, which reports what it processed, and
     `task-completed`, which exits 2 to keep a task open (docs/claude-code.md)."""
-    from .entry import CHECK_HOOK_EVENTS
+    from .entry import BOUNDARY_HOOK_EVENTS, CHECK_HOOK_EVENTS
     from .hooks import main as hook_main
 
     if event in CHECK_HOOK_EVENTS:
         from .check_hooks import main as check_hook_main
 
         raise typer.Exit(check_hook_main(event, harness))
+    if event in BOUNDARY_HOOK_EVENTS:
+        from . import boundary_hooks
+
+        boundary_hooks.main(event, harness)
+        raise typer.Exit(0)
     res = hook_main(event, harness)
     if res is not None:
         emit(res.as_dict(), str(res))

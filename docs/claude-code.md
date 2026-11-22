@@ -252,6 +252,24 @@ The same page warns that "Not every SubagentStop event comes from a subagent Cla
 **Not measured.** This answer is from the documentation only; confirming it needs a model run, which was not
 spent. The plugin does not gate on SubagentStop: the completion gate is the TaskCompleted hook above.
 
+## The boundary hooks
+
+The `benchbook` plugin also gives the model what the ledger says at the points where a session loses it
+(`src/benchbook/boundary_hooks.py`):
+
+| hook | event | what it prints |
+|---|---|---|
+| `benchbook hook session-start` | SessionStart (every source: startup, resume, clear, compact) | the brief scoped by what this branch changed (`brief --here`), at most 1,500 tokens and 6,000 characters, as `additionalContext`; nothing when every section is empty |
+| `benchbook hook pre-compact` | PreCompact | one paragraph of at most 1,000 characters, "Keep these ids and statuses verbatim in the summary: ...", three lines per section, on plain stdout (instructions for the compaction summary) |
+| `benchbook hook notes` | UserPromptSubmit | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once; they move to `delivered/` |
+
+Each brief is also written to `.benchbook/STATE.md` (first line: when and at which HEAD), for harnesses without
+hooks and for people; when the benchbook folder is tracked, STATE.md is added to `.git/info/exclude`. The ledger
+has 5 seconds to answer (connection, queries and the brief's git calls). When it does not, session-start gives the
+last STATE.md under the line "benchbook: the ledger did not answer (...); this is STATE.md as of <time>", and
+pre-compact gives nothing. Outside a benchbook project each hook leaves after reading config.toml, without importing
+the database layer; nothing goes to stderr and every hook exits 0 (failures are in `hook.log`).
+
 ## Boundary hooks: what Claude Code does
 
 The session-start, compaction and Agent-result hooks rely on the inputs and outputs below. The "documented" column is

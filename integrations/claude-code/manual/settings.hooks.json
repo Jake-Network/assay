@@ -1,5 +1,38 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook session-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook pre-compact",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook notes",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [

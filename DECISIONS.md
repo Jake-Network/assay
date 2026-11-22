@@ -553,3 +553,11 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   link is under review, not merely reported, and stays out of the section.
 - **T10 the footer keeps the approach hint.** Only the details pointer changed (`benchbook get <id>`); naming the
   approach is what makes a failure a discarded approach, so the brief still asks for it.
+- **T09 the 5-second limit covers the whole brief, not only the connection.** The brief runs in a daemon thread
+  joined for 5 s, so a slow embedded Postgres start, a slow query or slow git calls all fall back to STATE.md; the
+  entry point then ends the process with os._exit rather than wait for the abandoned thread.
+- **T09 STATE.md goes in the current checkout** (its git root), not the main worktree's folder that config.toml may
+  come from: the brief is scoped by that checkout's branch. It is excluded from git status when the folder is tracked.
+- **T09 STATE.md is written even when the brief is empty;** only the injection is skipped.
+- **T09 notes move before they are read,** so two hooks at once never deliver one note twice. Other harnesses get
+  the empty answer from `context_answer` until T16 reads their documentation.
