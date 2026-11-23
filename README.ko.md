@@ -26,7 +26,7 @@ cd your-repo && benchbook init   # 저장소의 테스트와 lint 명령을 검�
 |---|---|
 | 세션 시작, 재개, compaction 뒤 | 이 브랜치가 바꾼 범위의 brief(최대 1,500 token)를 준다. 검증된 조각과 확인 방법, "완료 보고, 재실행 안 됨", 버린 접근, 열린 발견, 점유된 경로가 들어 있다. `.benchbook/STATE.md`에도 쓴다 |
 | compaction 직전 | 요약에 레코드 id와 상태를 그대로 남기라고 요청한다 |
-| subagent가 `DONE <sha>`를 보고 | 그 commit을 깨끗한 worktree에서 선언된 검사로 백그라운드에서 다시 돌린다 |
+| subagent가 `DONE <sha>`를 보고 | 그 commit을 깨끗한 worktree에서 선언된 검사로 백그라운드에서 다시 돌린다. 재실행은 `rerun@<host>`(orchestrator)가 하므로 통과하면 `verified`로 결정된다 |
 | 다음 프롬프트, Bash 호출, 에이전트 결과 | 결과를 한 번 전한다: `benchbook: media-upload a1b2c3d: re-run passed (2 checks, 14.2s), tests not weakened, checked: re-run (c:7f3a91c2)` |
 | 에이전트가 선언된 검사를 Bash로 실행 | 그 실행을 조각과 commit에 기록한다 |
 | 에이전트가 task를 완료로 표시 | 선언된 검사마다 HEAD에서 통과한 실행이 생길 때까지 task를 열어 두고, 돌릴 명령을 알려 준다 |

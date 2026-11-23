@@ -91,8 +91,10 @@ def enqueue(data: dict[str, Any]) -> str:
     return line
 
 
-def _result_line(run: Verification, record: Recorded, oracle: str | None = None) -> str:
+def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
+    """role: the re-running agent's; when nothing decided the claim, the line says why the rest of it does not."""
     from .ids import short
+    from .ledger import DECIDERS
     from .lookup import checked
 
     if run.environment:
@@ -106,6 +108,11 @@ def _result_line(run: Verification, record: Recorded, oracle: str | None = None)
         guard += "; attempts disagree"
     elif record.outcome and record.outcome.person and "needs review" not in guard:
         guard += "; needs review"
+    if oracle is None and record.claim_id is not None and result == "re-run passed" and "needs review" not in guard:
+        if role is not None and role not in DECIDERS:
+            verdict += f" (recorded by a {role} agent; a lead decides)"
+        elif not run.complete:
+            verdict += " (not every declared check ran)"
     ref = short("claim", record.claim_id) if record.claim_id else short("experiment", record.experiment_id)
     return (f"benchbook: {run.piece} {run.commit[:7]}: {result} ({run.total} checks, "
             f"{run.duration_ms / 1000:.1f}s), {guard}, checked: {verdict} ({ref})")
@@ -131,7 +138,7 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     if notes is None or not PIECE.fullmatch(piece) or not _SHA.fullmatch(commit):
         raise ValueError("invalid verification request")
     # Authenticate even for a cached result: a token may have been revoked since it queued this request.
-    lg = Ledger.open(project=project, agent=config.default_agent(checks.default_verifier()), role="orchestrator")
+    lg = Ledger.open(project=project, agent=config.default_agent(checks.default_rerunner()), role="orchestrator")
     if lg.token is not None:
         hooks.remember_writer(project, lg.agent)
     if lg.pack.name != "code":
@@ -163,7 +170,7 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
                 " AND status = 'verified' AND NOT evidence_invalidated", (project, record.claim_id))
             if rows:
                 oracle = rows[0]["last_oracle"]
-        line = _result_line(run, record, oracle)
+        line = _result_line(run, record, oracle, lg.role)
         results.mkdir(mode=0o700, exist_ok=True)
         if run.environment is not None:
             note_key = report_key

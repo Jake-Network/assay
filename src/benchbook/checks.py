@@ -820,7 +820,16 @@ def failure_signature(results: Sequence[CheckResult]) -> str | None:
 # ---------------------------------------------------------------------------------------------------- the command
 
 def default_verifier() -> str:
+    """The agent `check verify` runs as without --agent, BENCHBOOK_AGENT or a token (registered with the harness
+    role: it records, a lead decides)."""
     return f"verifier@{socket.gethostname() or 'localhost'}"[:100]
+
+
+def default_rerunner() -> str:
+    """The agent the hook's automatic re-run (verify_requests) runs as without a token, registered with the
+    orchestrator role so it decides. A separate name from default_verifier: whichever command registered a name
+    first fixes its role in the project (Ledger._ensure_agent), so one shared name decided or not by run order."""
+    return f"rerun@{socket.gethostname() or 'localhost'}"[:100]
 
 
 def read_report(path: Path, declared: Sequence[str]) -> Report:
