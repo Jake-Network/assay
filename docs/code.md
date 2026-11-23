@@ -99,6 +99,8 @@ What it does:
 
 The verifier is `--agent` or `BENCHBOOK_AGENT` when set (with `BENCHBOOK_TOKEN`, the token's agent), else
 `verifier@<host>` (registered with the harness role). It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
+The hook's automatic re-run of a reported `DONE <sha>` runs as another name, `rerun@<host>` (registered with the
+orchestrator role), or as the token's agent under `BENCHBOOK_TOKEN`.
 
 Verifying the same commit again is recorded too (the pack's `dedup_mode = "notify"`): the new attempt names the
 first one in `duplicate_of`, and its link goes to the same completion claim.
@@ -335,6 +337,14 @@ decides nothing), or the rule refused (its message is printed).
 
 Without lead authority (the default `verifier@<host>` has the harness role) verify records the claim, the attempt
 and the link as before, decides nothing, and says so. A lead can decide later from those records.
+
+The automatic re-run of a subagent's report (`benchbook hook agent-result`) decides as `rerun@<host>`, which is
+registered with the orchestrator role; under `BENCHBOOK_TOKEN` it is the token's agent with the token's role. The
+two default names are separate because a project keeps the role a name was first registered with: before, both
+used `verifier@<host>`, and whichever ran first decided whether the other could decide. A ledger where
+`verifier@<host>` was already registered as an orchestrator keeps that row; nothing is migrated. When the re-run
+passed and still decided nothing, its line says why after `checked: none`, for example
+`checked: none (recorded by a worker agent; a lead decides)`.
 
 `--json` adds `decision` (`verified`, `inconclusive` or null), `decision_reason`, `needs_person`, `evidence`
 and `decisions`. The exit code still says only whether every check passed.

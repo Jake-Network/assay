@@ -461,3 +461,86 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
             assert expected in result and short("claim", claim["id"]) in result
         else:
             assert not out
+
+
+# ------------------------------------------------------------------------------------------- who decides a re-run
+
+
+def _report_and_replay(repo: Path, sha: str, capsys: pytest.CaptureFixture[str],
+                       monkeypatch: pytest.MonkeyPatch) -> str:
+    """An implementer's foreground report of sha, its re-run in the spool processor, and the line it leaves."""
+    from benchbook import hooks, session_notes
+
+    data = fixture("post_tool_use_agent.json", repo)
+    data["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    monkeypatch.setattr(hooks, "start_processor", lambda spool: None)
+    run("agent-result", data, capsys, monkeypatch)
+    assert hooks.replay_now(hooks._spool_dir()).recorded == 1
+    return session_notes.deliver(data["session_id"])
+
+
+def _claim_status(db_url: str, project: str, sha: str) -> str:
+    lg = agent(db_url, project, "lead")
+    [claim] = lg.sql_internal("SELECT id FROM benchbook.claims WHERE project_id = %s AND kind = 'completion'"
+                              " AND %s = ANY(tags)", (project, f"commit:{sha}"))
+    return str(lg.claim_status(claim["id"]))
+
+
+@pytest.mark.parametrize("first", ["check-verify", "agent-result"])
+def test_the_re_run_decides_whichever_command_ran_first(first: str, code: str, env: Path, db_url: str,
+                                                        capsys: pytest.CaptureFixture[str],
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """PR #4 issue 5: the hook's re-run is rerun@<host> (orchestrator), check verify without --agent is
+    verifier@<host> (harness). With one shared name, whichever ran first in a project fixed the role for both."""
+    from benchbook import checks
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    by_hand = piece(repo, "by-hand", {"impl.txt": "fixed\n"})
+    reported = piece(repo, "media-upload", {"impl.txt": "fixed\n", "value.txt": "ok\n"})
+
+    def verify_by_hand() -> str:
+        p = subprocess.run([sys.executable, "-m", "benchbook.cli", "--project", code, "check", "verify", "by-hand",
+                            by_hand, "--reported-by", "impl"], cwd=repo, env=dict(os.environ), capture_output=True,
+                           text=True, timeout=180)
+        assert p.returncode == 0, p.stderr
+        return p.stdout
+
+    if first == "check-verify":
+        by_hand_out, note = verify_by_hand(), _report_and_replay(repo, reported, capsys, monkeypatch)
+    else:
+        note, by_hand_out = _report_and_replay(repo, reported, capsys, monkeypatch), verify_by_hand()
+    assert "decision: recorded without a decision" in by_hand_out
+    assert "re-run passed (2 checks" in note and "checked: re-run (c:" in note
+    assert _claim_status(db_url, code, reported) == "verified"
+    assert _claim_status(db_url, code, by_hand) == "proposed"
+    lg = agent(db_url, code, "lead")
+    roles = {r["id"]: r["role"] for r in lg.sql_internal("SELECT id, role FROM benchbook.agents WHERE project_id = %s",
+                                                         (code,))}
+    assert roles[checks.default_verifier()] == "harness" and roles[checks.default_rerunner()] == "orchestrator"
+
+
+@pytest.mark.parametrize(("role", "checked"), [
+    ("orchestrator", "checked: re-run (c:"),
+    ("worker", "checked: none (recorded by a worker agent; a lead decides) (c:"),
+])
+def test_under_a_token_the_re_run_is_the_tokens_agent(role: str, checked: str, code: str, env: Path, db_url: str,
+                                                      capsys: pytest.CaptureFixture[str],
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """A token names the agent and its role, as before issue 5; a line that decided nothing says why."""
+    from benchbook import checks
+    from tests.writer import as_writer, issue
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    monkeypatch.setenv("BENCHBOOK_TOKEN", issue(db_url, code, "tok-agent", role))
+    monkeypatch.setenv("BENCHBOOK_DATABASE_URL", as_writer(db_url))
+    note = _report_and_replay(repo, sha, capsys, monkeypatch)
+    assert checked in note
+    monkeypatch.delenv("BENCHBOOK_TOKEN")  # read back as the owner
+    assert _claim_status(db_url, code, sha) == ("verified" if role == "orchestrator" else "proposed")
+    lg = agent(db_url, code, "lead")
+    [author] = lg.sql_internal("SELECT DISTINCT author FROM benchbook.experiments"
+                               " WHERE project_id = %s AND code_ref = %s", (code, sha))
+    assert author["author"] == "tok-agent"
+    assert not lg.sql_internal("SELECT 1 FROM benchbook.agents WHERE project_id = %s AND id = %s",
+                               (code, checks.default_rerunner()))
