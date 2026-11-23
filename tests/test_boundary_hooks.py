@@ -281,6 +281,24 @@ def test_pre_compact_gives_one_paragraph_of_ids(recorded: dict[str, Any], env: P
     assert (recorded["repo"] / ".benchbook" / "STATE.md").is_file()
 
 
+def test_pre_compact_marks_a_piece_not_merged_into_this_branch(db_url: str, code: str, env: Path,
+                                                               capsys: pytest.CaptureFixture[str],
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """PR #4 issue 2: the paragraph keeps the brief's lines, so a piece verified on its own branch and read from the
+    base says so instead of "changed since (0 commits)"."""
+    from benchbook import pieces
+    from tests.test_code_brief import _verify
+
+    repo = code_repo(env / "repo", code)
+    tip = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    pieces.start(agent(db_url, code, "impl-a"), "media-upload", ["media/upload.py"], repo)
+    _verify(db_url, code, "media-upload", tip)
+    out = run("pre-compact", fixture("pre_compact.json", repo), capsys, monkeypatch)
+    assert f"media-upload at {tip[:12]}" in out and "not merged into this branch" in out
+    assert "changed since" not in out
+
+
 def test_compact_paragraph_keeps_whole_items_in_order() -> None:
     def section(title: str, n: int) -> str:
         return f"## {title} ({n} of {n})\n" + "".join(f"- {title.lower()}-{i} c:{i:08x}\n" for i in range(n))

@@ -651,8 +651,12 @@ The footer names `benchbook get <id>` for one record's details (at most 400 toke
 the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are those the piece's newest task
 occupies (`piece start`), else the directories its completion recorded. A line whose paths changed ends in
 `· changed since (2 commits)` (the commits since that touch those paths); one whose commit this checkout lacks ends
-in `· commit not in this checkout`; an unchanged line has no mark. A discarded approach whose failing test file
-(the part of the signature before `::`) changed since the commit it failed at ends in `· test changed since` and
+in `· commit not in this checkout`; one whose commit exists but is not in HEAD's history (a piece's branch read from
+the base, or from the lead's branch before the merge) ends in `· not merged into this branch`, since its paths
+differ without any commit having changed them; an unchanged line has no mark. A squash-merged piece has no mark while
+its paths match, and `not merged into this branch` once a later commit changes them. A discarded approach whose
+failing test file (the part of the signature before `::`) changed since the commit it failed at, in HEAD's history,
+ends in `· test changed since` and
 moves to the end of its section: the failure may no longer hold. Only the lines shown are compared (at most 8 per
 section), each git call has 2 seconds, and nothing is stored: the same ledger at the same HEAD gives the same text.
 Without a checkout (`--tags`, MCP) the brief shows no marks.

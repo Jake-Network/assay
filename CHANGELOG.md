@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- The brief (`--here`, session start, pre-compact) marks a verified piece whose commit is not in HEAD's history
+  `· not merged into this branch` instead of `· changed since (0 commits)` (PR #4 issue 2): the lead reading the
+  brief before a merge saw every freshly verified piece as changed. A discarded approach failed at such a commit gets
+  no `test changed since` mark and keeps its place.
 - The automatic re-run of a `DONE <sha>` report runs as `rerun@<host>` with the orchestrator role, and `check
   verify` without `--agent` keeps `verifier@<host>` with the harness role (PR #4 issue 5). Both used to share
   `verifier@<host>`, so whichever ran first in a project fixed its role: after a manual `check verify` the
