@@ -25,7 +25,7 @@ import pytest
 from benchbook import checks, hooks, pieces, pr, runner
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition, LeaseLost
 from benchbook.runner import run_command
-from tests.test_check_hooks import fixture, hook, observed
+from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, cli_env, git, make_checkout, wait_attempts
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok
 from tests.writer import as_writer
@@ -164,6 +164,7 @@ def test_the_gate_requires_wrapper_evidence_for_junit(db_url: str, tmp_path: Pat
                            settings={"partition_key": "piece"})
     lg = Ledger.open(project=project, agent="lead", database_url=db_url)
     repo = make_checkout(tmp_path / "repo", project, cfg=JUNIT_CONFIG.format(project=project))
+    start_piece(db_url, project, repo)
     env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
     task = fixture("task_completed.json", repo)
 
@@ -193,6 +194,7 @@ def test_older_raw_junit_passes_do_not_open_the_gate(db_url: str, tmp_path: Path
     project = code_project(db_url)
     lg = local(db_url, project, "lead", "orchestrator")
     repo = make_checkout(tmp_path / "repo", project, cfg=JUNIT_CONFIG.format(project=project))
+    start_piece(db_url, project, repo)
     sha = git(repo, "rev-parse", "HEAD")
     env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
     monkeypatch.setenv("XDG_STATE_HOME", env["XDG_STATE_HOME"])

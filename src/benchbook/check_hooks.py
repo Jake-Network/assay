@@ -438,8 +438,13 @@ def _gate(data: dict[str, Any]) -> int:
     state = git_state(repo)
     if state is None or state.sha is None:
         return _allow(f"no commit at HEAD in {repo}")
-    from .attempts import check_states
+    from .attempts import check_states, live_piece
     from .packs import load_pack
+
+    # A branch is a piece only when `piece start` made it one (or BENCHBOOK_PIECE says so): where nothing is
+    # committed to main, the lead works on a feature branch too, and its own task list is not a piece.
+    if source == "the branch" and not live_piece(cfg.project, piece):
+        return _allow(f"{piece} has no live piece (no `piece start {piece}`, BENCHBOOK_PIECE unset)")
 
     junit_checks = {name for name, spec in cfg.checks.items() if spec.junit}
     pack, passed = check_states(cfg.project, piece, state.sha, junit_checks)

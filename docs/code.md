@@ -127,7 +127,10 @@ src/app/modules/media/* (both match src/app/modules/media/upload.py): piece medi
 
 **A piece is a task.** `piece start` creates a worker intent (the same mechanism the ml-research pack uses to
 occupy knobs): a task tagged `intent`, `piece` and `piece:<name>`, held by the agent that ran the command, with
-the spec `{"piece", "paths", "declared"}`. No table, status or queue is added.
+the spec `{"piece", "paths", "declared"}`. No table, status or queue is added. While it is live, its branch is a
+piece's checkout for the Claude Code completion gate (docs/claude-code.md, `benchbook hook task-completed`): a
+task completed there needs a passing run of every declared check at HEAD. A branch with no live piece is not gated,
+so a lead on its own feature branch completes its to-do items freely.
 
 **What a piece occupies.** Globs are read as in `[guard]`, from the repository root. Each is expanded against
 `git ls-files`: the tracked files it matches go into `paths` (escaped, so `app/[id]/page.tsx` stays that one

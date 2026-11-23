@@ -30,7 +30,7 @@ line), and the piece is its branch name, a `piece: <name>` line or a `Benchbook-
 | a subagent reports `DONE <sha>` | re-runs the declared checks on that commit in a clean worktree, in the background, as `rerun@<host>` (an orchestrator, so a pass decides `verified`) |
 | the next prompt, Bash call or agent result | delivers the outcome once: `benchbook: media-upload a1b2c3d: re-run passed (2 checks, 14.2s), tests not weakened, checked: re-run (c:7f3a91c2)` |
 | an agent runs a declared check in Bash | records the run against the piece and the commit |
-| an agent marks a task completed | keeps it open until every declared check has a passing run at HEAD, and says which command to run |
+| an agent marks a task completed on a piece's branch (`piece start`) | keeps it open until every declared check has a passing run at HEAD, and says which command to run |
 | recording breaks (a dead report, hook failures) | starts the brief with `benchbook: recording stopped: ...` and the fix |
 
 Hooks never write to stderr and always exit 0. Outside a benchbook project they leave without touching the database.

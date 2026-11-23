@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- The completion gate (TaskCompleted) holds a task only on a branch that is a live piece (`piece start`) or when
+  `BENCHBOOK_PIECE` is set (PR #4 issue 1). Where nothing is committed to main the lead works on a feature branch,
+  and every to-do of its own session was held as a piece's completion. Behavior change: an implementer working on
+  a branch without `piece start` is no longer gated; set `BENCHBOOK_PIECE` (or start the piece) to keep the gate.
 - The brief (`--here`, session start, pre-compact) marks a verified piece whose commit is not in HEAD's history
   `· not merged into this branch` instead of `· changed since (0 commits)` (PR #4 issue 2): the lead reading the
   brief before a merge saw every freshly verified piece as changed. A discarded approach failed at such a commit gets

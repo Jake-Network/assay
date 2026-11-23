@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_hooks, config, hooks
+from benchbook import Ledger, check_hooks, config, hooks, pieces
 from benchbook.checks import last_line_hash
 from benchbook.config import LocalConfig, parse_checks
 from tests.conftest import make_project
@@ -58,9 +58,22 @@ def lg(db_url: str, code_project: str) -> Ledger:
     return Ledger.open(project=code_project, agent="lead", database_url=db_url)
 
 
+def start_piece(db_url: str, project: str, repo: Path, piece: str = "media") -> None:
+    """`piece start`: the gate holds a branch's tasks only while it is a live piece (PR #4 issue 1)."""
+    pieces.start(_starter(db_url, project), piece, ["impl.txt"], repo)
+
+
+def _starter(db_url: str, project: str) -> Ledger:
+    # A lead: these projects keep settings.worker_intents off, so a worker could not start a piece.
+    return Ledger.open(project=project, agent="piece-lead", role="orchestrator", database_url=db_url)
+
+
 @pytest.fixture
-def gate_repo(tmp_path: Path, code_project: str) -> Path:
-    return make_checkout(tmp_path / "repo", code_project, cfg=GATE_CONFIG.format(project=code_project, py=PY))
+def gate_repo(tmp_path: Path, db_url: str, code_project: str) -> Path:
+    """On branch media, a live piece."""
+    repo = make_checkout(tmp_path / "repo", code_project, cfg=GATE_CONFIG.format(project=code_project, py=PY))
+    start_piece(db_url, code_project, repo)
+    return repo
 
 
 def hook_log(tmp_path: Path) -> str:
@@ -273,6 +286,34 @@ def test_recorded_without_an_agent_command(gate_repo: Path, tmp_path: Path, lg: 
         hook("bash-result", fixture("post_tool_use_bash.json", gate_repo, cmd), env, gate_repo)
     assert len(wait_attempts(lg, 2)) == 2
     assert hook("task-completed", task, env, gate_repo).returncode == 0
+
+
+def test_a_feature_branch_is_gated_only_while_it_is_a_live_piece(gate_repo: Path, tmp_path: Path, db_url: str,
+                                                                  lg: Ledger) -> None:
+    """PR #4 issue 1: where nothing is committed to main, the lead works on a feature branch too, and its own task
+    list is not a piece. The branch is one once `piece start` names it, or BENCHBOOK_PIECE does."""
+    env = cli_env(tmp_path)
+    git(gate_repo, "checkout", "-q", "-b", "plan-branch")
+    git(gate_repo, "commit", "-q", "--allow-empty", "-m", "chore: empty")
+    task = fixture("task_completed.json", gate_repo)
+    p = hook("task-completed", task, env, gate_repo)
+    assert (p.returncode, p.stdout, p.stderr) == (0, "", "")
+    assert hook_log(tmp_path).count("task-completed: allowed: plan-branch has no live piece") == 1
+
+    p = hook("task-completed", task, {**env, "BENCHBOOK_PIECE": "plan-branch"}, gate_repo)
+    assert p.returncode == 2 and "piece plan-branch has no passing run" in p.stderr
+
+    p = subprocess.run([SCRIPT, "--agent", "piece-lead", "piece", "start", "plan-branch", "--paths", "check_ok.py"],
+                       cwd=gate_repo, env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    p = hook("task-completed", task, env, gate_repo)
+    head = git(gate_repo, "rev-parse", "HEAD")
+    assert p.returncode == 2
+    assert f"piece plan-branch has no passing run at HEAD {head[:12]} of: unit (not run), quick (not run)" in p.stderr
+    assert "benchbook check run unit --piece plan-branch" in p.stderr
+
+    pieces.done(_starter(db_url, lg.project_id), "plan-branch")
+    assert hook("task-completed", task, env, gate_repo).returncode == 0  # released: no longer a piece
 
 
 @pytest.mark.parametrize("case", ["no-project", "no-checks", "detached", "base-branch", "unreachable", "broken"])
