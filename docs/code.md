@@ -863,7 +863,10 @@ One claim per distinct finding:
 kind       observation
 statement  the item's text (whitespace collapsed; cut at 500 characters)
 tags       out-of-scope
-           piece:<piece>     when the run recorded attempts (exp run / exp record) of exactly one piece
+           piece:<piece>     when the run recorded attempts (exp run / exp record) of exactly one piece; else
+                             the piece the report's commit names (DONE <sha> or commit: <sha>, then its
+                             Benchbook-Piece trailer, a piece: line or the one branch at it), the piece the
+                             automatic re-run of the same report verifies
            mod:<name>        each mod:<name> the item's text writes itself (never inferred from a path)
            file:<path>       each path the finding names, repository-relative, up to 10
 payload    {"text", "details", "file", "piece", "heading",

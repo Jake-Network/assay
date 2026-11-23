@@ -45,6 +45,19 @@ def reported_piece(repo: Path, commit: str, report: str) -> str | None:
     return None
 
 
+def reported_target(repo: Path, report: str) -> tuple[str, str] | None:
+    """(commit, piece) a report names in repo: its commit (reported_ref) resolved to a full sha, and the piece
+    (reported_piece). The automatic re-run and the out-of-scope findings of the same report both use it, so the
+    findings are tagged with the piece the re-run verifies (PR #4 issue 3)."""
+    ref = reported_ref(report)
+    if ref is None:
+        return None
+    commit = boundary_hooks._git(repo, "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    if not _SHA.fullmatch(commit) or (piece := reported_piece(repo, commit, report)) is None:
+        return None
+    return commit, piece
+
+
 def enqueue(data: dict[str, Any]) -> str:
     """Queue a re-run for a report that names a commit. The report is the foreground Agent result (PostToolUse) or,
     for an agent Claude Code ran in the background, its SubagentStop (agent_type and last_assistant_message): since
@@ -58,15 +71,12 @@ def enqueue(data: dict[str, Any]) -> str:
         return ""
     session = data.get("session_id", "")
     report = hooks.extract_text(data)
-    ref = reported_ref(report)
-    if ref is None or session_notes.notes_dir(session) is None:
+    if reported_ref(report) is None or session_notes.notes_dir(session) is None:
         return ""
     where = boundary_hooks.where(data)
-    if where is None or where.repo is None:
+    if where is None or where.repo is None or (target := reported_target(where.repo, report)) is None:
         return ""
-    commit = boundary_hooks._git(where.repo, "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
-    if not _SHA.fullmatch(commit) or (piece := reported_piece(where.repo, commit, report)) is None:
-        return ""
+    commit, piece = target
     reporter = hooks._agent_type(data) or "unknown"
     if len(reporter) > 100 or not reporter.isprintable():
         return ""
