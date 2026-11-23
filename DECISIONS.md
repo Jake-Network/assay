@@ -617,6 +617,37 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   the whole session (total_cost_usd and modelUsage); the runner subtracts the session's previous receipt for the
   call's cap, the batch budget and the report, and keeps the session totals beside them.
 
+## PR #4 in use: issues from a real repository (2026-11-23)
+
+Five issues came from running PR #4 head `ec075da` against a scratch clone of a Python repository (hook inputs fed
+by hand, not a live session). Four are fixed; the fourth is not.
+
+- **1. The completion gate holds a task only on a live piece's branch.** The gate took every branch other than the
+  base as a piece, so where nothing is committed to main every to-do of the lead's own session was held. A branch is
+  now a piece when a live `piece start` intent names it (v_inflight) or `BENCHBOOK_PIECE` is set. A config key to
+  turn the gate off was the alternative; it adds a setting and leaves the lead blocked by default. The cost: an
+  implementer that works on a branch without `piece start` is no longer gated.
+- **2. A piece not in HEAD's history is "not merged into this branch".** `git diff` against a commit HEAD never had
+  is non-zero without any later change, and rev-list counted 0. `merge-base --is-ancestor` tells the two apart; a
+  discarded approach failed at such a commit keeps its place, as for a commit the checkout lacks. A squash-merged
+  piece still reads as unmerged once its paths change; telling that apart needs the PR's merge commit in the ledger.
+- **3. A report's findings take the piece its commit names** (part 1). The same function as the automatic re-run
+  (`verify_requests.reported_target`), so the finding and the verification agree. Part 2, a line in a scoped brief
+  counting open findings outside its scope, waits: it changes the brief's format, and the boundary pilot's arm F
+  is about to measure brief length and content.
+- **5. The automatic re-run is `rerun@<host>`, an orchestrator.** It shared `verifier@<host>` with `check verify`
+  without `--agent` (harness), and a project keeps a name's first role, so the run order decided whether a re-run
+  could decide. Separate names make both orders behave the same. Rows already written are left alone.
+- **4. Not done: caching the merge-base test counts.** Each verify of a piece that adds tests runs the JUnit checks
+  again at the merge-base, about 14 s per piece in the measurement, much of it plausibly the new worktree's missing
+  `__pycache__` (not measured apart). We keep it: the verdicts are the same, only slower; `ec075da` removed that
+  very cache ("Recheck JUnit baselines in the current environment") because its key cannot see the environment, so
+  a test skipped by an environment variable makes a cached count disagree with the current one and can report a
+  weakening that is not there or miss one that is; a cache would also carry state from one boundary trial into the
+  next and blur arm F's verify time and weakening verdicts; and cheaper ways exist that change no verdict (run the
+  commit's and the merge-base's worktrees in parallel, or first measure the `__pycache__` share). The pilot's H4
+  report states that F's verify time includes the merge-base run.
+
 ## Spec §8 verdict for the code pack (2026-11-23)
 
 - **False completion rate 17.9% ≥ 10%: P0 and P1 go ahead.** SWE-bench Verified, 39 instances (40 pre-registered,
