@@ -6,13 +6,13 @@ the capture and scoring pipeline with two synthetic phases and six arms.
 
 ## Conditions
 
-**Model**: [full model ID for lead and subagents]
-**Claude Code**: [pinned version (2.1.277 or later) and effective settings]
-**Date**: [run date and machine image]
-**Budget**: [USD per work call, per probe and total; turns and wall clock]
-**Tasks**: [ten fixed RoadmapBench tasks and source revisions, plus task manifest and evaluator hashes]
-**Claude-mem**: [pinned plugin revision, worker provider, model and spending cap]
-**Commits**: [benchbook revision, task adapter and evaluator revisions]
+**Model**: claude-sonnet-5-5 for the lead and for subagents (`--model`, `CLAUDE_CODE_SUBAGENT_MODEL`).
+**Claude Code**: 2.1.330. Effective settings are the runner's: `--setting-sources ""`, `--strict-mcp-config` (A, C) or `--plugin-dir integrations/claude-code` (F), `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` (subagents run in the foreground, so F uses the PostToolUse path rather than the default SubagentStop path), `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `DISABLE_AUTOUPDATER=1`.
+**Date**: 2026-11-24 onward; x86_64 WSL2 (Linux 6.18.40.1-microsoft-standard-WSL2), Docker 29.10.0, Python 3.13.17 (the benchmark venv, also used by the checks and the oracles).
+**Budget**: USD 3 per work call, USD 0.5 per probe, USD 60 in total (raised only by a dated amendment if the total cap alone stops the pilot); 80 turns per work call, 8 per probe, 30 minutes of wall clock per CLI invocation.
+**Tasks**: pilot (see the 2026-11-24 amendment): two self-built two-phase tasks. `toolz` (pytoolz/toolz, BSD-3-Clause, upstream 451af60dec590a6010e2babdbf391ea8f815122f; base ef77ba5fe750fedc10efd8780d637661dfc4b16f, which adds only `.benchbook/config.toml`) and `boltons` (mahmoud/boltons, BSD-3-Clause, upstream d31d821d56c8f7756af9c30a864077f2e5855321; base 3ac227a17938275ada7ac8995f7a596513a3e4f5, likewise). sha256: manifest `tasks.json` cb54d1fdc8e80faa8017bdf86f8fdb85702a0cd220e919fc6de355b1702c1e95, `oracle_toolz.py` 778cf41fa9bc0ba5943ba60105eeb707cc4534a6a4e75783f2ac31b7f7025c6b, `oracle_boltons.py` af75fd32ffa069d371b70c306a128748dc8aa4139992a226b9c1dc4b4fc519b5, reference solutions `reference/reference.py` df8a7b5e55385e9279c09a3c6c9c1998bea85a58e9946c7c68a1a55bea292f76.
+**Claude-mem**: excluded from the pilot (arm D is not run).
+**Commits**: benchbook 937f5ea678318601edf28d3aff80a76749e7b55b, with PR #4 issues 1, 2, 3 (part 1) and 5 fixed and issue 4 (merge-base baseline cache) not done; the pre-registration commit changes only this file. Evaluators: the oracle sha256 values under Tasks.
 **H5 budget**: configurations A and C × requested workers 8, 16 and 30 × 3 runs (18 runs), model claude-sonnet-5-5,
 USD 5 per run (`--max-budget-usd 5`), USD 90 in total; Claude Code 2.1.330.
 
@@ -122,3 +122,41 @@ any rerun before paying for it.
   directory (`h5-runs/<width>-<config>-<n>`, one `bench.run --runs 1` each, same caps), and a run stopped by the
   usage limit is repeated after the limit resets; every stopped run is reported. Widths are rebuilt from the run
   directories with `bench.real.parse` unchanged, since `bench.run` writes metrics.json only when a whole group ends.
+
+- **2026-11-24, H5 sweep, remaining runs.** The remaining runs (workers 16 C runs 2-3, workers 30 A and C runs 1-3)
+  run from a detached worktree at cc5ed08 (tag `bench-h5-code`), the code of every completed H5 run, not from the
+  branch head. Because that commit carries a tag that is not a version, the worktree is built with
+  `SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+h5code`; this changes only the package version string. Workers 16 C run 2
+  first stopped on the five-hour usage limit after USD 2.34 (`h5-runs/16-C-2-try1`, kept and reported) and was
+  repeated in `h5-runs/16-C-2-try2`.
+- **2026-11-24, boundary pilot scope.** The first boundary execution is a pilot: two tasks, arms A, C and F, one
+  repetition each (6 trials), instead of ten tasks and three repetitions. The first gates to look at are H1 (F above
+  C), H3 (F at least 30% below A) and H6 (F below C); with this sample the report states directions only and claims
+  no gate. Arms B, D (claude-mem) and E are excluded. Arm F runs the benchbook code named under Commits, where PR #4
+  issues 1, 2, 3 (part 1) and 5 are fixed and issue 4 is not, so F's verification time still includes the
+  merge-base re-run; the H4 report says so.
+- **2026-11-24, boundary pilot tasks.** RoadmapBench is replaced by two self-built tasks on small public Python
+  repositories: its tasks change a median of 51 files and 3,700 lines, which does not fit a USD 3 work call, and they
+  have no phases, stale/fresh pieces or oracle contract. Each task has two phases, and each phase has a stale piece
+  and a fresh piece in different files. The phase prompt itself states the registered scenarios, so the expected
+  answers come from the task data: the dead end and its failure signature (`discarded`), an out-of-scope finding key
+  to leave open (`finding`), and the order "stale piece first, fresh piece second, each re-run independently"
+  (`verified` is the fresh piece). Hidden tests per piece live only in the oracles, including one requirement per
+  phase that the visible checks do not cover (the false-completion scenario, listed in the manifest's
+  `scenarios`). The injection appends a redefinition to the stale piece's file that breaks its hidden tests and
+  leaves the fresh piece's intact. The action prompt asks for `release-phase-N.json` marking each piece
+  `ready` or `not-ready` after any repair the lead judges necessary. Scoring, as implemented in the oracles:
+  `merged` counts phase pieces whose hidden presence test passes at HEAD; `false_done` those of them with any
+  failing hidden test; `weakened` the test files whose diff since the previous phase's injection commit deletes an
+  assertion or test or adds a skip marker (capped at `merged`); `repeated` the registered dead-end tests of earlier
+  phases (at a checkpoint) or of this and earlier phases (after the action) that passed before the boundary and fail
+  now; `trusted_stale` is 1 when the stale piece is marked ready while a hidden test the injection broke still
+  fails; `misflagged_fresh` is 1 when the fresh piece is marked anything but ready while all its hidden tests pass. A
+  missing release file scores 0 on both and is reported. Base checkouts pass the visible checks and fail every hidden
+  test; the reference solutions pass both; the injections break only the stale piece; the scoring was exercised on
+  the reference checkouts (`control-check.txt` beside the manifest).
+- **2026-11-24, boundary pilot stops.** The runner does not resume an output directory. If a trial stops on the
+  account's five-hour usage limit, the partial output is kept and reported, the remaining trials are listed in a dated
+  amendment and committed, and after the limit resets they run in a new `--out` (`boundary-pilot-2`, ...) with the
+  same caps, selected with `--arms` or a manifest holding only the remaining task (its sha256 recorded). The pilot
+  starts after the H5 sweep's driver ends, so the two never share the usage limit or the machine.
