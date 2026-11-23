@@ -42,6 +42,9 @@ FOOTER = ("\nDetails: benchbook get <id> (one record, at most 400 tokens). Name 
           "run's output.\n")
 LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8, "reported": 8}  # pack.toml [brief] overrides
 GIT_TIMEOUT = 2.0  # seconds per git call of the validity check (T10)
+NOT_IN_CHECKOUT = "commit not in this checkout"
+NOT_MERGED = "not merged into this branch"
+NOT_IN_HEAD = (NOT_IN_CHECKOUT, NOT_MERGED)  # marks that say nothing about what changed since the commit
 _TEST_FILE = re.compile(r"([\w./-]+?)::")
 FETCH = 200  # rows read per section; the section's total counts all of them
 FILE_TAG = "file:"
@@ -202,9 +205,13 @@ def validity(repo: Path, commit: str | None, paths: Sequence[str]) -> str | None
     if not commit or not paths:
         return None
     if _git_ok(repo, "cat-file", "-e", f"{commit}^{{commit}}") != 0:
-        return "commit not in this checkout"
+        return NOT_IN_CHECKOUT
     if _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *paths) != 1:
         return None
+    if _git_ok(repo, "merge-base", "--is-ancestor", commit, "HEAD") == 1:
+        # The paths differ because HEAD never had this commit (a piece's branch read from the base or the lead's
+        # branch before the merge), not because a later commit changed them: rev-list would count 0.
+        return NOT_MERGED
     try:
         n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD", "--", *paths],
                            capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.strip()
@@ -269,7 +276,7 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         for r in discarded[: limits["discarded"]]:
             pl = r["payload"] or {}
             files = test_files(pl.get("signature"))
-            if files and validity(repo, pl.get("commit"), files) not in (None, "commit not in this checkout"):
+            if files and validity(repo, pl.get("commit"), files) not in (None, *NOT_IN_HEAD):
                 marks[r["id"]] = "test changed since"
                 stale.append(r)
         if stale:  # an approach whose failing test changed since goes to the end of its section

@@ -492,6 +492,39 @@ def test_the_same_ledger_and_head_give_the_same_text(db_url: str, code: str, rep
     assert "changed since (2 commits)" in first
 
 
+def test_a_piece_not_merged_into_head_is_not_changed_since(db_url: str, code: str, repo: Path) -> None:
+    """PR #4 issue 2: read from the base (or the lead's branch before the merge), a piece's commit is not in HEAD's
+    history, so its paths differ though no commit changed them after it (rev-list counts 0)."""
+    base = git(repo, "rev-parse", "HEAD")
+    a = agent(db_url, code, "impl-a")
+    pieces.start(a, "media-upload", ["src/app/modules/media/upload.py"], repo, tags=["mod:media"])
+    git(repo, "checkout", "-qb", "media-upload")
+    (repo / "src/app/modules/media/upload.py").write_text("v2\n")
+    (repo / "tests/test_media.py").write_text("v2\n")
+    git(repo, "commit", "-qam", "media")
+    tip = git(repo, "rev-parse", "HEAD")
+    _verify(db_url, code, "media-upload", tip)
+    attempt(a, "media-upload", approach="retry-loop", sha=base,
+            failed=[["tests/test_store.py::test_put", "AssertionError"]])
+    attempt(a, "media-upload", approach="hash-before-put", sha=tip,
+            failed=[["tests/test_media.py::test_reupload", "AssertionError"]])
+    git(repo, "checkout", "-q", "main")
+    lg = agent(db_url, code, "reader")
+    now = _now(lg)
+
+    def discarded(out: str) -> list[str]:
+        return out.split("## Discarded approaches", 1)[1].split("\n## ", 1)[0].splitlines()[1:]
+
+    out = compile_brief(lg, None, 2000, now=now, log=False, repo=repo)
+    assert _line(out, f"media-upload at {tip[:12]}").endswith(" · not merged into this branch")
+    assert "changed since" not in out
+    assert discarded(out) == discarded(compile_brief(lg, None, 2000, now=now, log=False))  # no mark, same order
+    git(repo, "merge", "-q", "--ff-only", "media-upload")
+    _commit(repo, "src/app/modules/media/upload.py", "v3\n")
+    out = compile_brief(lg, None, 2000, now=now, log=False, repo=repo)
+    assert _line(out, f"media-upload at {tip[:12]}").endswith(" · changed since (1 commit)")
+
+
 def test_a_reported_completion_comes_second_checked_none(db_url: str, code: str, ledger: dict[str, Any]) -> None:
     impl = agent(db_url, code, "impl-a")
     c = impl.propose_claim("completion", "media-upload is complete at 111111111111",
