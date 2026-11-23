@@ -319,6 +319,8 @@ foreground result), which no default session produced and which stays the docume
 | UserPromptSubmit when a background subagent reports | fires | fires once per finished agent, right after its SubagentStop (2.1.330) |
 | PostToolUse (Bash) `additionalContext` reaches the model | yes | yes (2.1.330) |
 | Both plugins load from repeated `--plugin-dir` | not documented | yes: `benchbook` and `benchbook-mcp` (2.1.330) |
+| TaskCompleted on a feature branch (PR #4 issue 1) | the hook decides | `claude -p` offers `TaskCreate`/`TaskUpdate`. With no `piece start` for the branch the update completed (`allowed: feature-plan has no live piece`); after `piece start feature-plan` it was held and the model quoted the hook's message (2.1.330, haiku, manual hooks, 2026-11-23) |
+| A subagent's `DONE <sha>`, before and after `check verify` without `--agent` (PR #4 issue 5) | not documented | in both projects the line was `checked: re-run` and the claim `verified` (oracle `rerun`), decided by `rerun@<host>` (orchestrator); `verifier@<host>` stayed a harness. In one of the two sessions the Agent result itself carried the report as well as SubagentStop: both queued the re-run, which ran and was delivered once (2.1.330, haiku, 2026-11-23) |
 | MCP tool prefix of the `benchbook-mcp` plugin | `mcp__plugin_<plugin>_<server>__`; a hyphen in the plugin name not addressed | `mcp__plugin_benchbook-mcp_benchbook__`: the hyphen stays. The server is still `pending` at `init` and connects during the first turn (2.1.330) |
 
 ## Installs from before the rename (assay)
