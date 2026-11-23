@@ -21,7 +21,7 @@ import pytest
 
 from benchbook import hooks, identity, pieces
 from benchbook.errors import BenchbookError
-from tests.test_check_hooks import fixture, hook, observed
+from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, attempts, cli_env, make_checkout, spool_entries
 from tests.test_review_holes import code_project, make_repo, owner_rows, tok
 from tests.test_second_review import JUNIT_CONFIG, PASSING_XML, PY, _capture_entry
@@ -38,6 +38,7 @@ def test_overlapping_raw_calls_cannot_share_junit_evidence(db_url: str, tmp_path
                            settings={"partition_key": "piece"})
     lg = Ledger.open(project=project, agent="lead", database_url=db_url)
     repo = make_checkout(tmp_path / "repo", project, cfg=JUNIT_CONFIG.format(project=project))
+    start_piece(db_url, project, repo)
     env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
     report = tmp_path / "report.xml"
     calls = [{**fixture("post_tool_use_bash.json", repo, f"{PY} -m pytest -q tests --junitxml={report}"),

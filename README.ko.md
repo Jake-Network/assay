@@ -29,7 +29,7 @@ cd your-repo && benchbook init   # 저장소의 테스트와 lint 명령을 검�
 | subagent가 `DONE <sha>`를 보고 | 그 commit을 깨끗한 worktree에서 선언된 검사로 백그라운드에서 다시 돌린다. 재실행은 `rerun@<host>`(orchestrator)가 하므로 통과하면 `verified`로 결정된다 |
 | 다음 프롬프트, Bash 호출, 에이전트 결과 | 결과를 한 번 전한다: `benchbook: media-upload a1b2c3d: re-run passed (2 checks, 14.2s), tests not weakened, checked: re-run (c:7f3a91c2)` |
 | 에이전트가 선언된 검사를 Bash로 실행 | 그 실행을 조각과 commit에 기록한다 |
-| 에이전트가 task를 완료로 표시 | 선언된 검사마다 HEAD에서 통과한 실행이 생길 때까지 task를 열어 두고, 돌릴 명령을 알려 준다 |
+| 에이전트가 조각 브랜치(`piece start`)에서 task를 완료로 표시 | 선언된 검사마다 HEAD에서 통과한 실행이 생길 때까지 task를 열어 두고, 돌릴 명령을 알려 준다 |
 | 기록이 멈춤(dead 보고, hook 실패) | brief 첫 줄에 `benchbook: recording stopped: ...`와 고치는 방법을 쓴다 |
 
 hook은 stderr에 쓰지 않고 항상 0으로 끝난다. benchbook 프로젝트 밖에서는 DB를 건드리지 않고 바로 끝난다.

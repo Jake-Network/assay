@@ -185,7 +185,8 @@ leaves nothing behind (no spool entry, no log line) and the handler finishes wit
 
 `TaskCompleted` fires when an agent marks a task completed with TaskUpdate, and when an agent-team teammate ends
 its turn with tasks in progress. Exit code 2 keeps the task open and gives the hook's stderr to the model. The hook
-works out the piece from the hook's `cwd` (`BENCHBOOK_PIECE`, else the branch name) and asks the ledger whether
+works out the piece from the hook's `cwd` (`BENCHBOOK_PIECE`, else the branch name when `piece start` made that
+branch a live piece) and asks the ledger whether
 every check declared there has a passing attempt for that piece at HEAD: same `config.piece` and `code_ref`,
 finished, not invalidated, from a clean checkout (`worktree_dirty` not true). Attempts from `check run`, from the
 Bash hook and from `check verify` all count, and so does a passing run still waiting in the spool (check run
@@ -205,6 +206,7 @@ Run this from /path/to/checkout, then mark the task completed again:
 | no project for the cwd, or no `[checks]` | nothing is declared, so there is nothing to require |
 | not in a git repository, HEAD detached with `BENCHBOOK_PIECE` unset, or no commit yet | there is no piece or no commit to look up |
 | the branch is the base branch (`[guard] base`'s branch, `main` or `master`) and `BENCHBOOK_PIECE` is unset | the lead's own session and its task list are not a piece |
+| the branch has no live piece (no `piece start <branch>`, or its lease ran out or it was released) and `BENCHBOOK_PIECE` is unset | the lead works on a feature branch too where nothing is committed to main; its task list is not a piece either |
 | the project is not in the database, or does not use the code pack | its attempts could not be recorded anyway |
 | benchbook raises anything (unreadable config.toml, the database unreachable within 5 s, a bug) | a broken benchbook must not hold every task open; the log line says `gate error` |
 
@@ -212,7 +214,8 @@ If the hook itself cannot start or runs past its 30 s timeout, Claude Code treat
 it is open too.
 
 Every task completion in a piece's checkout is gated, the agent's own to-do items included; one passing run of
-each check at HEAD opens all of them until the next commit.
+each check at HEAD opens all of them until the next commit. A branch is a piece's checkout only while its piece is
+live: an implementer that works on a branch without `piece start` is not gated (set `BENCHBOOK_PIECE` to gate it).
 
 ### Under a token
 

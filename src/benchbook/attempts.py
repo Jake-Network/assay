@@ -149,6 +149,20 @@ def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: U
 # ---------------------------------------------------------------------------------------------- the gate
 
 
+def live_piece(project: str, piece: str) -> bool:
+    """Whether piece has a live `piece start` intent (v_inflight: claimed and its lease not expired). The gate's
+    test for "this branch is a piece" when only the branch name says so. A plain connection, as check_states."""
+    import psycopg
+
+    from .db.conn import database_url
+
+    with psycopg.connect(database_url(), connect_timeout=CONNECT_TIMEOUT, autocommit=True) as conn:
+        conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
+        row = conn.execute("SELECT 1 FROM benchbook.v_inflight WHERE project_id = %s AND is_intent"
+                           " AND 'piece' = ANY(tags) AND spec ->> 'piece' = %s LIMIT 1", (project, piece)).fetchone()
+    return row is not None
+
+
 def check_states(project: str, piece: str, sha: str,
                  junit_checks: Collection[str] = ()) -> tuple[str | None, dict[str, bool]]:
     """(the project's pack, or None when the project does not exist; {check name: passed}) over the valid,
