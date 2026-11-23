@@ -117,3 +117,8 @@ any rerun before paying for it.
   sweep there. `bench.run` does not resume an output directory, so the rest runs in two new ones with the same
   command and caps: one replacement C run at workers 8 (`h5-sweep-c8r`) and A,C × workers 16,30 × 3 runs
   (`h5-sweep-16-30`). The stopped run is reported, not counted as a completed repetition. Total cap unchanged (USD 90).
+- **2026-11-23, H5 sweep, second stop.** `h5-sweep-16-30` stopped at workers 16, C run 1, on the same five-hour
+  usage limit (USD 1.09 spent; A runs 1-3 at workers 16 finished). The remaining runs each go to their own output
+  directory (`h5-runs/<width>-<config>-<n>`, one `bench.run --runs 1` each, same caps), and a run stopped by the
+  usage limit is repeated after the limit resets; every stopped run is reported. Widths are rebuilt from the run
+  directories with `bench.real.parse` unchanged, since `bench.run` writes metrics.json only when a whole group ends.
