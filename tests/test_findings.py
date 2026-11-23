@@ -258,6 +258,44 @@ def test_piece_comes_from_the_runs_own_attempts(ko_repo: Path, lead: Ledger, cod
                for r in found)
 
 
+def test_piece_comes_from_the_reports_commit(tmp_path: Path, lead: Ledger, code_project: str) -> None:
+    """PR #4 issue 3: an implementer that records no attempt and reports `커밋: <sha>` gets its findings tagged with
+    the piece the automatic re-run takes from that commit (verify_requests.reported_target), so the piece's
+    `--here` brief shows them."""
+    from benchbook.brief import compile_brief
+    from benchbook.packs.code.brief import changed_scope
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git("init", "-q", "-b", "main")
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        git("config", k, v)
+    _repo(repo, code_project, "범위 밖")
+    with (repo / ".benchbook" / "config.toml").open("a", encoding="utf-8") as f:
+        f.write('\n[guard]\nbase = "main"\n')
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "hook-piece")
+    (repo / "src" / "app" / "utils").mkdir(parents=True)
+    (repo / "src" / "app" / "utils" / "sku.py").write_text("def split(s):\n    return s.split('-')\n")
+    git("add", "-A")
+    git("commit", "-qm", "sku")
+    sha = git("rev-parse", "HEAD")
+    data = _event("subagent_stop_one_line.json", repo)
+    data["last_assistant_message"] = data["last_assistant_message"] + f"커밋: {sha}\n"
+    assert process("subagent-stop", data, accepted=True, findings_only=True) == "findings-only"
+    [row] = _findings(lead)
+    assert "piece:hook-piece" in row["tags"] and row["payload"]["piece"] == "hook-piece"
+    brief = compile_brief(lead, None, 2000, log=False, tags=changed_scope(repo), repo=repo)
+    assert "Scope: piece:hook-piece" in brief
+    findings = brief.split("## Open out-of-scope findings", 1)[1].split("\n## ", 1)[0]
+    assert findings.startswith(" (1 of 1)") and "publish/client.py" in findings
+
+
 def test_the_handback_carries_the_findings_once(tmp_path: Path, code_project: str, lead: Ledger,
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, code_project, "Out of scope")

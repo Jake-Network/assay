@@ -724,9 +724,21 @@ def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[s
     if not findings.parse(text, heading):
         return  # no section, or nothing in it: no transcript read, no writes
     cwd = data.get("cwd")
-    r = findings.capture(lg, text, heading, source=source, piece=_run_piece(lg, data, fired_at),
+    r = findings.capture(lg, text, heading, source=source,
+                         piece=_run_piece(lg, data, fired_at) or _reported_piece(cwd, text),
                          root=str(cwd) if cwd else None)
     log(f"{event}: out-of-scope findings: {r.findings} ({r.new} new) {' '.join(r.claims)}")
+
+
+def _reported_piece(cwd: str | None, text: str) -> str | None:
+    """The piece the report's own commit names (verify_requests.reported_target), for a subagent that recorded no
+    attempt: the same piece the automatic re-run of this report verifies."""
+    from .check_run import find_repo
+    from .verify_requests import reported_target
+
+    repo = find_repo(Path(cwd)) if cwd else None
+    target = reported_target(repo, text) if repo is not None else None
+    return target[1] if target is not None else None
 
 
 def _run_piece(lg: Any, data: dict[str, Any], fired_at: datetime) -> str | None:

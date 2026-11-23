@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- Out-of-scope findings from a report that recorded no attempt are tagged with the piece the report's commit names,
+  found the way the automatic re-run finds it (`verify_requests.reported_target`), so the piece's `--here` brief
+  shows them (PR #4 issue 3). The brief does not yet count open findings outside its scope.
 - The completion gate (TaskCompleted) holds a task only on a branch that is a live piece (`piece start`) or when
   `BENCHBOOK_PIECE` is set (PR #4 issue 1). Where nothing is committed to main the lead works on a feature branch,
   and every to-do of its own session was held as a piece's completion. Behavior change: an implementer working on
