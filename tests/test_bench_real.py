@@ -229,3 +229,40 @@ def _registration(tmp_path: Path) -> Path:
     from tests.test_bench_boundary import registration
 
     return registration(tmp_path)
+
+
+def test_worker_models_are_counted_and_off_runs_listed_apart(tmp_path: Path) -> None:
+    """30-C-1: the lead passed model "haiku" to all 100 Agent calls, which won over CLAUDE_CODE_SUBAGENT_MODEL;
+    30-C-2 ran 28 of 90 workers. Both stay in the table and are listed under it."""
+    from bench.report import write_report
+
+    def assistant(content: list[dict[str, object]], *, parent: str | None = None, model: str = "claude-sonnet-5-5",
+                  mid: str = "m") -> tuple[int, dict[str, object]]:
+        return 0, {"type": "assistant", "parent_tool_use_id": parent,
+                   "message": {"id": mid, "model": model, "content": content}}
+
+    call = {"type": "tool_use", "name": "Agent", "id": "t1", "input": {"prompt": "p", "model": "haiku"}}
+    events = [assistant([call], mid="lead-1"), assistant([{"type": "text", "text": "a"}], mid="lead-1"),
+              assistant([{"type": "tool_use", "name": "Agent", "id": "t2", "input": {"prompt": "p"}}], mid="lead-2"),
+              assistant([{"type": "text", "text": "w"}], parent="t1", model="claude-haiku-5-5", mid="w1"),
+              assistant([{"type": "tool_use", "name": "Bash", "id": "b", "input": {}}], parent="t1",
+                        model="claude-haiku-5-5", mid="w1"),
+              assistant([{"type": "text", "text": "w"}], parent="t2", mid="w2")]
+    assert real.model_counts(events) == ({"claude-haiku-5-5": 1, "claude-sonnet-5-5": 1}, {"(none)": 1, "haiku": 1})
+
+    def row(config: str, run: int, **extra: object) -> dict[str, object]:
+        return {"config": config, "run": run, "evaluations": 1, "duplicate_ratio": 0, "lost_results": 0,
+                "lead_context_max": 1, "tokens_total": 1, "final_best": None, "curve": [],
+                "subagent_models": {"claude-sonnet-5-5": 300}, "agent_model_params": {"(none)": 90, "sonnet": 3},
+                "delivered_worker_reports": 90, **extra}
+
+    runs = [row("A", 1), row("C", 1, subagent_models={"claude-haiku-5-5": 360}, agent_model_params={"haiku": 100}),
+            row("C", 2, delivered_worker_reports=28)]
+    cond = {"dry": False, "model": "sonnet", "workers": 30, "rounds": 3}
+    (tmp_path / "metrics.json").write_text(json.dumps({"conditions": cond, "runs": runs}))
+    text = write_report(tmp_path).read_text()
+    apart = text.split("## Runs to read apart\n\n", 1)[1].split("\n\n", 2)[1].splitlines()
+    assert apart == ["- C-1: subagent messages on another model than sonnet: claude-haiku-5-5 360 of 360; the lead's "
+                     "Agent calls passed model: haiku ×100",
+                     "- C-2: 28 delivered worker reports of 90 requested (workers × rounds)"]
+    assert "| C benchbook | 2 |" in text  # not excluded

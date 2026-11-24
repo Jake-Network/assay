@@ -45,6 +45,10 @@ def write_report(out: Path) -> Path:
                      f"{_ms(best_per_1k)} | {_ms([r.get('lead_report_tokens') for r in rs])} | "
                      f"{_ms([r.get('delivered_worker_reports') for r in rs])} |")
     lines += ["", "Values are mean ± sample standard deviation over runs.", ""]
+    if not cond.get("dry") and (apart := runs_apart(runs, cond)):
+        lines += ["## Runs to read apart", "",
+                  "Kept in the table above: which runs to exclude is the pre-registration's rule, not the report's.",
+                  "", *apart, ""]
     png = _plot(out, runs, modes)
     if png:
         lines += ["## Best-so-far vs cumulative tokens", "", f"![curve]({png.name})", ""]
@@ -69,6 +73,41 @@ def write_report(out: Path) -> Path:
     p = out / "report.md"
     p.write_text("\n".join(lines))
     return p
+
+
+DELIVERED_SHARE = 0.9  # below this share of workers × rounds, a run is listed as having run fewer workers
+
+
+def _same_model(model: str, registered: str) -> bool:
+    """An alias (sonnet) names the models whose id contains it (claude-sonnet-5-5)."""
+    return model == registered or registered in model or model in registered
+
+
+def runs_apart(runs: list[dict[str, Any]], cond: dict[str, Any]) -> list[str]:
+    """One line per run whose workers were not the registered ones: a subagent model other than --model (a lead can
+    pass `model` to the Agent tool, and it wins over CLAUDE_CODE_SUBAGENT_MODEL: 30-C-1 ran its 100 workers on
+    Haiku), or fewer delivered worker reports than DELIVERED_SHARE of workers × rounds (30-C-2 ran 28 of 90)."""
+    registered = str(cond.get("model") or "")
+    workers, rounds = cond.get("workers"), cond.get("rounds")
+    requested = workers * rounds if isinstance(workers, int) and isinstance(rounds, int) else None
+    out = []
+    for r in runs:
+        why = []
+        models = r.get("subagent_models") or {}
+        if other := {m: n for m, n in models.items() if registered and not _same_model(m, registered)}:
+            shown = ", ".join(f"{m} {n}" for m, n in sorted(other.items()))
+            why.append(f"subagent messages on another model than {registered}: {shown} of {sum(models.values())}")
+        params = {m: n for m, n in (r.get("agent_model_params") or {}).items()
+                  if m != "(none)" and not (registered and _same_model(m, registered))}
+        if params:
+            why.append("the lead's Agent calls passed model: "
+                       + ", ".join(f"{m} ×{n}" for m, n in sorted(params.items())))
+        delivered = r.get("delivered_worker_reports")
+        if requested and isinstance(delivered, int) and delivered < DELIVERED_SHARE * requested:
+            why.append(f"{delivered} delivered worker reports of {requested} requested (workers × rounds)")
+        if why:
+            out.append(f"- {r['config']}-{r['run']}: " + "; ".join(why))
+    return out
 
 
 def _plot(out: Path, runs: list[dict[str, Any]], modes: list[str]) -> Path | None:

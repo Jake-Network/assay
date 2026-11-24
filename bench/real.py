@@ -472,6 +472,31 @@ def worker_reports(events: list[tuple[int, dict[str, Any]]]) -> tuple[int | None
     return (sum(reports.values()) if reports else None), len(reports)
 
 
+NO_MODEL_PARAM = "(none)"
+
+
+def model_counts(events: list[tuple[int, dict[str, Any]]]) -> tuple[dict[str, int], dict[str, int]]:
+    """(subagent API messages per model, the lead's Agent/Task calls per `model` argument, NO_MODEL_PARAM for a call
+    without one). A message streamed as several events (one per content block) counts once, by its id."""
+    messages: dict[str, set[str]] = {}
+    calls: dict[str, set[str]] = {}
+    for n, (_, event) in enumerate(events):
+        message = event.get("message")
+        if event.get("type") != "assistant" or not isinstance(message, dict):
+            continue
+        if event.get("parent_tool_use_id"):
+            if isinstance(model := message.get("model"), str):
+                messages.setdefault(model, set()).add(str(message.get("id") or f"event-{n}"))
+            continue
+        content = message.get("content")
+        for block in content if isinstance(content, list) else ():
+            if (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                    and isinstance(block.get("id"), str)):
+                given = block.get("input", {}).get("model") if isinstance(block.get("input"), dict) else None
+                calls.setdefault(given if isinstance(given, str) else NO_MODEL_PARAM, set()).add(block["id"])
+    return ({k: len(v) for k, v in sorted(messages.items())}, {k: len(v) for k, v in sorted(calls.items())})
+
+
 def transcript_messages(out: Path) -> Iterator[tuple[bool, dict[str, Any]]] | None:
     """The same pairs from the copied session transcripts, or None when the run has none."""
     root = out / "transcripts"
@@ -760,6 +785,8 @@ def parse(mode: str, out: Path, run: int, project_id: str | None, budget_usd: fl
     final_best = max((e["value"] for e in evals if e["value"] is not None), default=None)
     ctx, curve, curve_source = _observed_curve(events, evals, usage[1], final_best)
     report_tokens, delivered_reports = worker_reports(events)
+    subagent_models, agent_model_params = model_counts(events)
     return RunMetrics(mode, run, len(evals), duplicate_ratio(evals), lost, ctx, usage[1], final_best, curve,
                       cost_usd=cost, curve_source=curve_source, usage_check=usage_check(out, events),
-                      lead_report_tokens=report_tokens, delivered_worker_reports=delivered_reports)
+                      lead_report_tokens=report_tokens, delivered_worker_reports=delivered_reports,
+                      subagent_models=subagent_models, agent_model_params=agent_model_params)
