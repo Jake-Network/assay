@@ -205,12 +205,25 @@ def task_manifest(tmp_path: Path) -> Path:
     return manifest
 
 
+REGISTRATION_FIELDS = ("Model", "Claude Code", "Date", "Budget", "Tasks", "Claude-mem", "Commits", "H5 budget")
+
+
+def registration(tmp_path: Path, *, blank: str | None = None) -> Path:
+    """A pre-registration with every field run.py checks filled in, except blank (left as the template's
+    "[...]"), so the tests do not depend on the repository's own registration."""
+    path = tmp_path / "registration.md"
+    path.write_text("".join(f"**{name}**: {'[to be filled]' if name == blank else 'registered'}\n"
+                            for name in REGISTRATION_FIELDS), encoding="utf-8")
+    return path
+
+
 def test_execute_requires_filled_registration_before_launch(tmp_path: Path) -> None:
     manifest = task_manifest(tmp_path)
     out = tmp_path / "run"
     result = subprocess.run([sys.executable, "-m", "bench.boundary.run", "--execute", "--arms", "A",
-                             "--tasks", str(manifest), "--out", str(out), "--model", "model", "--max-budget-usd",
-                             "1", "--probe-budget-usd", "1", "--total-budget-usd", "1"],
+                             "--tasks", str(manifest), "--registration", str(registration(tmp_path, blank="Model")),
+                             "--out", str(out), "--model", "model", "--max-budget-usd", "1", "--probe-budget-usd",
+                             "1", "--total-budget-usd", "1"],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 1
     assert "fill in the pre-registration field Model" in result.stderr
@@ -220,16 +233,13 @@ def test_execute_requires_filled_registration_before_launch(tmp_path: Path) -> N
 @pytest.mark.parametrize("version", ["2.1.276 (Claude Code)", "unknown"])
 def test_execute_rejects_unsupported_claude_version_before_trial(tmp_path: Path, version: str) -> None:
     manifest = task_manifest(tmp_path)
-    registration = tmp_path / "registration.md"
-    template = Path(run.__file__).with_name("PREREGISTRATION.md").read_text(encoding="utf-8")
-    registration.write_text(template.replace(": [", ": registered ["), encoding="utf-8")
     claude = tmp_path / "claude"
     claude.write_text(f"#!/bin/sh\n[ \"$1\" = --version ] || exit 99\nprintf '%s\\n' '{version}'\n", encoding="utf-8")
     claude.chmod(0o755)
     out = tmp_path / "run"
     result = subprocess.run(
         [sys.executable, "-m", "bench.boundary.run", "--execute", "--arms", "A", "--tasks", str(manifest),
-         "--registration", str(registration), "--out", str(out), "--model", "model", "--max-budget-usd", "1",
+         "--registration", str(registration(tmp_path)), "--out", str(out), "--model", "model", "--max-budget-usd", "1",
          "--probe-budget-usd", "1", "--total-budget-usd", "1"],
         env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
         capture_output=True, text=True, timeout=60,
