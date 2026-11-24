@@ -382,6 +382,25 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
     assert tuple(int(x) for x in version.split(".")) >= (0, 1, 3)
 
 
+# The plugin's files as of its version. Claude Code keeps an installed version's cached files, so a change under
+# integrations/claude-code/ reaches users only with a new version in plugin.json: change a file, and this fails until
+# the version is bumped and the pair updated (docs/claude-code.md, "Bump version").
+PLUGIN_RELEASE = ("0.2.1", "2c7879e8db4f3b0a21436680523696b4a6d9efbbe1f5981c33d27de9f154d785")
+
+
+def test_the_plugin_version_moves_with_its_files() -> None:
+    import hashlib
+
+    root = Path(__file__).resolve().parent.parent / "integrations" / "claude-code"
+    h = hashlib.sha256()
+    for p in sorted(x for x in root.rglob("*") if x.is_file() and "__pycache__" not in x.parts
+                    and x.relative_to(root).as_posix() != ".claude-plugin/plugin.json"):
+        h.update(p.relative_to(root).as_posix().encode() + b"\0" + p.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    version = json.loads((root / ".claude-plugin" / "plugin.json").read_text())["version"]
+    assert (version, h.hexdigest()) == PLUGIN_RELEASE, (
+        "integrations/claude-code/ changed: bump its plugin.json version and update PLUGIN_RELEASE")
+
+
 def test_the_cli_spelling_of_the_hooks_answers_the_same(gate_repo: Path, tmp_path: Path, lg: Ledger) -> None:
     p = subprocess.run([sys.executable, "-m", "benchbook.cli", "hook", "task-completed"], cwd=gate_repo,
                        input=json.dumps(fixture("task_completed.json", gate_repo)), text=True, capture_output=True,

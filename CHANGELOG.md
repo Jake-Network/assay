@@ -8,6 +8,7 @@
   The notes hook also runs on PostToolUse of every tool other than Bash, Agent and Task (which deliver from their own
   hooks), and an `async_launched` Agent result delivers what is waiting instead of nothing. The hook names the event
   that ran (`PostToolUse` or `UserPromptSubmit`). With no note waiting it takes 35 ms (p50; p95 45 ms; 50 runs).
+  The Claude Code plugin is 0.2.1 for the new hook: update it (`claude plugin update benchbook@benchbook`).
 - Out-of-scope findings from a report that recorded no attempt are tagged with the piece the report's commit names,
   found the way the automatic re-run finds it (`verify_requests.reported_target`), so the piece's `--here` brief
   shows them (PR #4 issue 3). The brief does not yet count open findings outside its scope.
