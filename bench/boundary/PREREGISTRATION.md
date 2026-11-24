@@ -175,3 +175,20 @@ any rerun before paying for it.
   five-hour window, and a second only if the window's spend so far is below USD 4. A unit stopped by the usage limit
   is kept, reported and repeated after the reset. The repository head that runs arm F differs from the commit named
   under Commits only in documentation.
+- **2026-11-24, when arm F's lead sees a re-run verdict.** Written after the lean amendment and before arm F runs; no
+  procedure, metric or gate changes. In benchbook 937f5ea the automatic re-run's verdict line (`benchbook: <piece>
+  <sha>: ...`) waits as a note for the session and is delivered once, as additional context, by the first of: a
+  foreground Agent or Task result (PostToolUse with `status` `completed`), a Bash result (PostToolUse or
+  PostToolUseFailure), a UserPromptSubmit, or a SessionStart (each `--resume` of a phase, probe or action). An
+  `async_launched` Agent result and SubagentStop deliver nothing. The re-run ends seconds to tens of seconds after
+  the report, so the lead sees it at a later tool result than the report's own, if any comes before the call ends,
+  and a decision taken in between does not see it. Delivery finds notes by session id alone, and hook inputs from
+  inside a subagent carry the lead's session id with an `agent_id` (the Bash fixture
+  `tests/fixtures/hooks/post_tool_use_bash.json`), so a subagent's Bash result can take a verdict meant for the lead
+  into that subagent's context. This is a property of the code under measurement and stays as it is for the pilot;
+  arm F's H1, H2, H3 and H6 are reported with it. The boundary report adds, per F trial and beside the metrics: where
+  each verdict line was delivered (lead transcript, a subagent's transcript, or not delivered), whether it reached the
+  lead before the lead's integration decision for that piece, and the `status` of the lead's Agent results
+  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is expected to give `completed`, which no live session has shown yet).
+  Besides documentation, the checkout that runs arm F differs from 937f5ea in `tests/test_bench_boundary.py`, which
+  the runner does not run.
