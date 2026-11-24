@@ -21,6 +21,9 @@
   ledger that already registered `verifier@<host>` as an orchestrator keeps it; nothing is migrated.
 - Measured the false completion rate on SWE-bench Verified (bench/results/2026-11-23-swe-verified/): 7 of 39
   completions failed a re-run of the declared checks, 17.9% (95% CI 9.0% to 32.7%); spec §8 keeps P0 and P1.
+- Measured fan-in (H5) at 8, 16 and 30 requested workers (bench/results/2026-11-25-h5-sweep/), benchbook code
+  `cc5ed08`: the pre-registered gate is not met. C's lead reads less than half of A's report tokens, but its peak
+  context is higher at 8 and 16; at 30 neither C run kept the registered workload.
 - Review fixes (PR #4). `benchbook uninstall` keeps `.benchbook/` when git cannot say whether it is tracked, and
   `--purge` removes only a PostgreSQL cluster whose server is confirmed stopped (`benchbook db stop` now fails when
   it is not). A retried automatic re-run finishes from the attempt its first try recorded instead of running the
