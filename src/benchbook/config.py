@@ -146,6 +146,41 @@ class CheckSpec:
     junit: bool = False  # read failing test ids from the JUnit XML written to {junit}
     timeout: float = 900.0  # seconds before the check's process group is killed
 
+    @property
+    def definition(self) -> str:
+        """A hash of what the check runs (cmd, junit, timeout). A pass recorded under this name counts for a check
+        verify only when its definition is the one verify ran (checks.passed_elsewhere)."""
+        import hashlib
+        import json
+
+        body = {"cmd": self.cmd, "junit": self.junit, "timeout": float(self.timeout)}
+        return hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class VerifyPrep:
+    """[verify]: what a clean verification worktree needs before the checks run (T02). copy: gitignored files
+    (.env) copied from the repository root, read there and never recorded beyond their names; prepare: a command run
+    in the worktree first (uv sync --frozen). parallel_baseline: when a piece changed guarded files, run the JUnit
+    checks at the merge-base (for their test counts) beside the commit's instead of after them; only for checks that
+    share no port, database or other resource between two worktrees."""
+    copy: tuple[str, ...] = ()
+    prepare: str | None = None
+    prepare_timeout: float = 600.0
+    parallel_baseline: bool = False
+
+    def table(self) -> dict[str, Any]:
+        """The table as a pin keeps it: empty when nothing is declared."""
+        out: dict[str, Any] = {}
+        if self.copy:
+            out["copy"] = list(self.copy)
+        if self.prepare is not None:
+            out["prepare"] = self.prepare
+            out["prepare_timeout"] = self.prepare_timeout
+        if self.parallel_baseline:
+            out["parallel_baseline"] = True
+        return out
+
 
 @dataclass
 class LocalConfig:
@@ -158,6 +193,10 @@ class LocalConfig:
     guard_base: str | None = None  # [guard] base: the ref a piece branched from (check verify --base)
     # [report] out_of_scope_heading: the heading of the out-of-scope section in an implementer's final report
     out_of_scope_heading: str | None = None
+    verify: VerifyPrep = field(default_factory=VerifyPrep)  # [verify] copy, prepare, prepare_timeout
+    # [report] agents: the subagent types whose reports are read for findings when BENCHBOOK_HOOK_AGENTS is unset
+    # (["*"]: every subagent). Their reports leave findings only, no [auto-captured] note (T05).
+    report_agents: list[str] = field(default_factory=list)
 
 
 def _config_in(d: Path) -> Path | None:
@@ -213,6 +252,8 @@ def load(start: Path | None = None) -> LocalConfig:
         cfg.checks = parse_checks(data.get("checks"), str(p))
         cfg.guard_paths, cfg.guard_base = parse_guard(data.get("guard"), str(p))
         cfg.out_of_scope_heading = parse_report(data.get("report"), str(p))
+        cfg.report_agents = parse_report_agents(data.get("report"), str(p))
+        cfg.verify = parse_verify(data.get("verify"), str(p))
     if project := env("PROJECT"):
         cfg.project = project
     return cfg
@@ -223,14 +264,44 @@ def write_config(root: Path, project: str, budget: int = 2000) -> Path:
     files (autoresearch state, queued runs) live there, and `git mv .assay .benchbook` moves them together."""
     p = local_dir(root) / CONFIG_FILE
     p.parent.mkdir(parents=True, exist_ok=True)
+    line = f'project = "{project}"'
+    if p.is_file():  # keep what is there ([checks], [guard], ...); only the project line changes
+        old = p.read_text(encoding="utf-8")
+        new, n = re.subn(r'(?m)^project\s*=.*$', lambda _: line, old, count=1)
+        p.write_text(new if n else f"{line}\n{old}", encoding="utf-8")
+        return p
     p.write_text(
-        f'project = "{project}"\n'
+        f"{line}\n"
         "# database_url is never stored here. Set BENCHBOOK_DATABASE_URL for a shared Postgres;\n"
         "# without it benchbook uses the local embedded Postgres.\n"
         f"default_budget_tokens = {budget}\n",
         encoding="utf-8",
     )
     return p
+
+
+def exclude_local_dir(root: Path) -> bool:
+    """Add the benchbook folder to .git/info/exclude when git does not track it, so nothing has to be committed.
+    True when a line was added."""
+    import subprocess
+
+    rel = local_dir(root).name + "/"
+    try:
+        tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--", rel], capture_output=True, text=True,
+                                 check=True).stdout.strip()
+        path = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "info/exclude"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return False  # not a git repository
+    if tracked:
+        return False
+    exclude = Path(path) if Path(path).is_absolute() else root / path
+    text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    if any(x.strip() in (rel, "/" + rel, rel.rstrip("/"), "/" + rel.rstrip("/")) for x in text.splitlines()):
+        return False
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + f"/{rel}\n", encoding="utf-8")
+    return True
 
 
 # [checks] and [guard] are parsed here, with the standard library only: the command hooks that will match shell
@@ -284,7 +355,40 @@ def parse_guard(table: Any, where: str = "config.toml") -> tuple[list[str], str 
     return list(paths), base
 
 
-_REPORT_KEYS = {"out_of_scope_heading"}
+_VERIFY_KEYS = {"copy", "prepare", "prepare_timeout", "parallel_baseline"}
+
+
+def parse_verify(table: Any, where: str = "config.toml") -> VerifyPrep:
+    """[verify] as a VerifyPrep. copy holds paths relative to the repository root that stay inside it."""
+    from .errors import BenchbookError
+
+    if table is None:
+        return VerifyPrep()
+    if not isinstance(table, dict):
+        raise BenchbookError(f"{where}: [verify] must be a table")
+    if unknown := sorted(set(table) - _VERIFY_KEYS):
+        raise BenchbookError(f"{where}: [verify]: unknown key {', '.join(unknown)} (known: copy, prepare, "
+                             "prepare_timeout, parallel_baseline)")
+    copy, prepare = table.get("copy", []), table.get("prepare")
+    timeout = table.get("prepare_timeout", VerifyPrep.prepare_timeout)
+    if not isinstance(copy, list) or not all(isinstance(x, str) and x.strip() for x in copy):
+        raise BenchbookError(f"{where}: [verify] copy must be a list of paths, such as [\".env\"]")
+    for x in copy:
+        parts = Path(x).parts
+        if Path(x).is_absolute() or ".." in parts or not parts or x.startswith("~"):
+            raise BenchbookError(f"{where}: [verify] copy: {x!r} must be a path inside the repository, relative to "
+                                 "its root")
+    if prepare is not None and (not isinstance(prepare, str) or not prepare.strip()):
+        raise BenchbookError(f"{where}: [verify] prepare must be a non-empty command")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 86400:
+        raise BenchbookError(f"{where}: [verify] prepare_timeout must be a number of seconds (0 < t <= 86400)")
+    parallel = table.get("parallel_baseline", False)
+    if not isinstance(parallel, bool):
+        raise BenchbookError(f"{where}: [verify] parallel_baseline must be true or false")
+    return VerifyPrep(tuple(dict.fromkeys(copy)), prepare.strip() if prepare else None, float(timeout), parallel)
+
+
+_REPORT_KEYS = {"out_of_scope_heading", "agents"}
 HEADING_MAX = 100
 
 
@@ -299,7 +403,8 @@ def parse_report(table: Any, where: str = "config.toml") -> str | None:
     if not isinstance(table, dict):
         raise BenchbookError(f"{where}: [report] must be a table")
     if unknown := sorted(set(table) - _REPORT_KEYS):
-        raise BenchbookError(f"{where}: [report]: unknown key {', '.join(unknown)} (known: out_of_scope_heading)")
+        raise BenchbookError(f"{where}: [report]: unknown key {', '.join(unknown)} (known: out_of_scope_heading, "
+                             "agents)")
     heading = table.get("out_of_scope_heading")
     if heading is None:
         return None
@@ -307,3 +412,17 @@ def parse_report(table: Any, where: str = "config.toml") -> str | None:
         raise BenchbookError(f"{where}: [report] out_of_scope_heading must be one line of text "
                              f"(1-{HEADING_MAX} characters), such as \"범위 밖\" or \"Out of scope\"")
     return heading.strip()
+
+
+def parse_report_agents(table: Any, where: str = "config.toml") -> list[str]:
+    """[report] agents: subagent types (with or without a plugin prefix) whose reports the hook reads for findings,
+    or ["*"] for every subagent."""
+    from .errors import BenchbookError
+
+    if not isinstance(table, dict) or table.get("agents") is None:
+        return []
+    agents = table["agents"]
+    if not isinstance(agents, list) or not all(isinstance(a, str) and a.strip() and len(a) <= 100 for a in agents):
+        raise BenchbookError(f'{where}: [report] agents must be a list of subagent types, such as ["implementer"] '
+                             'or ["*"]')
+    return [a.strip() for a in agents]

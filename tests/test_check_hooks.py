@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_hooks, hooks
+from benchbook import Ledger, check_hooks, config, hooks, pieces
 from benchbook.checks import last_line_hash
 from benchbook.config import LocalConfig, parse_checks
 from tests.conftest import make_project
@@ -58,9 +58,22 @@ def lg(db_url: str, code_project: str) -> Ledger:
     return Ledger.open(project=code_project, agent="lead", database_url=db_url)
 
 
+def start_piece(db_url: str, project: str, repo: Path, piece: str = "media") -> None:
+    """`piece start`: the gate holds a branch's tasks only while it is a live piece (PR #4 issue 1)."""
+    pieces.start(_starter(db_url, project), piece, ["impl.txt"], repo)
+
+
+def _starter(db_url: str, project: str) -> Ledger:
+    # A lead: these projects keep settings.worker_intents off, so a worker could not start a piece.
+    return Ledger.open(project=project, agent="piece-lead", role="orchestrator", database_url=db_url)
+
+
 @pytest.fixture
-def gate_repo(tmp_path: Path, code_project: str) -> Path:
-    return make_checkout(tmp_path / "repo", code_project, cfg=GATE_CONFIG.format(project=code_project, py=PY))
+def gate_repo(tmp_path: Path, db_url: str, code_project: str) -> Path:
+    """On branch media, a live piece."""
+    repo = make_checkout(tmp_path / "repo", code_project, cfg=GATE_CONFIG.format(project=code_project, py=PY))
+    start_piece(db_url, code_project, repo)
+    return repo
 
 
 def hook_log(tmp_path: Path) -> str:
@@ -155,7 +168,10 @@ def test_declared_check_runs_are_recorded_by_the_hook(gate_repo: Path, tmp_path:
     assert ok["duration_ms"] == 1234 and "tool_use_id toolu_01ABC123" in ok["notes"]
     assert ok["metrics"] == {"checks_passed": 1, "checks_total": 1, "checks": {"unit": "ok"},
                              "checks_declared": ["unit", "quick"], "failure_signature": None, "guard_touched": False,
-                             "guard_files": [], "checks_changed": False, "via": "bash-hook", "worktree_dirty": False}
+                             "guard_files": [], "guard_weakened": False, "checks_changed": False, "via": "bash-hook",
+                             "worktree_dirty": False,
+                             "check_definitions": {"unit": config.load(gate_repo).checks["unit"].definition},
+                             "run_by": "benchbook-worker"}
     assert bad["metrics"]["checks"] == {"quick": "fail"}
     line = "FAILED tests/test_impl.py::test_fixed - AssertionError: took 0.42s"
     assert bad["metrics"]["failure_signature"] == f"quick:exit 1:{last_line_hash(line)}"
@@ -272,6 +288,34 @@ def test_recorded_without_an_agent_command(gate_repo: Path, tmp_path: Path, lg: 
     assert hook("task-completed", task, env, gate_repo).returncode == 0
 
 
+def test_a_feature_branch_is_gated_only_while_it_is_a_live_piece(gate_repo: Path, tmp_path: Path, db_url: str,
+                                                                  lg: Ledger) -> None:
+    """PR #4 issue 1: where nothing is committed to main, the lead works on a feature branch too, and its own task
+    list is not a piece. The branch is one once `piece start` names it, or BENCHBOOK_PIECE does."""
+    env = cli_env(tmp_path)
+    git(gate_repo, "checkout", "-q", "-b", "plan-branch")
+    git(gate_repo, "commit", "-q", "--allow-empty", "-m", "chore: empty")
+    task = fixture("task_completed.json", gate_repo)
+    p = hook("task-completed", task, env, gate_repo)
+    assert (p.returncode, p.stdout, p.stderr) == (0, "", "")
+    assert hook_log(tmp_path).count("task-completed: allowed: plan-branch has no live piece") == 1
+
+    p = hook("task-completed", task, {**env, "BENCHBOOK_PIECE": "plan-branch"}, gate_repo)
+    assert p.returncode == 2 and "piece plan-branch has no passing run" in p.stderr
+
+    p = subprocess.run([SCRIPT, "--agent", "piece-lead", "piece", "start", "plan-branch", "--paths", "check_ok.py"],
+                       cwd=gate_repo, env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    p = hook("task-completed", task, env, gate_repo)
+    head = git(gate_repo, "rev-parse", "HEAD")
+    assert p.returncode == 2
+    assert f"piece plan-branch has no passing run at HEAD {head[:12]} of: unit (not run), quick (not run)" in p.stderr
+    assert "benchbook check run unit --piece plan-branch" in p.stderr
+
+    pieces.done(_starter(db_url, lg.project_id), "plan-branch")
+    assert hook("task-completed", task, env, gate_repo).returncode == 0  # released: no longer a piece
+
+
 @pytest.mark.parametrize("case", ["no-project", "no-checks", "detached", "base-branch", "unreachable", "broken"])
 def test_the_gate_fails_open(case: str, gate_repo: Path, tmp_path: Path, lg: Ledger) -> None:
     env = cli_env(tmp_path)
@@ -321,19 +365,40 @@ def test_coverage_counts_from_the_documented_query(gate_repo: Path, tmp_path: Pa
 def test_plugin_and_manual_hooks_run_both_events() -> None:
     plugin = ROOT / "integrations" / "claude-code"
     files = [plugin / "hooks" / "hooks.json", plugin / "manual" / "settings.hooks.json"]
+    def plain(h: Any) -> Any:  # the plugin runs each hook through its shim (T07); the manual file runs benchbook
+        return json.loads(json.dumps(h).replace('\\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\\" ', "benchbook hook "))
+
     for f in files:
-        h = json.loads(f.read_text())["hooks"]
-        [before] = h["PreToolUse"]  # notes a JUnit report's state before the command (check_hooks.bash_start)
-        assert before["matcher"] == "Bash" and [x["command"] for x in before["hooks"]] == ["benchbook hook bash-start"]
+        h = plain(json.loads(f.read_text())["hooks"])
+        assert "PreToolUse" not in h
         bash = [e for e in h["PostToolUse"] if e.get("matcher") == "Bash"]
         assert [x["command"] for e in bash for x in e["hooks"]] == ["benchbook hook bash-result"], f
         assert [x["command"] for e in h["PostToolUseFailure"] for x in e["hooks"]] == ["benchbook hook bash-result"]
         assert h["PostToolUseFailure"][0]["matcher"] == "Bash"
         [done] = h["TaskCompleted"]
         assert "matcher" not in done and [x["command"] for x in done["hooks"]] == ["benchbook hook task-completed"]
-    assert json.loads(files[0].read_text()) == json.loads(files[1].read_text())
+    assert plain(json.loads(files[0].read_text())) == json.loads(files[1].read_text())
     version = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text())["version"]
     assert tuple(int(x) for x in version.split(".")) >= (0, 1, 3)
+
+
+# The plugin's files as of its version. Claude Code keeps an installed version's cached files, so a change under
+# integrations/claude-code/ reaches users only with a new version in plugin.json: change a file, and this fails until
+# the version is bumped and the pair updated (docs/claude-code.md, "Bump version").
+PLUGIN_RELEASE = ("0.2.1", "2c7879e8db4f3b0a21436680523696b4a6d9efbbe1f5981c33d27de9f154d785")
+
+
+def test_the_plugin_version_moves_with_its_files() -> None:
+    import hashlib
+
+    root = Path(__file__).resolve().parent.parent / "integrations" / "claude-code"
+    h = hashlib.sha256()
+    for p in sorted(x for x in root.rglob("*") if x.is_file() and "__pycache__" not in x.parts
+                    and x.relative_to(root).as_posix() != ".claude-plugin/plugin.json"):
+        h.update(p.relative_to(root).as_posix().encode() + b"\0" + p.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    version = json.loads((root / ".claude-plugin" / "plugin.json").read_text())["version"]
+    assert (version, h.hexdigest()) == PLUGIN_RELEASE, (
+        "integrations/claude-code/ changed: bump its plugin.json version and update PLUGIN_RELEASE")
 
 
 def test_the_cli_spelling_of_the_hooks_answers_the_same(gate_repo: Path, tmp_path: Path, lg: Ledger) -> None:

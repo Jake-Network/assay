@@ -51,7 +51,9 @@ class PieceState:
     discarded: int = 0
     open_findings: list[UUID] = field(default_factory=list)
     guard_touched: bool | None = None  # None: no attempt of the commit says
-    guard_files: list[str] = field(default_factory=list)
+    guard_files: list[str] = field(default_factory=list)  # the weakened ones (T04); every touched one for old runs
+    guard_weakened: bool | None = None
+    tests_added: list[str] = field(default_factory=list)  # guarded files only added to (T04)
     checks_changed: bool | None = None
 
 
@@ -152,7 +154,10 @@ def _describe(lg: Ledger, p: Piece) -> PieceState:
     s.failed = len(attempts) - s.passed
     s.guard_touched = _flag(a["guard_touched"] for a in attempts)
     s.checks_changed = _flag(a["checks_changed"] for a in attempts)
-    s.guard_files = sorted({f for a in attempts if a["guard_touched"] is True for f in a["guard_files"]})
+    s.guard_weakened = _flag(a["guard_weakened"] for a in attempts)
+    s.guard_files = sorted({f for a in attempts if a["guard_weakened"] is True for f in a["weakened_files"]})
+    s.tests_added = sorted({f for a in attempts if a["guard_touched"] is True for f in a["guard_files"]}
+                           - set(s.guard_files))
     if not rows:
         s.why = "no completion claim for this piece at this commit" + _runs(s)
         return s
@@ -162,7 +167,7 @@ def _describe(lg: Ledger, p: Piece) -> PieceState:
     s.claim_id, s.claim_status, s.reporter = claim["id"], claim["status"], _reporter(claim)
     s.implementers = sorted(impl)
     others = [a for a in attempts if a["passed"] and a["author"] not in impl and a["via"] is None
-              and a["guard_touched"] is False and a["checks_changed"] is False]
+              and a["guard_weakened"] is False and a["checks_changed"] is False]
     clean = [a for a in others if a["complete"]]
     s.partial = len(others) - len(clean)
     s.independent = sorted({a["author"] for a in clean})
@@ -173,9 +178,10 @@ def _describe(lg: Ledger, p: Piece) -> PieceState:
     elif failed := [a for a in attempts if not a["passed"]]:
         who = ", ".join(sorted({a["author"] for a in failed}))
         s.state, s.why = DISAGREES, f"{len(failed)} run(s) of this commit failed (by {who})"
-    elif s.guard_touched or s.checks_changed:
+    elif s.guard_weakened or s.checks_changed:
         s.state = CLAIMED
-        s.why = "the commit changed tests (guarded paths or [checks]): a re-run cannot verify it, a person decides"
+        s.why = ("the commit weakened tests (deleted or changed test lines, skip markers, fewer tests, conftest) or "
+                 "changed [checks]: a re-run cannot verify it, a person decides")
     elif not clean:
         s.state = CLAIMED
         s.why = "no independent re-run of every declared check yet (the implementer's own runs do not count"
@@ -243,7 +249,10 @@ def render(states: Sequence[PieceState], *, project: str, agent: str, token: boo
                 lines.append(f"  - open out-of-scope findings: {ids}{' ...' if len(s.open_findings) > 10 else ''}")
             if s.guard_files:
                 shown = ", ".join(_code(f, 80) for f in s.guard_files[:5])
-                lines.append(f"  - guarded files changed: {shown}{' ...' if len(s.guard_files) > 5 else ''}")
+                lines.append(f"  - tests weakened: {shown}{' ...' if len(s.guard_files) > 5 else ''}")
+            if s.tests_added:
+                shown = ", ".join(_code(f, 80) for f in s.tests_added[:5])
+                lines.append(f"  - tests added: {shown}{' ...' if len(s.tests_added) > 5 else ''}")
     if skipped:
         lines += ["", f"Skipped {len(skipped)} `{TRAILER}:` value(s) that are not a piece name (1-100 characters, "
                       "no spaces)."]
@@ -266,10 +275,12 @@ def render(states: Sequence[PieceState], *, project: str, agent: str, token: boo
 
 def _tests(s: PieceState) -> str:
     parts = []
-    if s.guard_touched:
-        parts.append(f"yes: {len(s.guard_files)} guarded file(s)" if s.guard_files else "yes: guarded paths")
+    if s.guard_weakened:
+        parts.append(f"weakened: {len(s.guard_files)} file(s)" if s.guard_files else "weakened: fewer tests ran")
     if s.checks_changed:
         parts.append("`[checks]` changed")
+    if s.tests_added:
+        parts.append(f"added: {len(s.tests_added)} file(s)")
     if parts:
         return ", ".join(parts)
     if s.guard_touched is None and s.checks_changed is None:

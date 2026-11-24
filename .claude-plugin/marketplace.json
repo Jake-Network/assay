@@ -7,7 +7,12 @@
     {
       "name": "benchbook",
       "source": "./integrations/claude-code",
-      "description": "Your agents' lab notebook (benchbook ledger, worker subagent, lead skill, result-capture hook)."
+      "description": "Hooks only: checks re-run and recorded, subagent reports captured, a brief at compaction and session start. No MCP tools in your context."
+    },
+    {
+      "name": "benchbook-mcp",
+      "source": "./integrations/claude-code-mcp",
+      "description": "The benchbook MCP server, worker subagent and lead skill, for research loops that call the ledger as tools."
     }
   ]
 }

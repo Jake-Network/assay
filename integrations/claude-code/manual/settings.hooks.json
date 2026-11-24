@@ -1,5 +1,38 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook session-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook pre-compact",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook notes",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [
@@ -7,23 +40,36 @@
             "type": "command",
             "command": "benchbook hook subagent-stop",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
+          },
           {
             "type": "command",
-            "command": "benchbook hook bash-start",
+            "command": "benchbook hook agent-result",
             "timeout": 5
           }
         ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook agent-result",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^(?!(Bash|Agent|Task)$)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook notes",
+            "timeout": 5
+          }
+        ]
+      },
       {
         "matcher": "SubagentHandback",
         "hooks": [

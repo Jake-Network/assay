@@ -128,9 +128,17 @@ def init(
     epsilon: Annotated[float, typer.Option(help="Minimum change that counts as improved")] = 0.0,
     config_schema: Annotated[str | None, typer.Option("--config-schema",
                                                       help="JSON Schema for experiment configs (@file)")] = None,
-    pack: Annotated[str, typer.Option(help="core, ml-research or code (coding pieces and their checks)")] = "core",
+    pack: Annotated[str | None, typer.Option(
+        help="core, ml-research or code (coding pieces and their checks; the default without --metric)")] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="code pack: write the proposed checks without asking")]
+    = False,
 ) -> None:
-    """Create a project and write .benchbook/config.toml in the repository root."""
+    """Create a project and write .benchbook/config.toml in the repository root.
+
+    Without --metric and --pack the project is a code project: init proposes the test and lint commands the
+    repository declares as its checks (asking first on a terminal), keeps .benchbook/ out of git and pins them."""
+    if pack is None:
+        pack = "core" if metric is not None else "code"
     import re
 
     root = _repo_root()
@@ -148,11 +156,86 @@ def init(
     from .config import write_config
 
     cfg = write_config(root, p.id)
-    emit({"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack},
-         f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
-         f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
-         f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n"
-         f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   benchbook ui")
+    extra, out = "", {"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack}
+    if p.pack == "code":
+        extra = _init_code(root, p.id, out, yes)
+    emit(out, f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
+              f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
+              f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n{extra}"
+              f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   "
+              "benchbook ui")
+
+
+def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:
+    """code pack: keep .benchbook/ out of git (info/exclude) and pin the declared checks in the ledger, so a piece
+    can be verified without committing anything (T01)."""
+    from .checks import pin_checks
+    from .config import exclude_local_dir, load
+    from .ids import short
+    from .ledger import Ledger
+
+    lines = []
+    if exclude_local_dir(root):
+        out["excluded"] = True
+        lines.append("  git:    .benchbook/ added to .git/info/exclude (nothing to commit)")
+    cfg = load(root)
+    if cfg.path is not None and not cfg.checks:
+        from .proposals import propose
+
+        prop = propose(root)
+        if prop.checks:
+            text = prop.toml()
+            ok = yes or not sys.stdin.isatty() or typer.confirm(
+                f"benchbook: checks found in {', '.join(prop.found_in)}:\n{text}\nWrite them to {cfg.path}?",
+                default=True)
+            if ok:
+                with cfg.path.open("a", encoding="utf-8") as f:
+                    f.write("\n" + text)
+                out["proposed"] = prop.checks
+                lines.append(f"  checks: {', '.join(prop.checks)} from {', '.join(prop.found_in)} (edit config.toml)")
+            cfg = load(root)
+    if cfg.path is not None and cfg.out_of_scope_heading is None and "[report]" not in cfg.path.read_text("utf-8"):
+        # T05: every subagent's report is read for an out-of-scope section (findings only, no note)
+        with cfg.path.open("a", encoding="utf-8") as f:
+            f.write('\n[report]\nout_of_scope_heading = "Out of scope"  # or "범위 밖"\nagents = ["*"]\n')
+        lines.append('  report: out-of-scope findings read from every subagent\'s "## Out of scope" section')
+        cfg = load(root)
+    if cfg.checks:
+        name = STATE["agent"] or env("AGENT") or (None if env("TOKEN") else "lead")
+        p, _ = pin_checks(Ledger.open(project=project, agent=name), None, cfg.checks, cfg.guard_paths,
+                          cfg.verify.table(), source="config")
+        out["pin"] = short("claim", p.id)
+        lines.append(f"  checks: {', '.join(p.checks)} pinned ({out['pin']})")
+    return "".join(x + "\n" for x in lines)
+
+
+@app.command("install")
+def install_cmd(
+    harness: Annotated[str, typer.Option(help="claude-code, codex, cursor or gemini")] = "claude-code",
+    mcp: Annotated[bool, typer.Option("--mcp", help="also the benchbook-mcp plugin (MCP server, worker agent)")]
+    = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="print the steps, run nothing")] = False,
+    no_cli: Annotated[bool, typer.Option("--no-cli", help="skip uv tool install")] = False,
+) -> None:
+    """Install the CLI at this version and the hooks: the benchbook plugin for Claude Code (hooks only), or the
+    Codex, Cursor or Gemini CLI manifest. Then run benchbook init in your repository."""
+    from .install import install
+
+    plan = install(harness, dry_run=dry_run, mcp=mcp, cli=not no_cli)
+    emit({"ok": True, "steps": plan.done}, "\n".join(plan.done))
+
+
+@app.command("uninstall")
+def uninstall_cmd(
+    purge: Annotated[bool, typer.Option("--purge", help="also remove the embedded database")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="print the steps, remove nothing")] = False,
+) -> None:
+    """Remove the plugins, the hook manifests' benchbook entries, the state directory and this checkout's untracked
+    .benchbook/ (with its .git/info/exclude line). The embedded database stays unless --purge."""
+    from .install import uninstall
+
+    plan = uninstall(_repo_root(), dry_run=dry_run, purge=purge)
+    emit({"ok": True, "steps": plan.done}, "\n".join(plan.done))
 
 
 def _repo_root() -> Path:
@@ -166,7 +249,13 @@ def _repo_root() -> Path:
 @app.command()
 def status() -> None:
     """One-screen project summary."""
-    s = ledger(read_only=True).status()
+    lg = ledger(read_only=True)
+    if lg.pack.name == "code":
+        from . import code_status
+
+        s = code_status.status(lg, _repo_root())
+        return emit(s, code_status.render(s))
+    s = lg.status()
     if STATE["json"]:
         return emit(s)
     b = s["best"]
@@ -182,23 +271,55 @@ def status() -> None:
 
 
 @app.command()
+def statusline() -> None:
+    """Print the latest cached code-project counts for a harness status line."""
+    from .code_status import read_cache
+
+    line = read_cache(STATE["project"])
+    if STATE["json"]:
+        print(json.dumps({"statusline": line}, ensure_ascii=False))
+    elif line:
+        print(line)
+
+
+@app.command()
 def brief(task: Annotated[str | None, typer.Option("--task")] = None,
           budget: Annotated[int | None, typer.Option("--budget")] = None,
           tags: Annotated[str | None, typer.Option(
               help="code pack: only these module tags, e.g. mod:media (comma separated; file:<prefix> by path)")]
-          = None) -> None:
+          = None,
+          here: Annotated[bool, typer.Option(
+              "--here", help="code pack: scope by what this branch changed since its base (file:<dir>/ tags and "
+                             "piece:<branch>), plus --tags")] = False) -> None:
     """Print the context brief (markdown) for this agent."""
     from .config import load
 
-    b = ledger().brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
-                       tags=csv(tags) or None)
+    scope = csv(tags)
+    if here:
+        from .packs.code.brief import changed_scope
+
+        scope = [*changed_scope(_repo_root()), *scope]
+    lg = ledger()
+    b = lg.brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
+                 tags=scope or None, repo=_repo_root() if here else None)
+    if lg.pack.name == "code":
+        from .code_status import recording_warning
+
+        if warning := recording_warning(_repo_root()):
+            b = f"{warning}\n\n{b}"
     emit({"brief": b}, b.rstrip("\n"))
 
 
 @app.command()
 def get(id: str) -> None:
-    """Show one record with its links."""
-    emit(ledger(read_only=True).get(id))
+    """Show one record: status, how it was checked, statement, up to 5 links each way and the last 3 decisions,
+    within 400 tokens. --json prints the whole record."""
+    from .lookup import log_lookup, render
+
+    lg = ledger(read_only=True)
+    got = lg.get(id)
+    log_lookup(lg.project_id, str(got.get("id") or id))
+    emit(got, render(got, labels=lg.pack.brief_labels))
 
 
 @app.command()
@@ -484,20 +605,25 @@ def ui(port: Annotated[int, typer.Option()] = 7466) -> None:
     emit({"url": url}, url)
 
 
-HARNESS_HELP = "The harness running the hook: claude-code (default), codex, cursor or gemini (docs/harnesses.md)"
+HARNESS_HELP = "The harness running the hook: claude-code (default), codex, cursor, gemini, opencode or pi"
 
 
 @app.command()
 def hook(event: str, harness: Annotated[str | None, typer.Option(help=HARNESS_HELP)] = None) -> None:
     """Harness hook entry point. Always exits 0, except `replay`, which reports what it processed, and
     `task-completed`, which exits 2 to keep a task open (docs/claude-code.md)."""
-    from .entry import CHECK_HOOK_EVENTS
+    from .entry import BOUNDARY_HOOK_EVENTS, CHECK_HOOK_EVENTS
     from .hooks import main as hook_main
 
     if event in CHECK_HOOK_EVENTS:
         from .check_hooks import main as check_hook_main
 
         raise typer.Exit(check_hook_main(event, harness))
+    if event in BOUNDARY_HOOK_EVENTS:
+        from . import boundary_hooks
+
+        boundary_hooks.main(event, harness)
+        raise typer.Exit(0)
     res = hook_main(event, harness)
     if res is not None:
         emit(res.as_dict(), str(res))

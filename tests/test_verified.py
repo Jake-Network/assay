@@ -17,8 +17,7 @@ import pytest
 from benchbook import Ledger, checks
 from benchbook.errors import BenchbookError, InvalidTransition
 from benchbook.packs import VerifyPolicy, load_pack, read_verify
-from tests.conftest import make_project
-from tests.test_checks import make_repo, piece
+from tests.conftest import make_project, make_repo, piece
 from tests.writer import as_writer, issue
 
 SHA = "a" * 40
@@ -106,6 +105,17 @@ def test_replication_rule_is_unchanged_for_other_packs(db_url: str, project: str
 
 # ------------------------------------------------------------------------------------------- the rule in decide()
 
+@pytest.mark.parametrize("statuses", [{"unit": "fail", "value": "ok"}, {"unit": "ok"}])
+def test_a_rerun_requires_consistent_check_results(db_url: str, code_project: str,
+                                                 statuses: dict[str, str]) -> None:
+    impl = open_as(db_url, code_project, "impl")
+    lead = open_as(db_url, code_project, "lead")
+    claim = completion(impl)
+    inconsistent = attempt(lead, {**PASS, "checks": statuses})
+    with pytest.raises(InvalidTransition, match="not every attempt"):
+        lead.check_rerun(claim, [inconsistent])
+
+
 def test_a_self_recorded_pass_alone_cannot_verify(db_url: str, code_project: str) -> None:
     impl = open_as(db_url, code_project, "impl")
     lead = open_as(db_url, code_project, "lead")
@@ -190,7 +200,7 @@ def test_guard_or_checks_changes_block_rerun_but_not_a_person(db_url: str, code_
     lead = open_as(db_url, code_project, "lead")
     v1, v2 = open_as(db_url, code_project, "v1", "harness"), open_as(db_url, code_project, "v2", "harness")
     for sha, flags, match in (("d" * 40, {"guard_touched": True, "guard_files": ["tests/test_x.py"]},
-                               r"changed guarded files \(tests/test_x.py\)"),
+                               r"changed guarded files in a way that can weaken them \(tests/test_x.py\)"),
                               ("e" * 40, {"checks_changed": True}, r"changed \[checks\]")):
         claim = completion(open_as(db_url, code_project, "impl"), sha)
         flagged = attempt(v1, {**PASS, **flags}, sha)

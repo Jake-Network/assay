@@ -1,6 +1,7 @@
 """Benchmark harness (spec §15): A baseline vs B files vs C benchbook at the same budget.
 
     python -m bench.run --dry                      # scripted agents, validates the whole pipeline
+    python -m bench.run --workers 8,16,30           # previews the H5 fan-in sweep
     python -m bench.run --model sonnet             # prints the real `claude -p` commands
     python -m bench.run --model sonnet --execute   # runs them (costs money; see MANUAL_QA.md)
     python -m bench.report bench/out/<run>         # (re)build report.md
@@ -18,12 +19,22 @@ from pathlib import Path
 from .report import write_report
 
 
+def worker_counts(value: str) -> list[int]:
+    try:
+        counts = [int(n) for n in value.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("use a comma-separated list of distinct positive worker counts") from exc
+    if min(counts) < 1 or len(counts) != len(set(counts)):
+        raise argparse.ArgumentTypeError("use a comma-separated list of distinct positive worker counts")
+    return counts
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--configs", default="A,B,C")
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--dry", action="store_true", help="scripted agents, no LLM calls")
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--workers", type=worker_counts, default=[4], help="workers per round, or a comma-separated sweep")
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--evals", type=int, default=5, help="evaluations per worker task")
     ap.add_argument("--budget", type=int, default=40000, help="dry: token budget per run")
@@ -40,7 +51,7 @@ def main() -> None:
     modes = args.configs.split(",")
     if any(m not in ("A", "B", "C") for m in modes) or len(set(modes)) != len(modes):
         ap.error("--configs must list distinct configurations from A,B,C")
-    if min(args.runs, args.workers, args.rounds, args.evals, args.max_turns, args.wall_clock, args.budget) <= 0:
+    if min(args.runs, args.rounds, args.evals, args.max_turns, args.wall_clock, args.budget) <= 0:
         ap.error("run limits must be positive")
     if not math.isfinite(args.max_budget_usd) or args.max_budget_usd <= 0:
         ap.error("--max-budget-usd must be a positive finite amount")
@@ -50,6 +61,17 @@ def main() -> None:
         out.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
         ap.exit(1, f"output already exists: {out}\n")
+    counts = args.workers
+    for workers in counts:
+        args.workers = workers
+        target = out
+        if len(counts) > 1:
+            target = out / f"workers-{workers}"
+            target.mkdir()
+        run_group(ap, args, modes, target)
+
+
+def run_group(ap: argparse.ArgumentParser, args: argparse.Namespace, modes: list[str], out: Path) -> None:
     results = []
     for mode in modes:
         for run in range(1, args.runs + 1):

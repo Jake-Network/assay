@@ -1,23 +1,49 @@
 {
   "hooks": {
-    "SubagentStop": [
+    "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "benchbook hook subagent-stop",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" session-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" pre-compact",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" notes",
             "timeout": 5
           }
         ]
       }
     ],
-    "PreToolUse": [
+    "SubagentStop": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "benchbook hook bash-start",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" subagent-stop",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" agent-result",
             "timeout": 5
           }
         ]
@@ -25,11 +51,31 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" agent-result",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^(?!(Bash|Agent|Task)$)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" notes",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "SubagentHandback",
         "hooks": [
           {
             "type": "command",
-            "command": "benchbook hook subagent-handback",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" subagent-handback",
             "timeout": 5
           }
         ]
@@ -39,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "benchbook hook bash-result",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" bash-result",
             "timeout": 5
           }
         ]
@@ -51,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "benchbook hook bash-result",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" bash-result",
             "timeout": 5
           }
         ]
@@ -62,7 +108,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "benchbook hook task-completed",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook\" task-completed",
             "timeout": 30
           }
         ]

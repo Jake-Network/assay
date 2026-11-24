@@ -5,8 +5,19 @@
 ```bash
 uv tool install --from /path/to/benchbook benchbook      # puts `benchbook` on PATH (the plugin runs `benchbook mcp`, `benchbook hook`)
 claude plugin marketplace add /path/to/benchbook     # the repository root has .claude-plugin/marketplace.json
-claude plugin install benchbook@benchbook
+claude plugin install benchbook@benchbook            # hooks only: no MCP tools in the session
+claude plugin install benchbook-mcp@benchbook        # optional: the MCP server, worker subagent and lead skill
 ```
+
+`benchbook install` does the same in one line (`uv tool install benchbook==<its version>`, the marketplace, the hook
+plugin; `--mcp` adds benchbook-mcp, `--dry-run` prints the steps, `--harness codex|cursor` merges that harness's
+manifest instead). `benchbook uninstall` removes the plugins, the state directory (spool, logs, notes), this
+checkout's `.benchbook/` when `git ls-files` answers that it tracks nothing there (a failing git or a corrupt index
+keeps the folder) and its `.git/info/exclude` line. `--purge` also removes the embedded database when its directory
+contains the PostgreSQL version, data and control files and `pg_ctl status` confirms that its server has stopped.
+
+Claude Code loads a plugin's MCP server whenever the plugin is enabled, and every tool definition is in every
+prompt. That is why the hooks and the MCP server are two plugins: the hook plugin costs no tokens per turn.
 
 Claude Code starts `benchbook mcp` and `benchbook hook` from its own PATH. If `command -v benchbook` finds nothing in a new
 terminal, run `uv tool update-shell` once (it adds `~/.local/bin` to your shell profile), open a new terminal and
@@ -37,17 +48,27 @@ On macOS the embedded database lives in `~/Library/Application Support/benchbook
 `BENCHBOOK_DATA_DIR`, and set it in Claude Code's `settings.json` `env` too: the CLI, MCP server and hook must see the
 same value.
 
-The plugin (`integrations/claude-code/`) contains:
+The hook plugin (`integrations/claude-code/`, `benchbook@benchbook`) contains:
+
+| file | what |
+|---|---|
+| `bin/benchbook-hook` | the shim every hook runs: `benchbook hook EVENT` from PATH (`assay hook` when only that is there); without either it notes one line in `${CLAUDE_PLUGIN_DATA}/missing-cli`, which `benchbook doctor` reports, and exits 0 |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+
+Every command in hooks.json is `"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT`, so the plugin calls only a file of
+its own (the directory's submission checklist asks for that).
+
+The MCP plugin (`integrations/claude-code-mcp/`, `benchbook-mcp@benchbook`) contains:
 
 | file | what |
 |---|---|
 | `.mcp.json` | the `benchbook` MCP server (`benchbook mcp`, stdio) |
 | `agents/benchbook-worker.md` | worker subagent: worker tools only (no `benchbook_decide`, `benchbook_create_tasks`, `benchbook_cancel_task`) |
 | `skills/benchbook/SKILL.md` | rules for any agent using the ledger |
-| `skills/benchbook-lead/SKILL.md` | the lead loop, `/benchbook:benchbook-lead <goal>` |
-| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PreToolUse(Bash)` -> `benchbook hook bash-start`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+| `skills/benchbook-lead/SKILL.md` | the lead loop, `/benchbook-mcp:benchbook-lead <goal>` |
 
-For development, `claude --plugin-dir integrations/claude-code` loads it without installing.
+For development, `claude --plugin-dir integrations/claude-code --plugin-dir integrations/claude-code-mcp` loads both
+without installing.
 
 ## Install by hand (no plugin)
 
@@ -55,11 +76,11 @@ For development, `claude --plugin-dir integrations/claude-code` loads it without
 cp integrations/claude-code/manual/.mcp.json .mcp.json
 mkdir -p .claude/agents .claude/skills
 cp integrations/claude-code/manual/agents/benchbook-worker.md .claude/agents/
-cp -r integrations/claude-code/skills/benchbook integrations/claude-code/skills/benchbook-lead .claude/skills/
+cp -r integrations/claude-code-mcp/skills/benchbook integrations/claude-code-mcp/skills/benchbook-lead .claude/skills/
 ```
 
 Merge `integrations/claude-code/manual/settings.hooks.json` into `.claude/settings.json`. The skill is then
-`/benchbook-lead`. Tool names differ between the two installs (`mcp__plugin_benchbook_benchbook__*` vs `mcp__benchbook__*`), which is
+`/benchbook-lead`. Tool names differ between the two installs (`mcp__plugin_benchbook-mcp_benchbook__*` vs `mcp__benchbook__*`), which is
 why the manual worker file is separate.
 
 ## The loop
@@ -137,16 +158,12 @@ nothing else (no database module is imported), and compares the command with eac
 - One leading `cd DIR &&` is allowed; the check is then looked up, and its commit read, in DIR.
 - The check must have run from the repository root, where a declared check runs; the same words run in a
   subdirectory are observed as `unrecordable`.
-- A word with `{junit}` in the declaration matches a word of that shape or nothing. For a `junit = true` check
-  that exits 0, that word is where the hook reads the report: the run is recorded as passed only when that file
-  was written by this run and shows a test that ran and none that failed (a report with no test run is recorded as
-  a failure, as `check run` records it). "Written by this run" links the two ends of the tool call, with no clock:
-  `benchbook hook bash-start` (PreToolUse on Bash) notes the report's state (inode, size, mtime) before the
-  command runs, under its `tool_use_id`, and afterwards the report must exist and differ from that note. A report
-  also counts once only (`junit-used.jsonl` in the spool, checked and marked under one lock, so hooks that end at
-  once cannot share it). Without the word, without the PreToolUse note (an older hooks.json, or a harness other than
-  Claude Code), or with a report the command did not write, the run is `unrecordable`: exit 0 alone proves nothing
-  for a JUnit check, and the completion gate asks for `benchbook check run`.
+- A word with `{junit}` in the declaration matches a word of that shape or nothing. A raw Bash call for a
+  `junit = true` check can record a known failure or timeout from the tool response. A successful raw call is
+  observed as `unrecordable`: a shared report path cannot identify which invocation wrote the XML. Run
+  `benchbook check run NAME` to record a pass. It supplies a separate temporary report path for each invocation
+  and accepts a pass only when the report contains a test that ran and no failures. The completion gate ignores
+  successful raw Bash records for JUnit checks, including ones recorded by older releases.
 - The remaining words must be equal. Extra arguments (`-k upload`, `-x`) are a different command and do not
   match.
 
@@ -168,7 +185,8 @@ leaves nothing behind (no spool entry, no log line) and the handler finishes wit
 
 `TaskCompleted` fires when an agent marks a task completed with TaskUpdate, and when an agent-team teammate ends
 its turn with tasks in progress. Exit code 2 keeps the task open and gives the hook's stderr to the model. The hook
-works out the piece from the hook's `cwd` (`BENCHBOOK_PIECE`, else the branch name) and asks the ledger whether
+works out the piece from the hook's `cwd` (`BENCHBOOK_PIECE`, else the branch name when `piece start` made that
+branch a live piece) and asks the ledger whether
 every check declared there has a passing attempt for that piece at HEAD: same `config.piece` and `code_ref`,
 finished, not invalidated, from a clean checkout (`worktree_dirty` not true). Attempts from `check run`, from the
 Bash hook and from `check verify` all count, and so does a passing run still waiting in the spool (check run
@@ -188,6 +206,7 @@ Run this from /path/to/checkout, then mark the task completed again:
 | no project for the cwd, or no `[checks]` | nothing is declared, so there is nothing to require |
 | not in a git repository, HEAD detached with `BENCHBOOK_PIECE` unset, or no commit yet | there is no piece or no commit to look up |
 | the branch is the base branch (`[guard] base`'s branch, `main` or `master`) and `BENCHBOOK_PIECE` is unset | the lead's own session and its task list are not a piece |
+| the branch has no live piece (no `piece start <branch>`, or its lease ran out or it was released) and `BENCHBOOK_PIECE` is unset | the lead works on a feature branch too where nothing is committed to main; its task list is not a piece either |
 | the project is not in the database, or does not use the code pack | its attempts could not be recorded anyway |
 | benchbook raises anything (unreadable config.toml, the database unreachable within 5 s, a bug) | a broken benchbook must not hold every task open; the log line says `gate error` |
 
@@ -195,7 +214,8 @@ If the hook itself cannot start or runs past its 30 s timeout, Claude Code treat
 it is open too.
 
 Every task completion in a piece's checkout is gated, the agent's own to-do items included; one passing run of
-each check at HEAD opens all of them until the next commit.
+each check at HEAD opens all of them until the next commit. A branch is a piece's checkout only while its piece is
+live: an implementer that works on a branch without `piece start` is not gated (set `BENCHBOOK_PIECE` to gate it).
 
 ### Under a token
 
@@ -207,13 +227,14 @@ a state directory never record each other's entries. Replay an entry with the to
 a rotation (`benchbook agent add NAME --rotate`) the old token no longer authenticates, so the processor notes in
 each token's spool (`writer.info`) which agent the ledger said that token was; `benchbook hook replay` under the
 new token moves into its own spool the entries of the old one whose project names the same agent there, and records
-them. The move is idempotent (a copy's name is fixed by its original, and a processed copy is remembered in
-`adopted.done`), so a replay retried after a failed removal records nothing twice. Every token's spool notes its
+them. Each entry keeps its original receipt through repeated rotations. For a check attempt, that receipt is its
+experiment ID in the ledger, so a retry after the database commits reuses the same row even if local cleanup or
+writing `adopted.done` failed. Separate check executions keep separate receipts. Every token's spool notes its
 database target when its first entry is queued, so entries of a token no processor ever confirmed (the ledger was
 unreachable for its whole life) are found too: they stay where they are, and replay counts them as `held`, names
-the folder and exits non-zero. An entry that
-names an agent (`check run` with `--agent` or `BENCHBOOK_AGENT`) different from the token's is refused, moves to
-the spool's `dead/` and is recorded by `benchbook hook replay` run with that agent's token. On a
+the folder and exits non-zero. If replay cannot check the current token's agent because the database is
+unavailable, it reports the entries still queued. A check that names an agent (`--agent` or `BENCHBOOK_AGENT`)
+different from the token's agent moves to `dead/`; run the check with that agent's token to record its result. On a
 `benchbook_writer` login without a token the processor cannot register `hook` and the entry goes to `dead/`, as
 for the result-capture hook. The gate only reads (`projects`, `experiments_valid`), which the writer login may.
 
@@ -235,6 +256,74 @@ The same page warns that "Not every SubagentStop event comes from a subagent Cla
 
 **Not measured.** This answer is from the documentation only; confirming it needs a model run, which was not
 spent. The plugin does not gate on SubagentStop: the completion gate is the TaskCompleted hook above.
+
+## The boundary hooks
+
+The same startup brief and pending notes are available on Codex, Cursor, Gemini CLI, OpenCode V2 and Pi through
+their own hook or extension APIs. [Harness setup and event support](harnesses.md)
+
+When there are dead or overdue spool entries or recent hook failures, the code brief opens with a recording
+warning and the replay command. `benchbook statusline` reads a one-line summary of verified pieces and open
+findings from the processor's cache. Output is empty until the processor records its first entry for this project.
+
+The `benchbook` plugin also gives the model what the ledger says at the points where a session loses it
+(`src/benchbook/boundary_hooks.py`):
+
+| hook | event | what it prints |
+|---|---|---|
+| `benchbook hook session-start` | SessionStart (every source: startup, resume, clear, compact) | the brief scoped by what this branch changed (`brief --here`), at most 1,500 tokens and 6,000 characters, as `additionalContext`; nothing when every section is empty |
+| `benchbook hook pre-compact` | PreCompact | one paragraph of at most 1,000 characters, "Keep these ids and statuses verbatim in the summary: ...", three lines per section, on plain stdout (instructions for the compaction summary) |
+| `benchbook hook notes` | UserPromptSubmit; PostToolUse of every tool but Bash, Agent and Task (matcher `^(?!(Bash\|Agent\|Task)$)`; those deliver from their own hooks) | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once, under the event that ran; they move to `delivered/`. A hook that fired inside a subagent (`agent_id` in its input) delivers nothing, so the notes wait for the lead |
+| `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; an `async_launched` result queues nothing and delivers what is waiting; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
+
+The detached processor verifies the reported commit using the project's declared checks. Re-runs have a processor
+of their own (the spool's verify lane, `.verify.lock`), so reports and check-run attempts queued meanwhile are
+recorded without waiting for them; each re-run first records what was queued before it. It stores the report's
+hash and structured identifiers. Repeated reports for the same project, piece and commit share one completed
+re-run within the database and writer's spool. An environment failure is kept for that report in its session, so a
+new report or session can re-run the checks after the environment recovers. SessionStart, UserPromptSubmit, and
+the lead's subsequent tool results (any tool) can deliver the pending note once. Only the lead's: Claude Code gives a subagent's hooks the lead's `session_id` with the subagent's `agent_id`, and a worker's tool result that took a verdict would leave the lead without it. For a background agent, SubagentStop queues
+the check after the report arrives.
+
+Each brief is also written to `.benchbook/STATE.md` for harnesses without hooks and for people. Its first line
+names the time, HEAD, project and connection fingerprint. When the benchbook folder is tracked, STATE.md is added
+to `.git/info/exclude`. The ledger has 5 seconds to answer, including connection, queries and the brief's git calls.
+SessionStart can supply the last STATE.md when the embedded ledger times out or a connection fails at the transport
+level. Fallback requires the same project and a matching database fingerprint. For an external PostgreSQL server,
+the fingerprint covers the effective libpq endpoint, database and login without including credentials. A service
+name, an implicit socket directory or multiple endpoints can make the target ambiguous. In those cases, with a
+Benchbook token, or after a remote timeout or authorization denial, the hook leaves the snapshot for manual use.
+PreCompact only gives live context. Outside a benchbook project each hook leaves after reading config.toml, without
+importing the database layer. The hooks log failures in `hook.log` and exit 0.
+
+## Boundary hooks: what Claude Code does
+
+The boundary benchmark exercises its report pipeline with scripted inputs using
+`uv run python -m bench.boundary.run --dry`. Collecting evidence from real Claude Code sessions requires the
+conditions in the [benchmark preregistration](../bench/boundary/PREREGISTRATION.md).
+
+The session-start, compaction and Agent-result hooks rely on the inputs and outputs below. The "documented" column is
+from the hook reference (code.claude.com/docs/en/hooks, read 2026-11-22); `scripts/qa_boundary_hooks.sh`
+(MANUAL_QA.md, scenario 5) checks them on a real session and fills the last column (2026-11-22, Claude Code
+2.1.330, haiku). The fixtures in `tests/fixtures/hooks/` are the inputs it saw, with session ids, paths and report
+text replaced (`session_start_startup.json`, `session_start_compact.json`, `pre_compact.json`,
+`post_tool_use_agent_async.json`, `user_prompt_submit.json`, `user_prompt_submit_task_notification.json`,
+`subagent_stop_background.json`, `subagent_stop_compaction.json`), except `post_tool_use_agent.json` (a completed
+foreground result), which no default session produced and which stays the documented example.
+
+| question | documented | observed (Claude Code version) |
+|---|---|---|
+| SessionStart `source` values | `startup`, `resume`, `clear`, `compact`, `fork` | `startup`, `resume` (each `--resume`), `compact` seen; `model` present on `compact`, absent on `startup` (2.1.330) |
+| SessionStart `additionalContext` reaches the model, also after compaction | yes; `compact` is the documented way to re-inject | yes, before and after `/compact` (2.1.330) |
+| PreCompact input | `trigger` (`manual`/`auto`), `custom_instructions` (may be null) | as documented, plus `prompt_id`; `trigger` `manual` for `/compact` (2.1.330) |
+| PreCompact stdout | instructions for the compaction summary, cut at 10,000 characters | followed: the phrase it asked for is in PostCompact's `compact_summary` (2.1.330). Compaction also ends with a SubagentStop whose `agent_type` is `""` and whose `last_assistant_message` is the summary |
+| PostToolUse on the Agent tool | `tool_name` `Agent` (no `Task` alias); `tool_response.status` `completed` with `content`, or `async_launched` with `outputFile` | `Agent`; **both calls `async_launched`**, the one without `run_in_background` too (`isAsync: true`). The report came with SubagentStop (`agent_type`, `last_assistant_message`), then a UserPromptSubmit whose `prompt` is a `<task-notification>` holding it in `<result>` (2.1.330) |
+| UserPromptSubmit when a background subagent reports | fires | fires once per finished agent, right after its SubagentStop (2.1.330) |
+| PostToolUse (Bash) `additionalContext` reaches the model | yes | yes (2.1.330) |
+| Both plugins load from repeated `--plugin-dir` | not documented | yes: `benchbook` and `benchbook-mcp` (2.1.330) |
+| TaskCompleted on a feature branch (PR #4 issue 1) | the hook decides | `claude -p` offers `TaskCreate`/`TaskUpdate`. With no `piece start` for the branch the update completed (`allowed: feature-plan has no live piece`); after `piece start feature-plan` it was held and the model quoted the hook's message (2.1.330, haiku, manual hooks, 2026-11-23) |
+| A subagent's `DONE <sha>`, before and after `check verify` without `--agent` (PR #4 issue 5) | not documented | in both projects the line was `checked: re-run` and the claim `verified` (oracle `rerun`), decided by `rerun@<host>` (orchestrator); `verifier@<host>` stayed a harness. In one of the two sessions the Agent result itself carried the report as well as SubagentStop: both queued the re-run, which ran and was delivered once (2.1.330, haiku, 2026-11-23) |
+| MCP tool prefix of the `benchbook-mcp` plugin | `mcp__plugin_<plugin>_<server>__`; a hyphen in the plugin name not addressed | `mcp__plugin_benchbook-mcp_benchbook__`: the hyphen stays. The server is still `pending` at `init` and connects during the first turn (2.1.330) |
 
 ## Installs from before the rename (assay)
 

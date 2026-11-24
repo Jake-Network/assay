@@ -1,0 +1,9 @@
+{
+  "session_id": "s-session-start-compact",
+  "transcript_path": "/home/user/.claude/projects/p/s-session-start-compact.jsonl",
+  "cwd": "{CWD}",
+  "prompt_id": "34a032d1-500b-49b2-aa8d-96e394bd4b34",
+  "hook_event_name": "SessionStart",
+  "source": "compact",
+  "model": "claude-haiku-5-5"
+}

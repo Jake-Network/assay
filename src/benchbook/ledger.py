@@ -7,6 +7,7 @@ import math
 import re
 import threading
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from statistics import fmean
@@ -371,6 +372,15 @@ class Ledger:
 
     # ------------------------------------------------------------------ tasks
 
+    def _lock_intents(self, conn: psycopg.Connection[Any]) -> None:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
+
+    @contextmanager
+    def _intent_transaction(self) -> Iterator[psycopg.Connection[Any]]:
+        with self._conn() as conn:
+            self._lock_intents(conn)
+            yield conn
+
     def create_tasks(self, tasks: Sequence[dict[str, Any]]) -> list[UUID]:
         self._require_decider()
         problems: list[str] = []
@@ -435,6 +445,9 @@ class Ledger:
             # committed event even if it would lock a different task row.
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
                          ("benchbook:task-claim:" + self.project_id, self.agent))
+            # Exhaustion changes the state that piece restart and release read. Keep this update and the claim
+            # in the same order as all other lease mutations for the project.
+            self._lock_intents(conn)
             if lease_seconds is None:
                 lease_seconds = self._read_lease_default(conn)
             # Exhausted tasks whose lease ran out become failed here; there is no scheduler (P8).
@@ -508,9 +521,16 @@ class Ledger:
         intent with the same value is a conflict (raises Conflict, CLI exit 2). Each field named in
         `exclusive_paths` holds a list of path globs (globs.py, a file escaped with globs.escape); another live
         intent whose same field can match a common path is a conflict too (path occupancy, docs/code.md)."""
-        if self.role not in DECIDERS and not self.project.settings.get("worker_intents"):
-            self.refresh()
-            if not self.project.settings.get("worker_intents"):
+        with self._intent_transaction() as conn:
+            return self._create_intent(conn, title, spec, tags, lease_seconds, exclusive, exclusive_paths)
+
+    def _create_intent(self, conn: psycopg.Connection[Any], title: str, spec: dict[str, Any] | None,
+                       tags: Sequence[str] | None, lease_seconds: int, exclusive: Sequence[str],
+                       exclusive_paths: Sequence[str]) -> Task:
+        if self.role not in DECIDERS:
+            project = conn.execute("SELECT settings FROM benchbook.projects WHERE id=%s", (self.project_id,)).fetchone()
+            assert project is not None
+            if not project["settings"].get("worker_intents"):
                 raise PermissionDenied("intents are off for this project (settings.worker_intents=false)")
         if not isinstance(title, str) or not title.strip():
             raise ValidationFailed(["title: required non-empty string"])
@@ -518,49 +538,49 @@ class Ledger:
         if lease_seconds <= 0:
             raise BenchbookError("lease_seconds must be positive")
         tg = list(dict.fromkeys(["intent", *(tags or [])]))
-        with self._conn() as conn:
-            # Every time from here on is the database's clock after the lock (clock_timestamp), not now(): now() is
-            # when the transaction began, possibly long before the lock was ours, and a lease counted from it could
-            # already be over when this commits (another piece could then take the paths at once).
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
-            self._check_exclusive(conn, spec, exclusive, None)
-            self._check_paths(conn, spec, exclusive_paths, None)
-            r = conn.execute(
-                "INSERT INTO benchbook.tasks(project_id,title,spec,tags,created_by,status,lease_owner,lease_expires_at,"
-                "attempts,max_attempts) VALUES (%s,%s,%s,%s,%s,'claimed',%s,"
-                "clock_timestamp() + make_interval(secs => %s),1,1)"
-                " RETURNING *",
-                (self.project_id, title.strip()[:500], Jsonb(spec), tg, self.agent, self.agent, lease_seconds),
-            ).fetchone()
-            self._event(conn, r["id"], "created", {"intent": True})
-            self._event(conn, r["id"], "claimed", {"lease_seconds": lease_seconds, "attempt": 1})
-            return Task(**r)
+        self._check_exclusive(conn, spec, exclusive, None)
+        self._check_paths(conn, spec, exclusive_paths, None)
+        row = conn.execute(
+            "INSERT INTO benchbook.tasks(project_id,title,spec,tags,created_by,status,lease_owner,lease_expires_at,"
+            "attempts,max_attempts) VALUES (%s,%s,%s,%s,%s,'claimed',%s,"
+            "clock_timestamp() + make_interval(secs => %s),1,1)"
+            " RETURNING *",
+            (self.project_id, title.strip()[:500], Jsonb(spec), tg, self.agent, self.agent, lease_seconds),
+        ).fetchone()
+        assert row is not None
+        self._event(conn, row["id"], "created", {"intent": True})
+        self._event(conn, row["id"], "claimed", {"lease_seconds": lease_seconds, "attempt": 1})
+        return Task(**row)
 
     def update_intent(self, task_id: str | UUID, spec_patch: dict[str, Any], lease_seconds: int | None = None,
                       exclusive: Sequence[str] = (), exclusive_paths: Sequence[str] = ()) -> Task:
         """Merge fields into the spec of your own live intent and optionally extend its lease. `exclusive` and
         `exclusive_paths` are checked against the other live intents as in create_intent."""
         tid = self._rid(task_id, "task")
-        with self._conn() as conn:
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
-            # A live lease only, read after the lock (clock_timestamp, not the transaction's start): once it ran out,
-            # another agent may hold the same paths, and only a new intent (create_intent, which checks them)
-            # occupies them again.
-            cur = conn.execute("SELECT * FROM benchbook.tasks WHERE id=%s AND status='claimed' AND lease_owner=%s"
-                               " AND lease_expires_at > clock_timestamp() AND 'intent' = ANY(tags) FOR UPDATE",
-                               (tid, self.agent)).fetchone()
-            if cur is None:
-                raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
-            spec = {**cur["spec"], **spec_patch}
-            self._check_exclusive(conn, spec, exclusive, tid)
-            self._check_paths(conn, spec, exclusive_paths, tid)
-            r = conn.execute(
-                "UPDATE benchbook.tasks SET spec=%s, updated_at=now(), lease_expires_at = CASE WHEN %s::int IS NULL"
-                " THEN lease_expires_at ELSE clock_timestamp() + make_interval(secs => %s::int) END WHERE id=%s"
-                " RETURNING *",
-                (Jsonb(spec), lease_seconds, lease_seconds, tid)).fetchone()
-            self._event(conn, tid, "updated", {"spec": spec_patch})  # type: ignore[arg-type]
-            return Task(**r)
+        assert tid is not None
+        with self._intent_transaction() as conn:
+            return self._update_intent(conn, tid, spec_patch, lease_seconds, exclusive, exclusive_paths)
+
+    def _update_intent(self, conn: psycopg.Connection[Any], task_id: UUID, spec_patch: dict[str, Any],
+                       lease_seconds: int | None, exclusive: Sequence[str], exclusive_paths: Sequence[str]) -> Task:
+        if lease_seconds is not None and lease_seconds <= 0:
+            raise BenchbookError("lease_seconds must be positive")
+        cur = conn.execute("SELECT * FROM benchbook.tasks WHERE project_id=%s AND id=%s AND status='claimed'"
+                           " AND lease_owner=%s AND lease_expires_at > clock_timestamp()"
+                           " AND 'intent' = ANY(tags) FOR UPDATE", (self.project_id, task_id, self.agent)).fetchone()
+        if cur is None:
+            raise LeaseLost(short("task", task_id))
+        spec = {**cur["spec"], **spec_patch}
+        self._check_exclusive(conn, spec, exclusive, task_id)
+        self._check_paths(conn, spec, exclusive_paths, task_id)
+        row = conn.execute(
+            "UPDATE benchbook.tasks SET spec=%s, updated_at=clock_timestamp(),"
+            " lease_expires_at = CASE WHEN %s::int IS NULL THEN lease_expires_at"
+            " ELSE clock_timestamp() + make_interval(secs => %s::int) END WHERE id=%s RETURNING *",
+            (Jsonb(spec), lease_seconds, lease_seconds, task_id)).fetchone()
+        assert row is not None
+        self._event(conn, task_id, "updated", {"spec": spec_patch})
+        return Task(**row)
 
     def _check_exclusive(self, conn: psycopg.Connection[Any], spec: dict[str, Any], exclusive: Sequence[str],
                          own: UUID | None) -> None:
@@ -614,60 +634,65 @@ class Ledger:
         return [Task(**r) for r in rows]
 
     def heartbeat(self, task_id: str | UUID, lease_seconds: int | None = None) -> datetime:
-        """Extend your live lease. LeaseLost once it has run out, even if nobody took the task since: an expired
-        intent's paths may be held by another piece by now, and a renewal would make both live (claim the task
-        again, or start the piece again, which checks for that)."""
+        """Extend your live lease. LeaseLost once it has run out, even if nobody took the task since."""
         tid = self._rid(task_id, "task")
+        assert tid is not None
         if lease_seconds is not None and lease_seconds <= 0:
             raise BenchbookError("lease_seconds must be positive")
-        with self._conn() as conn:
+        with self._intent_transaction() as conn:
             if lease_seconds is None:
                 lease_seconds = self._read_lease_default(conn)
-            # The lock create_intent and update_intent hold while they check for overlapping paths: a renewal
-            # either commits before such a check reads this lease, or reads its expiry after that check committed.
-            # Expiry is read after the lock (clock_timestamp): now() is when this transaction began, which can be
-            # before the lease ran out and before another piece took the paths.
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("intent:" + self.project_id,))
-            r = conn.execute(
+            row = conn.execute(
                 "UPDATE benchbook.tasks SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),"
-                " updated_at=now() WHERE id=%s AND status='claimed' AND lease_owner=%s"
+                " updated_at=clock_timestamp() WHERE project_id=%s AND id=%s AND status='claimed' AND lease_owner=%s"
                 " AND lease_expires_at > clock_timestamp() RETURNING lease_expires_at",
-                (lease_seconds, tid, self.agent),
+                (lease_seconds, self.project_id, tid, self.agent),
             ).fetchone()
-            if r is None:
-                raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
-            self._event(conn, tid, "heartbeat", {})  # type: ignore[arg-type]
-            return r["lease_expires_at"]  # type: ignore[no-any-return]
+            if row is None:
+                raise LeaseLost(short("task", tid))
+            self._event(conn, tid, "heartbeat", {})
+            expires: datetime = row["lease_expires_at"]
+            return expires
 
     def complete_task(self, task_id: str | UUID, status: str = "done", summary: str = "") -> Task:
+        tid = self._rid(task_id, "task")
+        assert tid is not None
+        with self._intent_transaction() as conn:
+            return self._complete_task(conn, tid, status, summary)
+
+    def _complete_task(self, conn: psycopg.Connection[Any], task_id: UUID, status: str, summary: str) -> Task:
         if status not in ("done", "failed"):
             raise BenchbookError("status must be done or failed")
         if len(summary) > 1000:
             raise ValidationFailed(["summary: at most 1000 characters (2-3 sentences); details belong in records"])
-        tid = self._rid(task_id, "task")
-        with self._conn() as conn:
-            r = conn.execute(
-                "UPDATE benchbook.tasks SET status=%s, summary=%s, lease_expires_at=NULL, updated_at=now()"
-                " WHERE id=%s AND status='claimed' AND lease_owner=%s RETURNING *",
-                (status, summary or None, tid, self.agent),
-            ).fetchone()
-            if r is None:
-                raise LeaseLost(short("task", tid))  # type: ignore[arg-type]
-            self._event(conn, tid, status, {"summary": summary})  # type: ignore[arg-type]
-            return Task(**r)
+        row = conn.execute(
+            "UPDATE benchbook.tasks SET status=%s, summary=%s, lease_expires_at=NULL, updated_at=clock_timestamp()"
+            " WHERE project_id=%s AND id=%s AND status='claimed' AND lease_owner=%s RETURNING *",
+            (status, summary or None, self.project_id, task_id, self.agent),
+        ).fetchone()
+        if row is None:
+            raise LeaseLost(short("task", task_id))
+        self._event(conn, task_id, status, {"summary": summary})
+        return Task(**row)
 
     def cancel_task(self, task_id: str | UUID, reason: str) -> Task:
         self._require_decider()
         tid = self._rid(task_id, "task")
-        with self._conn() as conn:
-            r = conn.execute(
-                "UPDATE benchbook.tasks SET status='cancelled', lease_expires_at=NULL, updated_at=now()"
-                " WHERE id=%s AND status IN ('open','claimed') RETURNING *", (tid,),
-            ).fetchone()
-            if r is None:
-                raise BenchbookError(f"{short('task', tid)} is not open or claimed")  # type: ignore[arg-type]
-            self._event(conn, tid, "cancelled", {"reason": reason})  # type: ignore[arg-type]
-            return Task(**r)
+        assert tid is not None
+        with self._intent_transaction() as conn:
+            return self._cancel_task(conn, tid, reason)
+
+    def _cancel_task(self, conn: psycopg.Connection[Any], task_id: UUID, reason: str) -> Task:
+        self._require_decider()
+        row = conn.execute(
+            "UPDATE benchbook.tasks SET status='cancelled', lease_expires_at=NULL, updated_at=clock_timestamp()"
+            " WHERE project_id=%s AND id=%s AND status IN ('open','claimed') RETURNING *",
+            (self.project_id, task_id),
+        ).fetchone()
+        if row is None:
+            raise BenchbookError(f"{short('task', task_id)} is not open or claimed")
+        self._event(conn, task_id, "cancelled", {"reason": reason})
+        return Task(**row)
 
     def get_task(self, task_id: str | UUID) -> Task:
         tid = self._rid(task_id, "task")
@@ -756,10 +781,11 @@ class Ledger:
                           notes: str | None = None, artifacts: list[dict[str, Any]] | None = None,
                           task_id: str | UUID | None = None, trace_ref: dict[str, Any] | None = None,
                           duration_ms: int | None = None, tokens: int | None = None,
-                          cost_usd: float | None = None) -> RecordResult:
+                          cost_usd: float | None = None, *, _receipt_id: UUID | None = None) -> RecordResult:
         """Call right after every evaluation, failures included. The server computes the outcome (§6.3).
         An ok run whose config, code_ref and seed were already recorded is refused (id None) or, when the pack
-        sets dedup_mode = "notify", stored with duplicate_of naming the first such run."""
+        sets dedup_mode = "notify", stored with duplicate_of naming the first such run. The hook spool supplies
+        its receipt as the experiment id, so retries of one delivery return the first write even in notify mode."""
         cfg = self._validate_config(config)
         metrics = dict(metrics or {})
         problems: list[str] = []
@@ -794,6 +820,8 @@ class Ledger:
 
         with self._conn() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (self.project_id,))
+            if _receipt_id is not None and (receipt := self._experiment_receipt(conn, _receipt_id)) is not None:
+                return receipt
             if run_status == "ok":
                 original = self._original(conn, key, seed)
                 if original is not None and not notify:
@@ -819,11 +847,12 @@ class Ledger:
 
             def insert(duplicate_of: UUID | None) -> Any:
                 return conn.execute(
-                    """INSERT INTO benchbook.experiments(project_id,author,task_id,config,code_ref,dedup_key,seed,
+                    """INSERT INTO benchbook.experiments(id,project_id,author,task_id,config,code_ref,dedup_key,seed,
                          run_status,metrics,primary_value,outcome,notes,artifacts,trace_ref,duration_ms,tokens,
-                         cost_usd,duplicate_of) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         cost_usd,duplicate_of) VALUES (COALESCE(%s,gen_random_uuid()),%s,%s,%s,%s,%s,%s,%s,%s,
+                                                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        RETURNING id""",
-                    (self.project_id, self.agent, tid, Jsonb(cfg), code_ref, key, seed, run_status,
+                    (_receipt_id, self.project_id, self.agent, tid, Jsonb(cfg), code_ref, key, seed, run_status,
                      Jsonb(metrics), value, outcome, notes, Jsonb(arts),
                      Jsonb(trace_ref) if trace_ref is not None else None, duration_ms, tokens, cost_usd,
                      duplicate_of),
@@ -832,7 +861,11 @@ class Ledger:
             try:
                 with conn.transaction():
                     r = insert(original)
-            except psycopg.errors.UniqueViolation:
+            except psycopg.errors.UniqueViolation as e:
+                if e.diag.constraint_name == "experiments_pkey" and _receipt_id is not None:
+                    if (receipt := self._experiment_receipt(conn, _receipt_id)) is not None:
+                        return receipt
+                    raise
                 # Only a writer that skipped the advisory lock (a direct INSERT) gets its original in between.
                 original = self._original(conn, key, seed)
                 if original is None or not notify:
@@ -847,6 +880,18 @@ class Ledger:
                       f"(pack {self.pack.name}: dedup_mode notify)")
         return RecordResult(id=r["id"], outcome=outcome, is_new_best=outcome == "improved",
                             duplicate_of=original, dedup_key=key, primary_value=value, notice=notice)
+
+    def _experiment_receipt(self, conn: psycopg.Connection[Any], receipt_id: UUID) -> RecordResult | None:
+        row = conn.execute(
+            "SELECT project_id, author, dedup_key, outcome, duplicate_of, primary_value"
+            " FROM benchbook.experiments WHERE id=%s", (receipt_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["project_id"] != self.project_id or row["author"] != self.agent:
+            raise PermissionDenied("the experiment receipt belongs to another project or agent")
+        return RecordResult(id=receipt_id, outcome=row["outcome"], is_new_best=False, duplicate_of=row["duplicate_of"],
+                            dedup_key=row["dedup_key"], primary_value=row["primary_value"])
 
     def live_leases(self) -> list[Task]:
         """Tasks this agent holds a live lease on, intents excluded."""
@@ -1128,7 +1173,8 @@ class Ledger:
         """A completion is verified by re-runs, not by its implementer's word or its own runs (docs/code.md):
         at least min_runs cited attempts of the piece at the commit, by agents other than the implementer
         (min_authors counts the implementer), that ran every declared check (metrics.checks_declared: a --checks run
-        of some is partial) and passed them all, with guard_touched and checks_changed false.
+        of some is partial) and passed them all, with guard_weakened and checks_changed false (T04: tests only
+        added do not count; an attempt from before guard_weakened is read by guard_touched).
         And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, touched a
         guarded path or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
         that disagree are a person's call."""
@@ -1144,10 +1190,10 @@ class Ledger:
         if not experiment_ids or not experiment_ids <= set(by_id):
             raise InvalidTransition(f"rerun evidence must be valid finished attempts of {at} "
                                     "(config.piece and code_ref of the completion)")
-        if touched := [a for a in attempts if a["guard_touched"] is True or a["checks_changed"] is True]:
-            files = sorted({f for a in touched for f in a["guard_files"]})
-            what = (f"changed guarded files ({', '.join(files[:10])}{' ...' if len(files) > 10 else ''})"
-                    if files else "touched a guarded path")
+        if touched := [a for a in attempts if a["guard_weakened"] is True or a["checks_changed"] is True]:
+            files = sorted({f for a in touched for f in a["weakened_files"]})
+            what = (f"changed guarded files in a way that can weaken them ({', '.join(files[:10])}"
+                    f"{' ...' if len(files) > 10 else ''})" if files else "ran fewer tests or touched a guarded path")
             if any(a["checks_changed"] is True for a in touched):
                 what = (what + " and " if files else "") + "changed [checks]"
             raise InvalidTransition(f"the commit of {at} {what} (attempt "
@@ -1163,13 +1209,13 @@ class Ledger:
         # author alone does not show whose run it was: it never counts as independent (its failure still blocks).
         independent = [by_id[e] for e in experiment_ids
                        if by_id[e]["author"] not in impl and by_id[e]["via"] is None and by_id[e]["complete"]
-                       and by_id[e]["guard_touched"] is False and by_id[e]["checks_changed"] is False]
+                       and by_id[e]["guard_weakened"] is False and by_id[e]["checks_changed"] is False]
         authors = {a["author"] for a in independent}
         if len(independent) < pol.min_runs or len(authors) + 1 < pol.min_authors:
             raise InvalidTransition(
                 f"rule all_pass needs >= {pol.min_runs} passing re-run(s) of every declared check of {at} by "
                 f">= {pol.min_authors - 1} agent(s) other than the implementer ({', '.join(sorted(impl))}), with "
-                f"guard_touched and checks_changed false; the evidence has {len(independent)} by {len(authors)} "
+                f"guard_weakened and checks_changed false; the evidence has {len(independent)} by {len(authors)} "
                 f"({', '.join(sorted(authors)) or 'none'}). The implementer's own runs do not count, nor do runs "
                 f"recorded from its checkout (check run, the Bash hook), nor runs of only some checks (--checks); "
                 f"run benchbook check verify as another agent, or {human}")
@@ -1518,12 +1564,14 @@ class Ledger:
             return psycopg.connect(self.url, row_factory=dict_row, autocommit=False), True
 
     def brief(self, task_id: str | UUID | None = None, budget_tokens: int = 2000,
-              partition: str | None = None, tags: Sequence[str] | None = None) -> str:
-        """tags: only a pack brief that reads them (the code pack's, per module tag such as mod:media)."""
+              partition: str | None = None, tags: Sequence[str] | None = None, repo: Any = None,
+              max_chars: int | None = None) -> str:
+        """tags: only a pack brief that reads them (the code pack's, per module tag such as mod:media). repo and
+        max_chars: the code pack's validity marks against that checkout's HEAD, and a character limit."""
         from .brief import compile_brief
 
         tid = self._rid(task_id, "task")
-        return compile_brief(self, tid, budget_tokens, partition=partition, tags=tags)
+        return compile_brief(self, tid, budget_tokens, partition=partition, tags=tags, repo=repo, max_chars=max_chars)
 
     def export(self) -> Iterator[dict[str, Any]]:
         """The whole project as an append-only event stream, oldest first."""
@@ -1585,14 +1633,25 @@ def attempt_summary(id: UUID, author: str, metrics: dict[str, Any]) -> dict[str,
     ok = (isinstance(total, int) and not isinstance(total, bool) and total > 0 and passed == total
           and isinstance(passed, int) and not isinstance(passed, bool))
     declared, ran = metrics.get("checks_declared"), metrics.get("checks")
+    if isinstance(ran, dict):
+        ok = ok and len(ran) == total and all(status == "ok" for status in ran.values())
     complete = (isinstance(declared, list) and bool(declared) and all(isinstance(n, str) for n in declared)
                 and isinstance(ran, dict) and set(declared) <= set(ran))
     files = metrics.get("guard_files")
+    guard_files = [f for f in files if isinstance(f, str)] if isinstance(files, list) else []
+    # T04: what blocks a re-run is a weakened test, not any change to one. An attempt from before guard_weakened
+    # existed is read as it was: every guarded change counts.
+    weakened = metrics.get("guard_weakened")
+    if isinstance(weakened, bool):
+        wf = metrics.get("guard_weakened_files")
+        weakened_files = [f for f in wf if isinstance(f, str)] if isinstance(wf, list) else []
+    else:
+        weakened, weakened_files = metrics.get("guard_touched"), guard_files
     return {"id": id, "author": author, "passed": ok, "complete": complete,
             # set on a run in the implementer's own checkout (check run, the Bash hook), whoever recorded it
             "via": metrics.get("via"),
             "guard_touched": metrics.get("guard_touched"), "checks_changed": metrics.get("checks_changed"),
-            "guard_files": [f for f in files if isinstance(f, str)] if isinstance(files, list) else []}
+            "guard_files": guard_files, "guard_weakened": weakened, "weakened_files": weakened_files}
 
 
 def partition_text(v: Any) -> str | None:

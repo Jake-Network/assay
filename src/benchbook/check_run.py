@@ -334,7 +334,8 @@ def _receipt(p: Plan, status: str, exit: int | None, duration: int, failed: list
         "duration_ms": duration, "failed_tests": [list(t) for t in failed[:MAX_FAILED_SPOOLED]],
         "last_line_hash": sig.detail if sig else None, "signature": sig.part if sig else None,
         "sha": state.sha, "dirty": state.dirty, "changed": len(state.changed), "repo": str(p.repo),
-        "agent": p.agent, "interrupted": signal.Signals(signum).name if signum else None, "via": VIA}
+        "agent": p.agent, "interrupted": signal.Signals(signum).name if signum else None, "via": VIA,
+        "definition": config.CheckSpec(p.name, p.cmd, p.junit, p.timeout).definition}
     if p.approach:
         data["approach"] = p.approach
     seen = None
@@ -374,4 +375,3 @@ def parse_fast_args(args: list[str]) -> tuple[str, str | None, str | None] | Non
             name = a
         i += 1
     return (name, opts["--piece"], opts["--approach"]) if name else None
-

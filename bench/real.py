@@ -48,7 +48,7 @@ LEAD = {
         "receipt to results/<eval_id>.json right after the evaluation. Read results/ to plan the next round."
     ),
     "C": (
-        "/benchbook:benchbook-lead {task} Run {rounds} rounds with {workers} workers per round and about {evals} "
+        "/benchbook-mcp:benchbook-lead {task} Run {rounds} rounds with {workers} workers per round and about {evals} "
         "evaluations per task. Include the wrapper command and these recording instructions in the task specs. "
         'Workers must pass code_ref both when checking and recording. Copy each receipt ID into trace_ref as '
         '{{"system":"benchbook-bench","trace_id":"<eval_id>"}}. Copy config, seed and run_status verbatim and,'
@@ -152,8 +152,10 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
         env["XDG_STATE_HOME"] = str(out / "state")
         init = ["benchbook", "init", "--project", project_id, "--goal", GOAL, "--metric", "sum_radii",
                 "--direction", "max"]
-        cmd.extend(["--plugin-dir", str(ROOT / "integrations" / "claude-code")])
-        tools += ",mcp__plugin_benchbook_benchbook__*"
+        # 0.2: hooks in one plugin, the MCP server, worker and lead skill in benchbook-mcp
+        cmd.extend(["--plugin-dir", str(ROOT / "integrations" / "claude-code"),
+                    "--plugin-dir", str(ROOT / "integrations" / "claude-code-mcp")])
+        tools += ",mcp__plugin_benchbook-mcp_benchbook__*"
     else:
         cmd.append("--strict-mcp-config")
     if mode == "B":
@@ -214,7 +216,8 @@ def _flush_hooks(prepared: PreparedRun) -> None:
             raise BenchRunError("hook receipts are still queued after replay")
 
 
-PLUGIN_MCP_SERVER = "plugin:benchbook:benchbook"
+PLUGIN_MCP_SERVER = "plugin:benchbook-mcp:benchbook"
+OWN_SERVERS = (PLUGIN_MCP_SERVER, "plugin:benchbook:benchbook")  # the second: runs from before the plugin split
 
 
 def session_mcp_servers(out: Path) -> dict[str, Any]:
@@ -239,7 +242,7 @@ def session_mcp_servers(out: Path) -> dict[str, Any]:
                     break
     except OSError:
         pass
-    return {"servers": names, "foreign": [n for n in names if n != PLUGIN_MCP_SERVER], "tools": tools}
+    return {"servers": names, "foreign": [n for n in names if n not in OWN_SERVERS], "tools": tools}
 
 
 def claude_config_dir(env: Mapping[str, str]) -> Path:
@@ -401,6 +404,33 @@ def stream_messages(events: Iterable[tuple[int, dict[str, Any]]]) -> Iterator[tu
     for _, event in events:
         if event.get("type") == "assistant" and isinstance(event.get("message"), dict):
             yield not event.get("parent_tool_use_id"), event["message"]
+
+
+def worker_reports(events: list[tuple[int, dict[str, Any]]]) -> tuple[int | None, int]:
+    """Estimate the size of actual Agent/Task results shown to the lead, once per tool call."""
+    from benchbook.tokens import estimate_tokens
+
+    agent_calls: set[str] = set()
+    reports: dict[str, int] = {}
+    for _, event in events:
+        if event.get("parent_tool_use_id") or event.get("type") not in {"assistant", "user"}:
+            continue
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if not isinstance(block, dict):
+                continue
+            if (event["type"] == "assistant" and block.get("type") == "tool_use"
+                    and block.get("name") in ("Agent", "Task") and isinstance(block.get("id"), str)):
+                agent_calls.add(block["id"])
+            ref = block.get("tool_use_id")
+            if (event["type"] == "user" and block.get("type") == "tool_result" and isinstance(ref, str)
+                    and ref in agent_calls and block.get("is_error") is not True):
+                payload = block.get("content")
+                if payload:
+                    body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+                    reports[ref] = max(reports.get(ref, 0), estimate_tokens(body))
+    return (sum(reports.values()) if reports else None), len(reports)
 
 
 def transcript_messages(out: Path) -> Iterator[tuple[bool, dict[str, Any]]] | None:
@@ -690,5 +720,7 @@ def parse(mode: str, out: Path, run: int, project_id: str | None, budget_usd: fl
     lost = len(evals) - _retained(evals, claimed)
     final_best = max((e["value"] for e in evals if e["value"] is not None), default=None)
     ctx, curve, curve_source = _observed_curve(events, evals, usage[1], final_best)
+    report_tokens, delivered_reports = worker_reports(events)
     return RunMetrics(mode, run, len(evals), duplicate_ratio(evals), lost, ctx, usage[1], final_best, curve,
-                      cost_usd=cost, curve_source=curve_source, usage_check=usage_check(out, events))
+                      cost_usd=cost, curve_source=curve_source, usage_check=usage_check(out, events),
+                      lead_report_tokens=report_tokens, delivered_worker_reports=delivered_reports)

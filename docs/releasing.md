@@ -16,7 +16,7 @@ other commit builds `0.1.devN+g<commit>`. `benchbook --version` and the first li
 
 These checks run long before a tag:
 
-- `ci.yml` has the same `smoke` job on every push and pull request. It builds the wheel and runs
+- `ci.yml` has the same `smoke` job on every pull request and push to main. It builds the wheel and runs
   `uvx --from dist/*.whl benchbook doctor`, `benchbook init` in an empty directory and `doctor` again, on runners that
   have never had benchbook. This is what shows that the embedded Postgres wheel (`pixeltable-pgserver`) installs on
   both systems.
@@ -134,7 +134,7 @@ The first `doctor` exits 1 on such a machine, by design of `doctor`: the databas
 has no project yet, and it prints the fix (`benchbook migrate`, `benchbook init`) for each. What it already proves
 is that the package installed and that the embedded Postgres started. The second `doctor` is the one that passes.
 
-CI runs these commands from the built wheel on `ubuntu-latest` and `macos-latest` for every push, which covers the
+CI runs these commands from the built wheel on `ubuntu-latest` and `macos-latest` for every pull request and push to main, which covers the
 packaging and the Postgres dependency. It does not cover installing by name from PyPI, an Intel Mac (the `test` job
 runs there, from a checkout and not from the wheel) or a Linux that is not glibc-based. The exit condition is
 checked by hand on real machines after the first upload.

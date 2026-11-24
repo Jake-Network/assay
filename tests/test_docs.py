@@ -63,17 +63,17 @@ def test_benchmark_tables_are_filled_with_a_gate_verdict() -> None:
 def test_worker_instructions_prefer_exp_run_and_keep_the_mcp_pair() -> None:
     """Workers with a shell check, run and record in one command; the MCP tools stay as the fallback."""
     root = Path(__file__).resolve().parent.parent
-    plugin = (root / "integrations/claude-code/agents/benchbook-worker.md").read_text()
+    plugin = (root / "integrations/claude-code-mcp/agents/benchbook-worker.md").read_text()
     manual = (root / "integrations/claude-code/manual/agents/benchbook-worker.md").read_text()
     body = plugin.split("\n---\n", 1)[1]
     assert manual.split("\n---\n", 1)[1] == body  # the two installs differ only in tool names
     assert "benchbook --agent <name> exp run --config '<json>' --seed <n> --code-ref <ref> -- " in body
     assert "benchbook: not run: duplicate of" in body and "benchbook: recorded e:" in body
     assert body.index("exp run") < body.index("Only when you cannot") < body.index("benchbook_check_tried")
-    for prefix, text in (("mcp__plugin_benchbook_benchbook__", plugin), ("mcp__benchbook__", manual)):
+    for prefix, text in (("mcp__plugin_benchbook-mcp_benchbook__", plugin), ("mcp__benchbook__", manual)):
         tools = text.split("\ntools: ", 1)[1].split("\n", 1)[0]
         assert "Bash" in tools and f"{prefix}benchbook_record_experiment" in tools
-    for rel in ("integrations/claude-code/skills/benchbook/SKILL.md", "integrations/agents-md/AGENTS.md",
+    for rel in ("integrations/claude-code-mcp/skills/benchbook/SKILL.md", "integrations/agents-md/AGENTS.md",
                 "docs/claude-code.md"):
         text = (root / rel).read_text()
         assert "exp run --config '<json>' --seed <n>" in text, rel

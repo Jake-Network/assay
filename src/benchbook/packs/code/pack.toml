@@ -37,3 +37,13 @@ discarded = 8
 findings = 8
 occupied = 8
 verified = 8
+
+# What follows "checked:" on a brief line and in benchbook get, per decision oracle (docs/code.md, "The brief").
+[brief.labels]
+rerun = "re-run"
+pytest = "re-run"
+metric = "re-run"
+lean = "kernel"
+human = "person"
+llm_judge = "LLM judgement"
+none = "none"

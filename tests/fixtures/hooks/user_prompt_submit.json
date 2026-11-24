@@ -1,0 +1,9 @@
+{
+  "session_id": "s-user-prompt-submit",
+  "transcript_path": "/home/user/.claude/projects/p/s-user-prompt-submit.jsonl",
+  "cwd": "{CWD}",
+  "prompt_id": "5b9f1586-c452-44f2-97b0-7ebe10b63f7d",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Reply with every string that begins with BB-MARKER- and appears anywhere in your context, one per line, exactly as written. Nothing else."
+}

@@ -47,6 +47,8 @@ class Pack:
     # (metric, direction, settings).
     project_defaults: dict[str, Any] = field(default_factory=dict)
     verify: VerifyPolicy = field(default_factory=VerifyPolicy)
+    # [brief.labels]: how an oracle reads after "checked:" in a brief or a lookup (lookup.LABELS has the defaults)
+    brief_labels: dict[str, str] = field(default_factory=dict)
     validators: dict[str, Draft202012Validator] = field(default_factory=dict)
 
     def validate(self, schema_name: str, value: Any, label: str) -> None:
@@ -85,7 +87,8 @@ def read_pack(name: str, root: Traversable) -> Pack:
         claim_kinds=list(meta["claim_kinds"]),
         dedup_ignore=list(meta.get("dedup_ignore", ["notes", "seed", "run_id", "timestamp"])),
         dedup_mode=dedup_mode,
-        brief_limits=dict(meta.get("brief", {})),
+        brief_limits={k: v for k, v in meta.get("brief", {}).items() if not isinstance(v, dict)},
+        brief_labels={str(k): str(v) for k, v in meta.get("brief", {}).get("labels", {}).items()},
         config_max_depth=int(meta.get("config", {}).get("max_depth", 6)),
         config_max_bytes=int(meta.get("config", {}).get("max_bytes", 65536)),
         ok_metrics_required=list(meta.get("ok_metrics_required", [])),

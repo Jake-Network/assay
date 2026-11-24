@@ -25,18 +25,37 @@ def start(
         "--lease", help="Seconds the paths stay occupied without another start (default 7200)")] = None,
     tags: Annotated[str | None, typer.Option(
         help="Extra tags for the piece, e.g. mod:media (comma separated; fixed at the first start)")] = None,
+    check: Annotated[list[str] | None, typer.Option(
+        "--check", help="NAME=CMD: pin this piece's completion check in the ledger (repeatable; benchbook check "
+                        "pin)")] = None,
 ) -> None:
     """Occupy PATHS for PIECE. Refused (exit 2) when a live piece holds the same piece or paths that overlap; run it
-    again to renew the lease."""
+    again to renew the lease. --check pins the piece's checks before anyone works on it."""
     from .cli import csv, emit, ledger
     from .pieces import start as run_start
 
-    s = run_start(ledger(), piece, paths or [], Path.cwd(), lease_seconds=lease, tags=csv(tags))
+    lg = ledger()
+    specs = None
+    if check:
+        from .checks import parse_check_options
+
+        specs = parse_check_options(check)  # a malformed --check fails before the piece is started
+    s = run_start(lg, piece, paths or [], Path.cwd(), lease_seconds=lease, tags=csv(tags))
     if s.note is not None:
         import sys
 
         print(f"note: {s.note}", file=sys.stderr)
-    emit(summary(s), render(s))
+    out, text = summary(s), render(s)
+    if specs:
+        from .checks import pin_checks
+        from .config import load
+        from .ids import short
+
+        cfg = load()
+        p, new = pin_checks(lg, piece, specs, cfg.guard_paths, cfg.verify.table())
+        out["pin"] = short("claim", p.id)
+        text += f"\n{'pinned' if new else 'already pinned'} checks {', '.join(p.checks)} ({out['pin']})"
+    emit(out, text)
 
 
 @piece_app.command("done")

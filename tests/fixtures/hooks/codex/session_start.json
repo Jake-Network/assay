@@ -1,0 +1,7 @@
+{
+  "cwd": "{CWD}",
+  "session_id": "thr_123",
+  "hook_event_name": "SessionStart",
+  "source": "compact",
+  "transcript_path": "/workspace/.codex/rollout.jsonl"
+}

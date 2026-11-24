@@ -2,8 +2,8 @@
 
 `benchbook hook bash-result` and `benchbook hook subagent-stop` run under Claude Code by default. The manifests in
 integrations/codex/ and integrations/cursor/ add `--harness codex` or `--harness cursor` to the command, and this
-module turns that harness's input into what check_hooks and hooks read: the shell command, where it ran and how it
-ended, or the report text and the agent type. Gemini CLI has a parser and fixtures but no manifest.
+module turns shell results, reports and boundary events into what the hook handlers read. Gemini CLI uses the
+same command-hook interface. OpenCode and Pi use small native extensions to forward their SDK events.
 
 Each reading is quoted from the harness documentation in docs/harnesses.md; a field the documentation does not
 name is not read. When the outcome cannot be known (Codex sends no exit code on most shell paths, a Cursor
@@ -27,7 +27,7 @@ from .check_hooks import Outcome, rough_signature
 from .check_hooks import outcome as claude_code_outcome
 
 CLAUDE_CODE = "claude-code"
-HARNESSES = (CLAUDE_CODE, "codex", "cursor", "gemini")
+HARNESSES = (CLAUDE_CODE, "codex", "cursor", "gemini", "opencode", "pi")
 # The harness version in the stored fixtures, for doctor's message (only Cursor's input carries a version).
 FIXTURE_VERSIONS = {"cursor": "1.7.2"}
 # Harnesses that read the hook's stdout as JSON: an empty answer is "{}". Cursor counts "no output" as a hook failure
@@ -63,6 +63,37 @@ def answer(harness: str) -> str:
     return "{}\n" if harness in JSON_ANSWER else ""
 
 
+# Command-hook output is event-specific. OpenCode and Pi read plain text in our extension and hand it to their SDK.
+CONTEXT_EVENTS = {CLAUDE_CODE: {"session-start": "SessionStart", "notes": "UserPromptSubmit",
+                                "agent-result": "PostToolUse"},
+                  "codex": {"session-start": "SessionStart", "notes": "PostToolUse"},
+                  # Gemini CLI reads only additionalContext; its output types still declare hookEventName
+                  "gemini": {"session-start": "SessionStart", "notes": "AfterTool"}}
+# Claude Code events the notes hook runs on: its answer names the one that ran (hookEventName must match it).
+CLAUDE_CODE_NOTES_EVENTS = frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"})
+PLAIN_EVENTS = {CLAUDE_CODE: frozenset({"pre-compact"}),
+                "opencode": frozenset({"session-start", "notes"}),
+                "pi": frozenset({"session-start", "notes"})}
+
+
+def context_answer(harness: str, event: str, text: str, hook_event: object = None) -> str:
+    """The harness-specific answer for a boundary event. hook_event: the input's hook_event_name, which for Claude
+    Code's notes hook says which of its events ran."""
+    if not text:
+        return answer(harness)
+    if event in PLAIN_EVENTS.get(harness, ()):
+        return text if text.endswith("\n") else text + "\n"
+    if (name := CONTEXT_EVENTS.get(harness, {}).get(event)) is not None:
+        if harness == CLAUDE_CODE and event == "notes" and isinstance(hook_event, str) \
+                and hook_event in CLAUDE_CODE_NOTES_EVENTS:
+            name = hook_event
+        return json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext": text}},
+                          ensure_ascii=False) + "\n"
+    if event in ("session-start", "notes") and harness == "cursor":
+        return json.dumps({"additional_context": text}, ensure_ascii=False) + "\n"
+    return answer(harness)
+
+
 def _str(v: Any) -> str | None:
     return v if isinstance(v, str) and v else None
 
@@ -79,7 +110,23 @@ def _command(data: dict[str, Any], tool: str) -> tuple[str, dict[str, Any]] | No
 
 
 def _session_cwd(data: dict[str, Any]) -> Path:
-    return Path(data.get("cwd") or os.getcwd())
+    return Path(_str(data.get("cwd")) or os.getcwd())
+
+
+def _cursor_root(data: dict[str, Any]) -> str | None:
+    roots = data.get("workspace_roots")
+    return _str(roots[0]) if isinstance(roots, list) and roots else None
+
+
+def boundary_input(harness: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Give boundary hooks the session identifier and checkout in their common form."""
+    check_harness(harness)
+    if harness == "cursor":
+        return {**data, "cwd": _str(data.get("cwd")) or _cursor_root(data),
+                "session_id": _str(data.get("session_id")) or _str(data.get("conversation_id"))}
+    if harness == "opencode":
+        return {**data, "session_id": _str(data.get("sessionID"))}
+    return data
 
 
 # ---------------------------------------------------------------------------------------------- shell calls
@@ -108,9 +155,7 @@ def _cursor_call(data: dict[str, Any]) -> ShellCall | None:
     if (c := _command(data, "Shell")) is None:
         return None
     command, ti = c
-    roots = data.get("workspace_roots")
-    root = roots[0] if isinstance(roots, list) and roots and isinstance(roots[0], str) else None
-    cwd = Path(_str(ti.get("working_directory")) or _str(data.get("cwd")) or root or os.getcwd())
+    cwd = Path(_str(ti.get("working_directory")) or _str(data.get("cwd")) or _cursor_root(data) or os.getcwd())
     return ShellCall("cursor", command, cwd, data, _str(data.get("conversation_id")), _str(data.get("tool_use_id")),
                      duration_ms=_int(data.get("duration")), version=_str(data.get("cursor_version")))
 
@@ -127,8 +172,28 @@ def _gemini_call(data: dict[str, Any]) -> ShellCall | None:
     return ShellCall("gemini", command, cwd, data, _str(data.get("session_id")))
 
 
+def _opencode_call(data: dict[str, Any]) -> ShellCall | None:
+    ti = data.get("input")
+    if data.get("tool") != "shell" or not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
+        return None
+    cwd = _session_cwd(data)
+    if (workdir := _str(ti.get("workdir"))) is not None:
+        cwd = cwd / workdir
+    return ShellCall("opencode", ti["command"], cwd, data, _str(data.get("sessionID")),
+                     _str(data.get("id")), _str(data.get("agent")))
+
+
+def _pi_call(data: dict[str, Any]) -> ShellCall | None:
+    ti = data.get("input")
+    if data.get("toolName") != "bash" or not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
+        return None
+    return ShellCall("pi", ti["command"], _session_cwd(data), data, _str(data.get("session_id")),
+                     _str(data.get("toolCallId")))
+
+
 CALLS: dict[str, Callable[[dict[str, Any]], ShellCall | None]] = {
-    CLAUDE_CODE: _claude_code_call, "codex": _codex_call, "cursor": _cursor_call, "gemini": _gemini_call}
+    CLAUDE_CODE: _claude_code_call, "codex": _codex_call, "cursor": _cursor_call, "gemini": _gemini_call,
+    "opencode": _opencode_call, "pi": _pi_call}
 
 
 def shell_call(harness: str, data: dict[str, Any]) -> ShellCall | None:
@@ -233,8 +298,38 @@ def gemini_outcome(data: dict[str, Any]) -> Outcome:
     return Outcome("ok", 0)
 
 
+def _structured_outcome(result: dict[str, Any], exit_key: str) -> Outcome:
+    code = result.get(exit_key)
+    if not isinstance(code, int) or isinstance(code, bool):
+        return Outcome(None, reason="no integer exit code in the structured shell result", shape_ok=False)
+    return Outcome("ok" if code == 0 else "fail", code,
+                   rough_signature(_str(result.get("output")) or "") if code else None)
+
+
+def opencode_outcome(data: dict[str, Any]) -> Outcome:
+    """OpenCode V2 distinguishes completed tool calls from failures to execute the tool itself."""
+    if data.get("status") == "error":
+        return Outcome(None, reason="OpenCode reports an execution error without an exit code")
+    result = data.get("result")
+    output = result.get("output") if isinstance(result, dict) else None
+    if data.get("status") != "completed" or not isinstance(output, dict):
+        return Outcome(None, reason="no structured result from the OpenCode shell tool", shape_ok=False)
+    if "exitCode" in output and output["exitCode"] is None:
+        return Outcome(None, reason="OpenCode shell has no final exit code (background or signalled)")
+    return _structured_outcome(output, "exitCode")
+
+
+def pi_outcome(data: dict[str, Any]) -> Outcome:
+    """Pi's bash tool reports an actual process exit code in structuredContent on both exit paths."""
+    output = data.get("structuredContent")
+    if not isinstance(output, dict):
+        return Outcome(None, reason="Pi bash has no structured exit code", shape_ok=data.get("isError") is True)
+    return _structured_outcome(output, "exit_code")
+
+
 OUTCOMES: dict[str, Callable[[dict[str, Any]], Outcome]] = {
-    CLAUDE_CODE: claude_code_outcome, "codex": codex_outcome, "cursor": cursor_outcome, "gemini": gemini_outcome}
+    CLAUDE_CODE: claude_code_outcome, "codex": codex_outcome, "cursor": cursor_outcome, "gemini": gemini_outcome,
+    "opencode": opencode_outcome, "pi": pi_outcome}
 
 
 # ---------------------------------------------------------------------------------------------- reports
@@ -251,11 +346,10 @@ def report_input(harness: str, data: dict[str, Any]) -> dict[str, Any]:
     out["harness"] = harness
     if harness == "cursor":
         # subagentStop: subagent_type, status, summary; no cwd (workspace_roots is common to every hook)
-        roots = data.get("workspace_roots")
         out.update({"hook_event_name": "SubagentStop", "agent_type": data.get("subagent_type"),
                     "last_assistant_message": data.get("summary"), "session_id": data.get("conversation_id")})
-        if not data.get("cwd") and isinstance(roots, list) and roots and isinstance(roots[0], str):
-            out["cwd"] = roots[0]
+        if not data.get("cwd") and (root := _cursor_root(data)):
+            out["cwd"] = root
         if data.get("cursor_version"):
             out["harness_version"] = data["cursor_version"]
     return out

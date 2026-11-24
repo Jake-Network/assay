@@ -10,6 +10,9 @@ Section: a markdown heading of any level, or a line that is bold as a whole, who
 next heading of the same or a higher level; a bold-line section at the next heading of any level or the next bold
 line. A thematic break (---) ends both. Every matching section in the report is read.
 
+One line: outside a section, a line "<heading>: <text>" (optionally a list item, optionally bold) is one finding
+whose text is what follows the colon (T05: the report formats seen in the field).
+
 Items: each top-level list item (-, *, + or 1. / 1)) is one finding: its first paragraph is the finding's text;
 nested items and indented paragraphs under it are its details. Lines inside fenced code blocks never start or end
 anything. Empty items and items that only say there is nothing ("none", "없음", ...) are not findings.
@@ -63,6 +66,7 @@ _BARE = re.compile(r"(?<![A-Za-z0-9_./:@~-])(?:/|\.{1,2}/)?\.?[A-Za-z0-9_][A-Za-
 _PATH = re.compile(r"(?:/|\.{1,2}/)?\.?[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]*)*")
 _LINE_SUFFIX = re.compile(r"(?::\d+(?:[:-]\d+)?|#L\d+(?:-L?\d+)?)$")
 _EXT = re.compile(r"\.([A-Za-z][A-Za-z0-9]{0,7})$")
+_ONE_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(.+?)[:：][ \t]*(.*)$")
 _MOD = re.compile(r"(?<![A-Za-z0-9_:/-])mod:([A-Za-z0-9](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_])?)")
 
 
@@ -180,6 +184,9 @@ def _items(lines: list[str], want: str) -> list[tuple[str, list[str]]]:
                 section = ("atx", len(atx.group(1)))
             elif bold is not None and _label(bold.group(2)) == want:
                 section = ("bold", 0)
+            elif atx is None and (one := _ONE_LINE.match(line.replace("**", "").replace("__", ""))) \
+                    and _label(one.group(1)) == want and one.group(2).strip():
+                out.append((one.group(2).strip(), []))
             continue
         if atx is not None or bold is not None:  # a sub-heading or a bold group label inside the section
             close()

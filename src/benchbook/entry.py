@@ -12,7 +12,9 @@ import sys
 # through the CLI
 # check_hooks.py: their exit code is the hook's answer
 CHECK_HOOK_EVENTS = ("bash-start", "bash-result", "task-completed")
-HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS)
+# boundary_hooks.py: they print context for the model (session start, compaction, notes at a prompt)
+BOUNDARY_HOOK_EVENTS = ("session-start", "pre-compact", "notes", "agent-result")
+HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS, *BOUNDARY_HOOK_EVENTS)
 LEGACY_NOTICE = ("the `assay` command is now `benchbook` (same arguments); `assay` keeps working during 0.1.x. "
                  "Update the scripts, hooks and plugin that still call it: `benchbook doctor` lists what it finds")
 
@@ -50,6 +52,15 @@ def main(legacy: bool = False) -> None:
             from .check_hooks import main as check_hook_main
 
             sys.exit(check_hook_main(event, harness))
+        if event in BOUNDARY_HOOK_EVENTS:
+            from . import boundary_hooks
+
+            boundary_hooks.main(event, harness)
+            if boundary_hooks.abandoned:  # a ledger call still running past its limit: do not wait for it
+                import os
+
+                os._exit(0)
+            sys.exit(0)
         from .hooks import main as hook_main
 
         hook_main(event, harness)
@@ -67,6 +78,12 @@ def main(legacy: bool = False) -> None:
         from . import __version__
 
         print(f"benchbook {__version__}")
+        sys.exit(0)
+    if argv == ["statusline"]:
+        from .code_status import read_cache
+
+        if line := read_cache():
+            print(line)
         sys.exit(0)
     from .cli import main as cli_main
 

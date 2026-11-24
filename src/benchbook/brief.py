@@ -108,7 +108,7 @@ def _fit_header(lines: list[tuple[str, str, str]], limit: int, best_line: str) -
 
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *,
                   now: datetime | None = None, log: bool = True, partition: str | None = None,
-                  tags: Sequence[str] | None = None) -> str:
+                  tags: Sequence[str] | None = None, repo: Any = None, max_chars: int | None = None) -> str:
     """tags narrow a pack brief that reads them (the code pack's: per module tag); a brief that does not read them
     refuses them rather than ignore them."""
     if lg.pack.brief_compiler:
@@ -122,6 +122,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
             if "tags" not in inspect.signature(compiler).parameters:
                 raise ValidationFailed([f"tags: the {lg.pack.name} pack's brief does not read tags"])
             extra["tags"] = list(tags)
+        params = inspect.signature(compiler).parameters
+        if repo is not None and "repo" in params:  # the code pack's validity marks (T10)
+            extra["repo"] = repo
+        if max_chars is not None and "max_chars" in params:
+            extra["max_chars"] = max_chars
         return compiler(lg, task_id, budget_tokens, now=now, log=log, partition=partition,  # type: ignore[no-any-return]
                         **extra)
     if tags:

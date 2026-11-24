@@ -258,6 +258,44 @@ def test_piece_comes_from_the_runs_own_attempts(ko_repo: Path, lead: Ledger, cod
                for r in found)
 
 
+def test_piece_comes_from_the_reports_commit(tmp_path: Path, lead: Ledger, code_project: str) -> None:
+    """PR #4 issue 3: an implementer that records no attempt and reports `커밋: <sha>` gets its findings tagged with
+    the piece the automatic re-run takes from that commit (verify_requests.reported_target), so the piece's
+    `--here` brief shows them."""
+    from benchbook.brief import compile_brief
+    from benchbook.packs.code.brief import changed_scope
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git("init", "-q", "-b", "main")
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        git("config", k, v)
+    _repo(repo, code_project, "범위 밖")
+    with (repo / ".benchbook" / "config.toml").open("a", encoding="utf-8") as f:
+        f.write('\n[guard]\nbase = "main"\n')
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "hook-piece")
+    (repo / "src" / "app" / "utils").mkdir(parents=True)
+    (repo / "src" / "app" / "utils" / "sku.py").write_text("def split(s):\n    return s.split('-')\n")
+    git("add", "-A")
+    git("commit", "-qm", "sku")
+    sha = git("rev-parse", "HEAD")
+    data = _event("subagent_stop_one_line.json", repo)
+    data["last_assistant_message"] = data["last_assistant_message"] + f"커밋: {sha}\n"
+    assert process("subagent-stop", data, accepted=True, findings_only=True) == "findings-only"
+    [row] = _findings(lead)
+    assert "piece:hook-piece" in row["tags"] and row["payload"]["piece"] == "hook-piece"
+    brief = compile_brief(lead, None, 2000, log=False, tags=changed_scope(repo), repo=repo)
+    assert "Scope: piece:hook-piece" in brief
+    findings = brief.split("## Open out-of-scope findings", 1)[1].split("\n## ", 1)[0]
+    assert findings.startswith(" (1 of 1)") and "publish/client.py" in findings
+
+
 def test_the_handback_carries_the_findings_once(tmp_path: Path, code_project: str, lead: Ledger,
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, code_project, "Out of scope")
@@ -391,3 +429,58 @@ def test_accept_refuses_before_writing(ko_repo: Path, lead: Ledger, db_url: str)
     r = accept(finding, "--issue", url, "--oracle", "human", "--as", "human")
     assert r.returncode == 1 and "already decided (refuted)" in r.stderr
     assert lead.sql_internal(sources, (lead.project_id,)) == before
+
+
+# ---------------------------------------------------------------------- one-line reports and [report] agents (T05)
+
+@pytest.mark.parametrize("line", [
+    "범위 밖: `src/a.py`의 timeout 무시",
+    "- 범위 밖: `src/a.py`의 timeout 무시",
+    "**범위 밖:** `src/a.py`의 timeout 무시",
+    "**범위 밖**: `src/a.py`의 timeout 무시",
+    "범위 밖：`src/a.py`의 timeout 무시",
+])
+def test_a_one_line_finding(line: str) -> None:
+    [f] = parse(f"done at a1b2c3d.\n{line}\n", "범위 밖")
+    assert f.text == "`src/a.py`의 timeout 무시" and f.file == "src/a.py"
+
+
+@pytest.mark.parametrize("line", ["범위 밖: 없음", "범위 밖:", "## 범위 밖: x", "범위: x"])
+def test_one_line_forms_that_are_not_findings(line: str) -> None:
+    assert parse(f"{line}\n", "범위 밖") == []
+
+
+def test_report_agents_config(tmp_path: Path) -> None:
+    assert config.parse_report_agents({"agents": ["*"]}) == ["*"]
+    assert config.parse_report_agents({"out_of_scope_heading": "x"}) == [] == config.parse_report_agents(None)
+    for bad in ("*", [""], [1]):
+        with pytest.raises(BenchbookError, match="agents must be a list"):
+            config.parse_report_agents({"agents": bad})
+    assert config.parse_report({"out_of_scope_heading": "x", "agents": ["*"]}) == "x"
+
+
+def test_report_agents_take_findings_without_a_note(ko_repo: Path, lead: Ledger) -> None:
+    data = _event("subagent_stop_one_line.json", ko_repo)
+    assert process("subagent-stop", data, accepted=True, findings_only=True) == "findings-only"
+    [row] = _findings(lead)
+    assert row["payload"]["file"] == "src/app/modules/publish/client.py" and _notes(lead) == []
+
+
+def test_the_hook_spools_a_listed_agents_report_as_findings_only(ko_repo: Path, tmp_path: Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    with (ko_repo / ".benchbook" / "config.toml").open("a", encoding="utf-8") as f:
+        f.write('agents = ["*"]\n')
+    monkeypatch.delenv("BENCHBOOK_HOOK_AGENTS", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
+    data = _event("subagent_stop_one_line.json", ko_repo)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    hooks._main("subagent-stop", None)
+    [entry] = [json.loads(p.read_text()) for p in (tmp_path / "state").rglob("*.json")
+               if "findings_only" in p.read_text()]
+    assert entry["findings_only"] is True and entry["out_of_scope_heading"] == "범위 밖"
+    # set explicitly, BENCHBOOK_HOOK_AGENTS still decides alone
+    monkeypatch.setenv("BENCHBOOK_HOOK_AGENTS", "benchbook-worker")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({**data, "agent_id": "other"})))
+    hooks._main("subagent-stop", None)
+    assert not [p for p in (tmp_path / "state").rglob("*.json") if "other" in p.read_text()]

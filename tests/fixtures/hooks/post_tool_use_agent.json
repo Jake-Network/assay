@@ -1,0 +1,35 @@
+{
+  "session_id": "s-post-tool-use-agent",
+  "transcript_path": "/home/user/.claude/projects/p/s-post-tool-use-agent.jsonl",
+  "cwd": "{CWD}",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "prompt": "Implement piece media-upload. Report DONE <sha> when the tests pass.",
+    "description": "Implement media-upload",
+    "subagent_type": "general-purpose",
+    "model": "sonnet"
+  },
+  "tool_response": {
+    "status": "completed",
+    "agentId": "a1b2c3d4e5f60718",
+    "content": [
+      {
+        "type": "text",
+        "text": "{REPORT}"
+      }
+    ],
+    "resolvedModel": "claude-sonnet-5-5",
+    "totalTokens": 48211,
+    "totalDurationMs": 95000,
+    "totalToolUseCount": 23,
+    "usage": {
+      "input_tokens": 12,
+      "cache_creation_input_tokens": 4000,
+      "cache_read_input_tokens": 43399,
+      "output_tokens": 800
+    }
+  },
+  "tool_use_id": "toolu_01AGENT"
+}

@@ -10,7 +10,7 @@ Setup for all scenarios:
 uv tool install --from . benchbook        # or: pipx install .   (puts `benchbook` on PATH for the MCP server and hook)
 cd /path/to/a/scratch/repo && git init
 claude plugin marketplace add /path/to/benchbook
-claude plugin install benchbook@benchbook
+claude plugin install benchbook@benchbook benchbook-mcp@benchbook   # hooks; MCP server, worker and lead skill
 ```
 
 ## Scenario 2: `/benchbook-lead` runs circle packing for two rounds
@@ -18,7 +18,7 @@ claude plugin install benchbook@benchbook
 1. Copy `examples/circle-packing/{evaluator.py,packing.py,seed_program.py}` into the scratch repo.
 2. `benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles in the unit square." --metric sum_radii --direction max`
 3. In another terminal: `benchbook serve`, open http://127.0.0.1:7466.
-4. In Claude Code: `/benchbook:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
+4. In Claude Code: `/benchbook-mcp:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
 
 Expected: tasks appear on the Tasks page and get claimed by `worker-1..4`; experiments and the best-so-far curve
 update live; each worker's final message is <= 3 sentences plus ids; after round 1 the lead reads
@@ -33,6 +33,32 @@ experiment count, duplicates blocked and the viewer URL.
    author `hook`; `benchbook get c:...` shows the full text in `payload.text` and the session id in `payload.source`.
 3. `~/.local/state/benchbook/hook.log` has a `captured:c:...` line. A worker who cites an ID from a successful write
    in its own transcript produces `cited`.
+
+## Scenario 5: what Claude Code does at the boundaries (T08)
+
+The boundary hooks (session start, compaction, the Agent tool's result) rely on Claude Code behaviour that its hook
+documentation states only in part. Check it on the installed version:
+
+```bash
+scripts/qa_boundary_hooks.sh --keep                 # haiku by default; --model sonnet to match a real lead
+# scenario 6 (2026-11-24): a subagent's hook input carries the lead's session_id and an agent_id; the notes matcher
+# ^(?!(Bash|Agent|Task)$) fires on a lead Read and its additionalContext reaches the model
+scripts/qa_boundary_hooks.sh --save-fixtures        # also replace tests/fixtures/hooks/{session_start_*,pre_compact,
+                                                    #   post_tool_use_agent*,user_prompt_submit}.json with what it saw
+```
+
+It makes a throwaway repository, installs recorder hooks through `--settings` (nothing in your own settings changes),
+saves every hook input and runs five short `claude -p` sessions: a startup, `/compact` on that session and a resumed
+turn after it, a foreground and a background subagent, a Bash call, and one session started with both plugin
+directories. It prints a table (also `report.md` in the kept directory).
+
+Expected, from the hook documentation (2026-11-22): SessionStart sources include `startup` and `compact`, and the
+markers it injects are visible, after compaction too; PreCompact's input has `trigger` and `custom_instructions`, and
+its stdout reaches the compaction summary; PostToolUse fires with `tool_name` `Agent`, status `completed` for the
+foreground subagent and `async_launched` for the background one; the Bash marker is visible. Not documented, and the
+reason to run it: both plugins load from repeated `--plugin-dir` (bench/real.py relies on it), and the MCP tools of
+`benchbook-mcp` are named `mcp__plugin_benchbook-mcp_benchbook__*` (the worker's tool list relies on it). Copy the
+table, with the Claude Code version, into docs/claude-code.md "Boundary hooks: what Claude Code does".
 
 ## Benchmark (real)
 

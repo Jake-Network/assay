@@ -1,0 +1,11 @@
+{
+  "session_id": "5e5e-sess",
+  "transcript_path": "/home/dev/.claude/projects/-repo/5e5e-sess.jsonl",
+  "cwd": "{CWD}",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "5e5e5e",
+  "agent_type": "implementer",
+  "last_assistant_message": "media 조각 완료, 커밋 a1b2c3d.\n테스트: tests/media 통과.\n범위 밖: `src/app/modules/publish/client.py`의 timeout 설정이 무시됩니다.\n"
+}

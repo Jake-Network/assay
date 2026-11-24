@@ -21,66 +21,11 @@ import pytest
 from benchbook import Ledger, checks, config
 from benchbook.errors import BenchbookError
 from benchbook.packs import load_pack
-from tests.conftest import make_project
+from tests.conftest import CONFIG, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
 
-PY = shlex.quote(sys.executable)
-CONFIG = f"""project = "ignored"
-
-[checks.unit]
-cmd = "{PY} -m pytest -q -p no:cacheprovider tests --junitxml={{junit}}"
-junit = true
-timeout = 120
-
-[checks.value]
-cmd = "grep -qx ok value.txt"
-
-[guard]
-paths = ["tests/**", "**/conftest.py", ".benchbook/config.toml"]
-base = "main"
-"""
-TEST_IMPL = """def test_fixed():
-    print("OUTPUT-MARKER-7f3a")
-    assert open("impl.txt").read().strip() == "fixed"
-"""
-TEST_EXTRA = "def test_extra():\n    assert True\n"
 METRIC_KEYS = {"checks_passed", "checks_total", "checks", "checks_declared", "failure_signature", "guard_touched",
-               "guard_files", "checks_changed"}
+               "guard_files", "checks_changed", "guard_weakened"}
 DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
-
-
-def make_repo(root: Path, cfg: str = CONFIG) -> Path:
-    root.mkdir(parents=True)
-    git(root, "init", "-q", "-b", "main")
-    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
-        git(root, "config", k, v)
-    files = {".benchbook/config.toml": cfg, "tests/test_impl.py": TEST_IMPL, "tests/test_extra.py": TEST_EXTRA,
-             "impl.txt": "todo\n", "value.txt": "ok\n"}
-    for path, text in files.items():
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text(text)
-    git(root, "add", "-A")
-    git(root, "commit", "-q", "-m", "base")
-    return root
-
-
-def piece(repo: Path, branch: str, files: dict[str, str | None]) -> str:
-    """A commit on a new branch from main (None deletes the file); main stays checked out."""
-    git(repo, "checkout", "-q", "-b", branch, "main")
-    for path, text in files.items():
-        if text is None:
-            git(repo, "rm", "-q", path)
-        else:
-            (repo / path).parent.mkdir(parents=True, exist_ok=True)
-            (repo / path).write_text(text)
-    git(repo, "add", "-A")
-    git(repo, "commit", "-q", "-m", branch)
-    sha = git(repo, "rev-parse", "HEAD")
-    git(repo, "checkout", "-q", "main")
-    return sha
 
 
 def assert_clean(repo: Path, vtmp: Path) -> None:
@@ -139,11 +84,11 @@ def test_passing_commit_supports_the_completion(repo: Path, vtmp: Path, verifier
     assert exp["metrics"] == {
         "checks_passed": 2, "checks_total": 2, "checks": {"unit": "ok", "value": "ok"},
         "checks_declared": ["unit", "value"], "failure_signature": None,
-        "guard_touched": False, "guard_files": [], "checks_changed": False}
+        "guard_touched": False, "guard_files": [], "checks_changed": False, "guard_weakened": False}
     claim = row(verifier, "claims", rec.claim_id)
     assert claim["author"] == "impl" and claim["kind"] == "completion"  # two different agents in the ledger
-    assert claim["payload"] == {"piece": "media", "commit": sha, "reported_checks": []}
-    assert set(claim["tags"]) == {"piece:media", f"commit:{sha}"}
+    assert claim["payload"] == {"piece": "media", "commit": sha, "reported_checks": [], "paths": ["impl.txt"]}
+    assert set(claim["tags"]) == {"piece:media", f"commit:{sha}", "file:impl.txt"}
     [link] = links_to(verifier, rec.claim_id)
     assert (link["src_id"], link["relation"], link["author"]) == (rec.experiment_id, "supports", "verifier@test")
     assert verifier.claim_status(rec.claim_id) == "proposed"  # no decision in this step
@@ -201,7 +146,7 @@ def test_report_file_keeps_a_hash_and_the_check_names_it_mentions(repo: Path, tm
     report.write_text("Done. I ran unit and it passed; units are fine.\nAPI_TOKEN=sk-very-secret\nDONE " + sha)
     _, rec = checks.verify(verifier, "media", sha, repo=repo, reported_by="impl", report_file=report)
     payload = row(verifier, "claims", rec.claim_id)["payload"]
-    assert payload == {"piece": "media", "commit": sha, "reported_checks": ["unit"],
+    assert payload == {"piece": "media", "commit": sha, "reported_checks": ["unit"], "paths": ["impl.txt"],
                        "report": {"sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
                                   "bytes": len(report.read_bytes())}}
     with pytest.raises(BenchbookError, match="report-file"):
@@ -507,7 +452,7 @@ def test_verify_names_an_earlier_attempt_that_failed_the_same_way(repo: Path, vt
     assert r2.discarded_id == r1.discarded_id and not r2.discarded_new
     [c] = verifier.sql_internal("SELECT c.tags, c.payload, s.n_support FROM benchbook.claims c JOIN"
                                 " benchbook.v_claim_status s ON s.id = c.id WHERE c.id = %s", (r1.discarded_id,))
-    assert c["tags"] == ["discarded", "piece:media"] and c["n_support"] == 2
+    assert c["tags"] == ["discarded", "piece:media", "file:impl.txt"] and c["n_support"] == 2
     assert c["payload"]["signature"] == "unit:tests.test_impl::test_fixed:AssertionError"
     # another piece failing the same test was not seen before on this one
     v3, r3 = checks.verify(verifier, "upload", b, repo=repo)
@@ -516,3 +461,399 @@ def test_verify_names_an_earlier_attempt_that_failed_the_same_way(repo: Path, vt
     good = piece(repo, "good", {"impl.txt": "fixed\n"})
     v4, r4 = checks.verify(verifier, "media", good, repo=repo, reported_by="impl")
     assert v4.all_passed and r4.seen_before == [] and r4.discarded_id is None
+
+
+# ------------------------------------------------------------------------------------ checks pinned in the ledger
+
+def make_pinned_repo(root: Path, cfg: str = CONFIG) -> Path:
+    """make_repo without the config committed: .benchbook/ is local and in .git/info/exclude (T01)."""
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        git(root, "config", k, v)
+    for path, text in {"tests/test_impl.py": TEST_IMPL, "tests/test_extra.py": TEST_EXTRA, "impl.txt": "todo\n",
+                       "value.txt": "ok\n"}.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    (root / ".benchbook").mkdir()
+    (root / ".benchbook" / "config.toml").write_text(cfg)
+    assert config.exclude_local_dir(root)
+    return root
+
+
+@pytest.fixture
+def lead_lg(db_url: str, code_project: str) -> Ledger:
+    return Ledger.open(project=code_project, agent="lead", role="orchestrator", database_url=db_url)
+
+
+def pin_from_config(lg: Ledger, repo: Path, piece_name: str | None = None) -> checks.Pin:
+    cfg = config.load(repo)
+    return checks.pin_checks(lg, piece_name, cfg.checks, cfg.guard_paths, None, source="config")[0]
+
+
+def test_pinned_checks_verify_without_a_committed_config(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    p = pin_from_config(lead_lg, repo)
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    assert git(repo, "show", "--name-only", "--format=", sha) == "impl.txt"  # nothing of .benchbook/ committed
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.base.source == "pin" and v.base.pin_id == p.id
+    m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
+    assert m["checks_source"] == "pin" and m["checks_sha256"] == p.sha256 and m["checks_changed"] is False
+    assert rec.outcome is not None and rec.outcome.decision == "verified"
+    # pinning the same declarations again records nothing
+    assert checks.pin_checks(lead_lg, None, p.checks, p.guard_paths, None, source="config") == (p, False)
+
+
+def test_a_pin_changed_under_the_work_goes_to_a_person(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    pin_from_config(lead_lg, repo)
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    cfg = repo / ".benchbook" / "config.toml"
+    cfg.write_text(cfg.read_text().replace("grep -qx ok value.txt", "true"))  # the working tree's [checks] moved
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.integrity.checks_changed
+    assert rec.outcome is not None and rec.outcome.decision is None and rec.outcome.person
+
+
+def test_a_new_pin_after_the_first_attempt_goes_to_a_person(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    pin_from_config(lead_lg, repo, "media")
+    bad = piece(repo, "bad", {"impl.txt": "no\n"})
+    checks.verify(lead_lg, "media", bad, repo=repo, reported_by="impl")  # the first attempt, under the first pin
+    checks.pin_checks(lead_lg, "media", checks.parse_check_options(["value=grep -qx ok value.txt"]), [])
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", good, repo=repo, reported_by="impl")
+    assert v.all_passed and v.integrity.checks_changed and [r.name for r in v.results] == ["value"]
+    assert rec.outcome is not None and rec.outcome.person
+
+
+def test_a_pin_by_the_implementer_is_ignored(tmp_path: Path, vtmp: Path, db_url: str, code_project: str,
+                                             lead_lg: Ledger) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    impl = Ledger.open(project=code_project, agent="impl", database_url=db_url)
+    pin_from_config(impl, repo, "media")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    with pytest.raises(BenchbookError, match="no checks pinned"):
+        checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    lead_pin = pin_from_config(lead_lg, repo)  # the project's pin, by the lead, is used
+    v, _ = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.base.pin_id == lead_pin.id
+
+
+def test_a_committed_config_wins_over_a_pin(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    checks.pin_checks(lead_lg, None, checks.parse_check_options(["broken=false"]), [])
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.base.source == "merge-base" and [r.name for r in v.results] == ["unit", "value"]
+    assert set(row(lead_lg, "experiments", rec.experiment_id)["metrics"]) == METRIC_KEYS
+
+
+@pytest.mark.parametrize(("items", "message"), [(["unit"], "expected NAME=CMD"), (["a=x", "a=y"], "given twice"),
+                                                (["bad name=x"], "a check name is")])
+def test_bad_check_options(items: list[str], message: str) -> None:
+    with pytest.raises(BenchbookError, match=message):
+        checks.parse_check_options(items)
+
+
+def test_cli_init_pins_and_verify_needs_no_commit(tmp_path: Path, vtmp: Path, cli_env: dict[str, str]) -> None:
+    repo = make_pinned_repo(tmp_path / "repo")
+    (repo / ".git" / "info" / "exclude").write_text("")  # init adds it back
+    pid = f"t-{uuid.uuid4().hex[:10]}"
+    r = run_cli(repo, cli_env, "--json", "init", "--project", pid, "--pack", "code")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["excluded"] is True and out["pin"].startswith("c:")
+    assert "/.benchbook/" in (repo / ".git" / "info" / "exclude").read_text()
+    assert "[checks.unit]" in (repo / ".benchbook" / "config.toml").read_text()  # init kept the declarations
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    assert git(repo, "log", "--format=%H", "-1", "main") != sha and git(repo, "status", "--porcelain") == ""
+    r = run_cli(repo, cli_env, "--agent", "lead", "--json", "check", "verify", "media", sha, "--reported-by", "impl")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["decision"] == "verified"
+    r = run_cli(repo, cli_env, "--agent", "lead", "--json", "piece", "start", "other", "--paths", "value.txt",
+                "--check", "value=grep -qx ok value.txt")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["pin"].startswith("c:")
+
+
+# ------------------------------------------------------------------------------------------- verify worktree (T02)
+
+ENV_CONFIG = """project = "ignored"
+
+[checks.secret]
+cmd = "grep -qx s3cret .env"
+
+[guard]
+base = "main"
+"""
+
+
+def make_env_repo(root: Path, verify: str) -> Path:
+    r = make_repo(root, ENV_CONFIG + verify)
+    (r / ".gitignore").write_text(".env\nprepared.txt\n")
+    git(r, "add", ".gitignore")
+    git(r, "commit", "-q", "-m", "ignore .env")
+    (r / ".env").write_text("s3cret\n")
+    return r
+
+
+def test_verify_copies_declared_files_into_the_worktree(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_env_repo(tmp_path / "repo", '\n[verify]\ncopy = [".env"]\nprepare = "touch prepared.txt"\n')
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.all_passed and v.run_status == "ok"
+    m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
+    assert m["prepared"] == {"copied": [".env"], "prepare": True} and "environment" not in m
+    assert "s3cret" not in json.dumps(row(lead_lg, "experiments", rec.experiment_id), default=str)
+    assert_clean(repo, vtmp)
+
+
+def test_without_copy_the_check_fails(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, _ = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert [r.status for r in v.results] == ["fail"]
+
+
+@pytest.mark.parametrize(("verify", "error"), [
+    ('copy = ["missing.env"]', "missing.env is not a regular file"),
+    ('copy = ["impl.txt"]', "impl.txt is tracked"),
+    ('prepare = "exit 3"', "exit 3"),
+])
+def test_a_failed_preparation_is_an_environment_failure(tmp_path: Path, vtmp: Path, lead_lg: Ledger, verify: str,
+                                                        error: str) -> None:
+    repo = make_env_repo(tmp_path / "repo", f"\n[verify]\n{verify}\n")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is not None and error in v.environment
+    assert v.run_status == "error" and [r.status for r in v.results] == ["not_run"]
+    assert rec.relation is None and rec.discarded_id is None and not links_to(lead_lg, rec.claim_id)
+    assert row(lead_lg, "experiments", rec.experiment_id)["metrics"]["environment"] is True
+    assert_clean(repo, vtmp)
+
+
+@pytest.mark.parametrize(("table", "message"), [
+    ({"copy": ["/etc/passwd"]}, "inside the repository"),
+    ({"copy": ["../x"]}, "inside the repository"),
+    ({"copy": ".env"}, "list of paths"),
+    ({"prepare": ""}, "non-empty"),
+    ({"prepare_timeout": 0}, "prepare_timeout"),
+    ({"cpy": [".env"]}, "unknown key cpy"),
+])
+def test_bad_verify_tables(table: dict[str, Any], message: str) -> None:
+    with pytest.raises(BenchbookError, match=message):
+        config.parse_verify(table)
+
+
+# ------------------------------------------------------------------------------------------- environment failures (T03)
+
+def implementer_passed(lg: Ledger, piece_name: str, sha: str, names: list[str], repo: Path, *, agent: str = "impl",
+                       run_by: str | None = None, definitions: dict[str, str] | None = None) -> None:
+    """The implementer's own clean run of the commit passed these checks (check run in its checkout), under the
+    definitions the checkout declares unless given."""
+    defs = definitions if definitions is not None else {
+        n: s.definition for n, s in config.load(repo).checks.items() if n in names}
+    lg.as_agent(agent).record_experiment(
+        {"piece": piece_name, "checks": names},
+        {"checks_passed": len(names), "checks_total": len(names), "checks": dict.fromkeys(names, "ok"),
+         "checks_declared": names, "failure_signature": None, "via": "check-run", "worktree_dirty": False,
+         "check_definitions": defs, **({"run_by": run_by} if run_by else {})},
+        code_ref=sha)
+
+
+def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_path: Path, vtmp: Path,
+                                                                           lead_lg: Ledger) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")  # no copy: the clean worktree has no .env, at the base either
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    implementer_passed(lead_lg, "media", sha, ["secret"], repo)  # its checkout has the .env
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is not None and "secret fails the same way at the merge-base" in v.environment
+    assert v.run_status == "error" and v.results[0].environment
+    assert rec.relation is None and rec.discarded_id is None and not links_to(lead_lg, rec.claim_id)
+    m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
+    assert m["environment"] is True and m["baseline_signature"] == m["failure_signature"]
+    from benchbook.check_cli import render
+    assert "environment: secret fails the same way at the merge-base" in render(v, rec)
+
+
+def test_failing_at_the_merge_base_without_a_pass_elsewhere_still_refutes(tmp_path: Path, vtmp: Path,
+                                                                         lead_lg: Ledger) -> None:
+    """The piece's goal fails at the base by design: a commit that leaves it failing is a false completion, unless
+    the implementer's own run of the commit passed it (which points at the clean worktree's environment)."""
+    repo = make_env_repo(tmp_path / "repo", "")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is None and rec.relation == "refutes" and rec.discarded_id is not None
+
+
+def test_a_check_that_passes_at_the_merge_base_still_refutes(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    sha = piece(repo, "bad", {"value.txt": "no\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is None and rec.relation == "refutes" and rec.discarded_id is not None
+
+
+def test_a_test_left_failing_while_others_pass_is_the_pieces(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
+    """The base's test_fixed fails before the fix as well; test_extra passes, so the suite runs: a refutation."""
+    sha = piece(repo, "bad", {"impl.txt": "no\n"})
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert v.environment is None and not v.results[0].environment and rec.relation == "refutes"
+
+
+def test_the_merge_base_runs_fresh_for_each_environment_failure(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    calls: list[str] = []
+    real = checks.run_checks
+
+    def counting(repo: Path, commit: str, *a: Any, **kw: Any) -> Any:
+        calls.append(commit)
+        return real(repo, commit, *a, **kw)
+
+    monkeypatch.setattr(checks, "run_checks", counting)
+    one = piece(repo, "one", {"impl.txt": "fixed\n"})
+    two = piece(repo, "two", {"impl.txt": "fixed too\n"})
+    implementer_passed(lead_lg, "media", one, ["secret"], repo)
+    implementer_passed(lead_lg, "other", two, ["secret"], repo)
+    checks.verify(lead_lg, "media", one, repo=repo, reported_by="impl")
+    v, _ = checks.verify(lead_lg, "other", two, repo=repo, reported_by="impl")
+    base = git(repo, "rev-parse", "main")
+    assert calls == [one, base, two, base] and v.environment is not None
+
+
+def service_repo(root: Path, flag: Path, extra: str = "") -> Path:
+    """One check that needs a service (FLAG exists) and, with extra, more."""
+    cmd = f"test -f {shlex.quote(str(flag))}" + extra
+    return make_repo(root, f'project = "ignored"\n\n[checks.service]\ncmd = {json.dumps(cmd)}\n\n'
+                           '[guard]\nbase = "main"\n')
+
+
+def test_a_merge_base_failure_from_before_the_environment_recovered_is_not_reused(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The service is down: piece one fails at the commit and at the merge-base (an environment failure).
+    The service comes back, and piece two breaks the check for real: the merge-base passes now, so it refutes."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    flag = tmp_path / "service-up"
+    repo = service_repo(tmp_path / "repo", flag, " && test ! -f broken.txt")
+    one = piece(repo, "one", {"impl.txt": "fixed\n"})
+    implementer_passed(lead_lg, "one", one, ["service"], repo)
+    v, _ = checks.verify(lead_lg, "one", one, repo=repo, reported_by="impl")
+    assert v.environment is not None
+    flag.write_text("")
+    two = piece(repo, "two", {"broken.txt": "x\n"})
+    implementer_passed(lead_lg, "two", two, ["service"], repo)  # what the implementer says it saw
+    v, rec = checks.verify(lead_lg, "two", two, repo=repo, reported_by="impl")
+    assert v.environment is None and rec.relation == "refutes" and rec.discarded_id is not None
+    assert [link["relation"] for link in links_to(lead_lg, rec.claim_id)] == ["refutes"]
+
+
+@pytest.mark.parametrize(("who", "environment"), [
+    ({"agent": "bystander"}, False),  # someone else's pass is not the implementer's
+    ({"definitions": {"secret": "0" * 16}}, False),  # a pass of another command under the same name
+    ({"definitions": {}}, False),  # a pass that does not say what ran
+    ({"agent": "hook@host", "run_by": "impl"}, True),  # the Bash hook's record of the implementer's own run
+])
+def test_only_the_implementers_pass_of_the_same_definition_makes_an_environment_failure(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, who: dict[str, Any], environment: bool) -> None:
+    repo = make_env_repo(tmp_path / "repo", "")
+    sha = piece(repo, "good", {"impl.txt": "fixed\n"})
+    implementer_passed(lead_lg, "media", sha, ["secret"], repo, **who)
+    v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
+    assert (v.environment is not None) is environment
+    assert rec.relation == (None if environment else "refutes")
+
+
+def test_a_retried_request_finishes_from_the_attempt_it_recorded(tmp_path: Path, vtmp: Path,
+                                                                 lead_lg: Ledger) -> None:
+    """The first run failed and was recorded under the request's receipt; the retry would pass (the service came
+    back). The retry links and reports the stored failure, never its own run."""
+    from benchbook.verify_requests import _result_line
+
+    flag = tmp_path / "service-up"
+    repo = service_repo(tmp_path / "repo", flag)
+    sha = piece(repo, "flaky", {"impl.txt": "fixed\n"})
+    receipt = uuid.uuid4()
+    v, first = checks.verify(lead_lg, "flaky", sha, repo=repo, reported_by="impl", receipt_id=receipt)
+    assert first.experiment_id == receipt and first.relation == "refutes" and not v.all_passed
+    flag.write_text("")
+    v, again = checks.verify(lead_lg, "flaky", sha, repo=repo, reported_by="impl", receipt_id=receipt)
+    assert again.experiment_id == receipt and again.claim_id == first.claim_id and again.relation == "refutes"
+    assert [r.status for r in v.results] == ["fail"] and not v.all_passed
+    assert [link["relation"] for link in links_to(lead_lg, first.claim_id)] == ["refutes"]
+    assert again.discarded_id == first.discarded_id
+    assert "re-run failed" in _result_line(v, again)
+    assert row(lead_lg, "experiments", receipt)["metrics"]["checks"] == {"service": "fail"}
+
+
+
+def test_guard_compares_junit_counts_in_the_current_environment(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.conftest import CONFIG
+
+    repo = make_repo(tmp_path / "repo", CONFIG)
+    tests = repo / "tests"
+    (tests / "test_optional.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "if os.getenv('BENCHBOOK_TEST_EXTRA') and not Path('disable-optional').exists():\n"
+        "    def test_optional():\n        assert True\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "tests/test_optional.py")
+    git(repo, "commit", "-m", "Add an environment-dependent test")
+    added = {"impl.txt": "fixed\n", "tests/test_notes.py": "# a guarded addition\n"}
+    first = piece(repo, "first", added)
+    monkeypatch.delenv("BENCHBOOK_TEST_EXTRA", raising=False)
+    before, _ = checks.verify(lead_lg, "first", first, repo=repo, reported_by="impl")
+    assert before.integrity.tests_before == before.integrity.tests_after == 2
+
+    monkeypatch.setenv("BENCHBOOK_TEST_EXTRA", "1")
+    second = piece(repo, "second", {**added, "disable-optional": ""})
+    after, rec = checks.verify(lead_lg, "second", second, repo=repo, reported_by="impl")
+    assert after.integrity.tests_before == 3 and after.integrity.tests_after == 2
+    assert after.integrity.fewer_tests_in == ["unit"]
+    assert rec.outcome is not None and rec.outcome.person
+
+
+def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchbook import hooks, session_notes, verify_requests
+
+    flag = tmp_path / "service-up"
+    prepare = json.dumps(f"test -f {shlex.quote(str(flag))}")
+    repo = make_repo(tmp_path / "repo", '[checks.unit]\ncmd = "true"\n[guard]\nbase = "main"\n'
+                     f'[verify]\nprepare = {prepare}\n')
+    sha = piece(repo, "media", {"impl.txt": "fixed\n"})
+    data = {"piece": "media", "commit": sha, "agent_type": "impl", "repo": str(repo), "session_id": "session",
+            "report_sha256": "a" * 64}
+    monkeypatch.setenv("BENCHBOOK_AGENT", lead_lg.agent)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    project = lead_lg.project_id
+    verify_requests.process(data, project, uuid.uuid4(), spool)
+    assert "environment failure" in session_notes.deliver("session")
+
+    flag.touch()
+    verify_requests.process(data, project, uuid.uuid4(), spool)
+    assert session_notes.deliver("session") == ""
+    receipt = uuid.uuid4()
+    report = {**data, "report_sha256": "b" * 64}
+    write_info = hooks._write_info
+
+    with monkeypatch.context() as fault:
+        def fail_result(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path.parent.name == "verify-results":
+                raise OSError("cannot write result")
+            write_info(path, *args, **kwargs)
+
+        fault.setattr(hooks, "_write_info", fail_result)
+        with pytest.raises(OSError, match="cannot write result"):
+            verify_requests.process(report, project, receipt, spool)
+    flag.unlink()
+    verify_requests.process(report, project, receipt, spool)
+    note = session_notes.deliver("session")
+    assert "re-run passed" in note and "checked: re-run" in note
+    attempts = lead_lg.sql_internal("SELECT id FROM benchbook.experiments WHERE project_id=%s", (project,))
+    assert len(attempts) == 2

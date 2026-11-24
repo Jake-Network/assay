@@ -67,7 +67,8 @@ def test_smoke_script_runs_doctor_init_doctor_from_the_wheel() -> None:
     script = SMOKE.read_text(encoding="utf-8")
     assert 'uvx --from "$WHEEL" benchbook "$@"' in script
     steps = re.findall(r"^(?:out=\"\$\()?bb (doctor|init)\b", script, re.M)
-    assert steps == ["doctor", "init", "doctor"]
+    # then init --yes in a git repository: the code pack, proposed checks and nothing to commit (T07)
+    assert steps == ["doctor", "init", "doctor", "init"]
     # a run must not reach a real ledger: HOME moves, and no inherited variable names a database or a project
     assert 'export HOME="$WORK/home"' in script and "(BENCHBOOK|ASSAY)_" in script
 

@@ -18,6 +18,7 @@ from benchbook.errors import ValidationFailed
 from benchbook.failures import DISCARDED_DOMAIN, discarded_hash
 from benchbook.ids import short
 from benchbook.packs import load_pack
+from benchbook.packs.code.brief import FOOTER
 from benchbook.tokens import estimate_tokens
 from tests.conftest import make_project
 from tests.writer import token_ledger
@@ -209,6 +210,12 @@ def test_the_brief_for_one_module(db_url: str, code: str, ledger: dict[str, Any]
 Goal: Maximise score.
 Scope: mod:media
 
+## Last verified commit per piece (1 of 1)
+- media-upload at eeeeeeeeeeee ({s['c_media']}, verified just now, checked: person)
+
+## Reported done, not re-run (0 of 0)
+- none recorded
+
 ## Discarded approaches, do not repeat (2 of 2)
 - {s['d_retry']} retry-loop on media-upload: unit:exit 1:{'d' * 16} · first {s['e_retry']} · ×1, last just now
 - {s['d_hash']} hash-before-put on media-upload: unit:tests.test_media::test_reupload:AssertionError · first \
@@ -220,11 +227,8 @@ Scope: mod:media
 ## Occupied paths (1 of 1 live pieces)
 - {s['piece_media']} media-upload by impl-a, Nm left [mod:media]: src/app/modules/media/upload.py
 
-## Last verified commit per piece (1 of 1)
-- media-upload at eeeeeeeeeeee ({s['c_media']}, verified just now)
-
-Details: benchbook_get(<id>). Name your approach when you run a check (benchbook check run <check> --approach NAME, \
-or BENCHBOOK_APPROACH): a failure seen before is named in the run's output.
+Details: benchbook get <id> (one record, at most 400 tokens). Name your approach when you run a check (benchbook \
+check run <check> --approach NAME, or BENCHBOOK_APPROACH): a failure seen before is named in the run's output.
 """
     assert re.sub(r"\d+m left", "Nm left", out) == expected
     assert estimate_tokens(out) <= 2000
@@ -245,7 +249,7 @@ def test_without_tags_the_whole_project_and_an_unknown_tag_shows_none(db_url: st
     assert "## Discarded approaches, do not repeat (3 of 3)" in out and "## Open out-of-scope findings (3 of 3)" in out
     assert "## Occupied paths (2 of 2 live pieces)" in out and "## Last verified commit per piece (2 of 2)" in out
     none = compile_brief(lg, None, 2000, log=False, tags=["mod:billing"])
-    assert none.count("- none recorded") == 4
+    assert none.count("- none recorded") == 5
 
 
 def test_a_discarded_approach_stays_when_the_piece_is_verified(db_url: str, code: str, ledger: dict[str, Any]) -> None:
@@ -268,13 +272,17 @@ def test_the_budget_trims_bottom_up_and_says_what_it_left_out(db_url: str, code:
     assert "## Discarded approaches, do not repeat (8 of 30)" in full and "(+22 more: benchbook search" in full
     small = compile_brief(impl, None, 400, log=False, tags=["mod:media"])
     assert estimate_tokens(small) <= 400 * 1.05
-    assert small.startswith("# benchbook brief") and "Scope: mod:media" in small and "Details: benchbook_get" in small
+    assert small.startswith("# benchbook brief") and "Scope: mod:media" in small and "Details: benchbook get" in small
     assert "## Discarded approaches" in small and "more: benchbook search --tags discarded" in small
-    assert "## Last verified commit" not in small  # the last section goes first
+    assert "## Occupied paths" not in small  # the last section goes first
     default = compile_brief(impl, None, 2000, log=False, tags=["mod:media"])
     assert estimate_tokens(default) <= 2000 * 1.05
     with pytest.raises(ValidationFailed, match="too small"):
-        compile_brief(impl, None, 40, log=False, tags=["mod:media"])
+        compile_brief(impl, None, 15, log=False, tags=["mod:media"])
+    chars = compile_brief(impl, None, 20000, log=False, tags=["mod:media"], max_chars=1500)
+    assert len(chars) <= 1500 and chars.endswith(FOOTER) and "## Last verified commit" in chars
+    with pytest.raises(ValidationFailed, match="too small"):  # whichever limit is reached first
+        compile_brief(impl, None, 20000, log=False, tags=["mod:media"], max_chars=50)
 
 
 def test_the_brief_is_logged_and_reachable_from_the_cli_and_mcp(db_url: str, code: str, ledger: dict[str, Any],
@@ -332,3 +340,228 @@ def test_reads_that_changed_a_plan(db_url: str, code: str, ledger: dict[str, Any
     [row] = lead.sql(query)["rows"]
     assert row == {"cited": 6, "in_ledger": 5, "discarded_approaches": 1, "findings": 2, "verified_commits": 1,
                    "reads_that_changed_the_plan": 3}
+
+
+# ------------------------------------------------------------------------------------- scope by changed paths (T06)
+
+@pytest.mark.parametrize(("paths", "limit", "want"), [
+    (["media/a.py", "media/sub/b.py", "x.py"], 20, ["media/", "x.py"]),
+    (["a/b/c.py", "a/d/e.py"], 1, ["a/"]),
+    ([f"d{i}/f.py" for i in range(25)], 20, [""]),
+    ([], 20, []),
+])
+def test_path_prefixes(paths: list[str], limit: int, want: list[str]) -> None:
+    assert checks.path_prefixes(paths, limit) == want
+
+
+def test_here_scope_uses_dirty_paths_on_a_new_branch_at_the_base_tip(tmp_path: Path) -> None:
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import make_repo
+
+    repo = make_repo(tmp_path / "repo")
+    git(repo, "branch", "-m", "release/main")
+    git(repo, "update-ref", "refs/remotes/origin/release/main", "HEAD")
+    (repo / "tests" / "test_new.py").touch()
+    assert changed_scope(repo, "origin/release/main") == []
+
+    git(repo, "switch", "-qc", "main")
+    assert changed_scope(repo, "origin/release/main") == ["file:tests/", "piece:main"]
+
+
+def test_here_scope_keeps_both_sides_of_a_non_ascii_rename(tmp_path: Path) -> None:
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import make_repo
+
+    repo = make_repo(tmp_path / "repo")
+    git(repo, "config", "core.quotePath", "true")
+    (repo / "이전").mkdir()
+    (repo / "이전" / "파일.py").touch()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add previous path")
+    git(repo, "switch", "-qc", "feature")
+
+    (repo / "미디어").mkdir()
+    git(repo, "mv", "이전/파일.py", "미디어/편집.py")
+    (repo / "새파일.py").touch()
+    want = ["file:미디어/", "file:새파일.py", "file:이전/", "piece:feature"]
+    assert changed_scope(repo) == want
+
+    git(repo, "commit", "-qm", "rename path")
+    assert changed_scope(repo) == want
+
+
+def test_here_scope_finds_a_discarded_approach_without_piece_start(tmp_path: Path, db_url: str, code: str) -> None:
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import make_repo
+    from tests.conftest import piece as commit_piece
+
+    r = make_repo(tmp_path / "r", 'project = "x"\n[checks.value]\ncmd = "test ! -e media/broken && test ! -e '
+                  'other/broken"\n[guard]\nbase = "main"\n')
+    lead = agent(db_url, code, "lead", "orchestrator")
+    media = commit_piece(r, "feature", {"media/broken": "x\n"})
+    other = commit_piece(r, "elsewhere", {"other/broken": "x\n"})
+    checks.verify(lead, "pm-1", media, repo=r, reported_by="impl")  # no piece start: no task, no mod: tag
+    checks.verify(lead, "pm-2", other, repo=r, reported_by="impl")
+    assert changed_scope(r) == []  # on main
+    git(r, "checkout", "-q", "feature")
+    scope = changed_scope(r)
+    assert scope == ["file:media/", "piece:feature"]
+    out = compile_brief(lead, None, 2000, tags=scope)
+    assert "pm-1" in out and "pm-2" not in out
+    [claim] = lead.sql_internal("SELECT tags, payload FROM benchbook.claims WHERE project_id = %s"
+                                " AND 'discarded' = ANY(tags) AND payload ->> 'piece' = 'pm-1'", (code,))
+    assert "file:media/" in claim["tags"] and claim["payload"]["paths"] == ["media/"]
+    (r / "other").mkdir()
+    (r / "other" / "new.py").write_text("x\n")  # an untracked file joins the scope
+    assert changed_scope(r)[:2] == ["file:media/", "file:other/"]
+
+
+# ------------------------------------------------------------------------------------ the brief's five properties (T10)
+
+def test_brief_excludes_a_verification_whose_evidence_was_invalidated(db_url: str, code: str) -> None:
+    old_commit, new_commit = "a" * 40, "b" * 40
+    old = _verify(db_url, code, "media", old_commit)
+    newest = _verify(db_url, code, "media", new_commit)
+    human = agent(db_url, code, "human", "human")
+    assert short("claim", newest) in compile_brief(human, None)
+
+    [rerun] = human.sql_internal("SELECT id FROM benchbook.experiments_valid WHERE project_id = %s AND code_ref = %s",
+                                 (code, new_commit))
+    human.decide(rerun["id"], "invalidated", "human", "re-run used an incomplete fixture")
+
+    out = compile_brief(human, None)
+    assert short("claim", newest) not in out
+    assert short("claim", old) in out
+
+
+def _commit(repo: Path, path: str, text: str) -> None:
+    (repo / path).write_text(text)
+    git(repo, "commit", "-qam", f"change {path}")
+
+
+@pytest.fixture
+def changed(db_url: str, code: str, repo: Path) -> dict[str, Any]:
+    """Three pieces verified at the repo's first commit (one at a commit the checkout lacks), two discarded approaches
+    recorded there; then media's path changes in two commits and the test one approach failed on in a third."""
+    base = git(repo, "rev-parse", "HEAD")
+    a, b = agent(db_url, code, "impl-a"), agent(db_url, code, "impl-b")
+    pieces.start(a, "media-upload", ["src/app/modules/media/upload.py"], repo, tags=["mod:media"])
+    pieces.start(b, "auth-refresh", ["src/app/modules/auth/*"], repo, tags=["mod:auth"])
+    pieces.start(agent(db_url, code, "impl-c"), "old-import", ["src/app/modules/media/store.py"], repo)
+    ids = {"c_media": _verify(db_url, code, "media-upload", base),
+           "c_auth": _verify(db_url, code, "auth-refresh", base),
+           "c_old": _verify(db_url, code, "old-import", "9" * 40)}
+    ids["d_keep"] = attempt(a, "media-upload", approach="retry-loop", sha=base,
+                            failed=[["tests/test_store.py::test_put", "AssertionError"]]).discarded_id
+    ids["d_stale"] = attempt(a, "media-upload", approach="hash-before-put", sha=base,
+                             failed=[["tests.test_media::test_reupload", "AssertionError"]]).discarded_id
+    _commit(repo, "src/app/modules/media/upload.py", "v2\n")
+    _commit(repo, "src/app/modules/media/upload.py", "v3\n")
+    _commit(repo, "tests/test_media.py", "v2\n")
+    return {**ids, "base": base}
+
+
+def _line(out: str, needle: str) -> str:
+    [line] = [x for x in out.splitlines() if needle in x]
+    return line
+
+
+def test_only_the_piece_changed_since_its_check_is_marked(db_url: str, code: str, repo: Path,
+                                                          changed: dict[str, Any]) -> None:
+    lg = agent(db_url, code, "reader")
+    plain = compile_brief(lg, None, 2000, log=False)
+    assert "changed since" not in plain and "not in this checkout" not in plain  # no repo: no marks
+    out = compile_brief(lg, None, 2000, log=False, repo=repo)
+    base = changed["base"][:12]
+    assert _line(out, f"media-upload at {base}").endswith("checked: person) · changed since (2 commits)")
+    assert _line(out, f"auth-refresh at {base}").endswith("checked: person)")  # unchanged: no mark
+    assert _line(out, "old-import at 999999999999").endswith(" · commit not in this checkout")
+    discarded = out.split("## Discarded approaches", 1)[1].split("\n## ", 1)[0].splitlines()[1:3]
+    assert short("claim", changed["d_keep"]) in discarded[0] and not discarded[0].endswith("since")
+    assert short("claim", changed["d_stale"]) in discarded[1] and discarded[1].endswith(" · test changed since")
+    git(repo, "checkout", "-q", changed["base"])  # the same ledger at the checked commit: nothing changed
+    assert "changed since" not in compile_brief(lg, None, 2000, log=False, repo=repo)
+
+
+def test_the_same_ledger_and_head_give_the_same_text(db_url: str, code: str, repo: Path,
+                                                     changed: dict[str, Any]) -> None:
+    lg = agent(db_url, code, "reader")
+    now = _now(lg)
+    first = compile_brief(lg, None, 1500, now=now, log=False, repo=repo, max_chars=6000)
+    assert first == compile_brief(lg, None, 1500, now=now, log=False, repo=repo, max_chars=6000)
+    assert "changed since (2 commits)" in first
+
+
+def test_a_piece_not_merged_into_head_is_not_changed_since(db_url: str, code: str, repo: Path) -> None:
+    """PR #4 issue 2: read from the base (or the lead's branch before the merge), a piece's commit is not in HEAD's
+    history, so its paths differ though no commit changed them after it (rev-list counts 0)."""
+    base = git(repo, "rev-parse", "HEAD")
+    a = agent(db_url, code, "impl-a")
+    pieces.start(a, "media-upload", ["src/app/modules/media/upload.py"], repo, tags=["mod:media"])
+    git(repo, "checkout", "-qb", "media-upload")
+    (repo / "src/app/modules/media/upload.py").write_text("v2\n")
+    (repo / "tests/test_media.py").write_text("v2\n")
+    git(repo, "commit", "-qam", "media")
+    tip = git(repo, "rev-parse", "HEAD")
+    _verify(db_url, code, "media-upload", tip)
+    attempt(a, "media-upload", approach="retry-loop", sha=base,
+            failed=[["tests/test_store.py::test_put", "AssertionError"]])
+    attempt(a, "media-upload", approach="hash-before-put", sha=tip,
+            failed=[["tests/test_media.py::test_reupload", "AssertionError"]])
+    git(repo, "checkout", "-q", "main")
+    lg = agent(db_url, code, "reader")
+    now = _now(lg)
+
+    def discarded(out: str) -> list[str]:
+        return out.split("## Discarded approaches", 1)[1].split("\n## ", 1)[0].splitlines()[1:]
+
+    out = compile_brief(lg, None, 2000, now=now, log=False, repo=repo)
+    assert _line(out, f"media-upload at {tip[:12]}").endswith(" · not merged into this branch")
+    assert "changed since" not in out
+    assert discarded(out) == discarded(compile_brief(lg, None, 2000, now=now, log=False))  # no mark, same order
+    git(repo, "merge", "-q", "--ff-only", "media-upload")
+    _commit(repo, "src/app/modules/media/upload.py", "v3\n")
+    out = compile_brief(lg, None, 2000, now=now, log=False, repo=repo)
+    assert _line(out, f"media-upload at {tip[:12]}").endswith(" · changed since (1 commit)")
+
+
+def test_a_reported_completion_comes_second_checked_none(db_url: str, code: str, ledger: dict[str, Any]) -> None:
+    impl = agent(db_url, code, "impl-a")
+    c = impl.propose_claim("completion", "media-upload is complete at 111111111111",
+                           payload={"piece": "media-upload", "commit": "1" * 40}, tags=["piece:media-upload"])
+    out = compile_brief(agent(db_url, code, "reader"), None, 2000, log=False, tags=["mod:media"])
+    sections = out.split("\n## ")
+    assert sections[1].startswith("Last verified commit per piece (1 of 1)")
+    assert sections[2] == (f"Reported done, not re-run (1 of 1)\n- media-upload at 111111111111 "
+                           f"({short('claim', c.id)}, reported just now, checked: none)\n")
+    assert short("claim", ledger["c_media"]) not in sections[2]  # verified, so not merely reported
+
+
+def test_ten_thousand_records_stay_within_six_thousand_characters(db_url: str, code: str, repo: Path) -> None:
+    lg = agent(db_url, code, "impl-a")
+    pieces.start(lg, "media-upload", ["src/app/modules/media/*"], repo, tags=["mod:media"])
+    long = "repeat('lorem ipsum dolor sit amet ', 12)"
+    with lg._conn() as conn:
+        conn.execute(f"""
+INSERT INTO benchbook.claims (project_id, kind, statement, statement_hash, payload, tags, author)
+SELECT %(p)s, CASE i %% 3 WHEN 2 THEN 'completion' ELSE 'observation' END,
+       left('record ' || i || ' ' || {long}, 500), md5('t10:' || i),
+       CASE i %% 3
+         WHEN 0 THEN jsonb_build_object('piece', 'media-upload', 'approach', 'approach-' || i || '-' || {long},
+                                        'signature', 'unit:' || {long} || i, 'commit', repeat('c', 40))
+         WHEN 1 THEN '{{}}'::jsonb
+         ELSE jsonb_build_object('piece', 'media-upload', 'commit', md5(i::text) || 'abcdefgh')
+       END,
+       CASE i %% 3
+         WHEN 0 THEN ARRAY['discarded', 'piece:media-upload', 'mod:media']
+         WHEN 1 THEN ARRAY['out-of-scope', 'mod:media', 'file:src/app/modules/media/upload.py']
+         ELSE ARRAY['piece:media-upload']
+       END, 'impl-a'
+FROM generate_series(1, 10000) AS i""", {"p": code})
+    [n] = lg.sql_internal("SELECT count(*) AS n FROM benchbook.claims WHERE project_id = %s", (code,))
+    assert n["n"] >= 10000
+    for tags in (None, ["mod:media"]):
+        for budget in (1500, 20000):
+            out = compile_brief(lg, None, budget, log=False, tags=tags, repo=repo, max_chars=6000)
+            assert len(out) <= 6000 and out.endswith(FOOTER) and out.startswith("# benchbook brief")
+            assert "## Last verified commit per piece" in out and "## Reported done, not re-run (" in out

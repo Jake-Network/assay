@@ -87,6 +87,34 @@ def verify(
         raise typer.Exit(1)
 
 
+@check_app.command("pin")
+def pin(
+    piece: Annotated[str | None, typer.Argument(help="The piece whose checks to pin (default: the project's)")] = None,
+    check: Annotated[list[str] | None, typer.Option(
+        "--check", help="NAME=CMD to pin instead of config.toml's [checks] (repeatable); {junit} in CMD reads a JUnit "
+                        "report")] = None,
+) -> None:
+    """Pin the checks check verify runs for PIECE (or every piece) in the ledger, so nothing has to be committed.
+
+    Without --check the [checks], [guard] and [verify] tables of the working tree's config.toml are pinned. check
+    verify reads a pin only when the merge-base has no committed config.toml, ignores pins written by the piece's
+    implementer, and sends the piece to a person when the pin changed after its first attempt (docs/code.md)."""
+    from .checks import parse_check_options, pin_checks
+    from .cli import emit, ledger
+    from .config import load
+    from .ids import short
+
+    cfg = load()
+    specs = parse_check_options(check) if check else cfg.checks
+    p, new = pin_checks(ledger(), piece, specs, cfg.guard_paths, cfg.verify.table(),
+                         source="cli" if check else "config")
+    scope = "the project" if piece is None else f"piece {piece}"
+    emit({"ok": True, "pin": short("claim", p.id), "piece": p.piece, "new": new, "sha256": p.sha256,
+          "checks": list(p.checks)},
+         f"{'pinned' if new else 'already pinned'} {', '.join(p.checks)} for {scope} ({short('claim', p.id)}, "
+         f"{p.sha256[:12]})")
+
+
 def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
     from .ids import short
 
@@ -129,13 +157,21 @@ def render(v: Verification, rec: Recorded) -> str:
         if r.status in ("fail", "timeout") and not r.failed_tests and r.tail:
             lines += [f"      | {x}" for x in r.tail.splitlines()[-8:]]
     lines.append(f"checks {v.passed}/{v.total} passed")
+    if v.environment:
+        lines.append(f"environment: {v.environment}; not counted against the piece")
     if v.missing:
         lines.append(f"partial: {v.total} of {len(v.declared)} declared checks run (not run: {', '.join(v.missing)}); "
                      "recorded, but only a run of every declared check can verify")
-    if v.integrity.guard_touched:
-        files = v.integrity.guard_files
-        lines.append(f"guard: {len(files)} guarded file(s) changed since the merge-base: "
-                     + ", ".join(files[:10]) + (" ..." if len(files) > 10 else ""))
+    integ = v.integrity
+    if integ.guard_weakened_files:
+        files = integ.guard_weakened_files
+        lines.append(f"guard: {len(files)} test file(s) weakened since the merge-base (lines deleted or changed, a "
+                     "skip marker, or conftest): " + ", ".join(files[:10]) + (" ..." if len(files) > 10 else ""))
+    if integ.fewer_tests:
+        lines.append(f"guard: fewer tests ran than at the merge-base in {', '.join(integ.fewer_tests_in)} "
+                     f"({integ.tests_after} in all, {integ.tests_before} at the merge-base)")
+    if added := integ.guard_added + integ.guard_appended:
+        lines.append(f"tests added (not a weakening): {', '.join(added[:10])}" + (" ..." if len(added) > 10 else ""))
     if v.integrity.checks_changed:
         lines.append("checks_changed: the commit's [checks] differ from the merge-base's (the merge-base's ran)")
     rel = ""

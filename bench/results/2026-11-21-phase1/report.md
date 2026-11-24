@@ -1,6 +1,6 @@
 # Phase 1 report: the two numbers (status on 2026-11-21)
 
-**Neither number has been measured yet.** Everything needed to measure them is built and passes its dry run; the
+**The coding number was measured on 2026-11-23 (17.9%, 7 of 39); the research number has not been measured yet.** Everything needed to measure them is built and passes its dry run; the
 runs themselves spend API budget, Docker disk or GPU time and wait for the owner's go-ahead. This page is the one
 place the two numbers, how they are measured and the cost analysis are kept; the empty cells are filled from the
 commands below, and the verdict is then written to DECISIONS.md.
@@ -9,7 +9,7 @@ commands below, and the verdict is then written to DECISIONS.md.
 
 | number | definition | source | value |
 |---|---|---|---|
-| false completion rate (coding) | completions with at least one refuting re-run / completions with at least one finished re-run of the declared checks | `benchbook sql` with the statement in docs/code.md, "The numbers"; SWE-bench Verified batch (`bench/code/`) plus field delegate runs | not measured (0 of the 30 completion reports needed) |
+| false completion rate (coding) | completions with at least one refuting re-run / completions with at least one finished re-run of the declared checks | `benchbook sql` with the statement in docs/code.md, "The numbers"; SWE-bench Verified batch (`bench/code/`) plus field delegate runs | **17.9%** (7 of 39 completions re-run; 95% CI 9.0% to 32.7%), SWE-bench Verified, claude-sonnet-5-5, 2026-11-23: [../2026-11-23-swe-verified/](../2026-11-23-swe-verified/README.md) |
 | keeps that did not reproduce (research) | keeps of an independent autoresearch run whose value did not hold when re-run by others / all its keeps | `bench/autoresearch/report.py` after `post_replicate.py`, per `bench/autoresearch/PREREGISTRATION.md` | not measured (0 of the 30 keeps needed) |
 
 Beside the first number the SWE-bench report also gives the failure rate by the hidden tests (for comparison with
@@ -77,8 +77,8 @@ connectors switched off). The baseline is the 2026-11-21 batch.
 
 | side | criterion | consequence | result |
 |---|---|---|---|
-| coding | false completion rate >= 10% | P0 and P1 go ahead | pending |
-| coding | false completion rate < 10% | `check verify` and the PR evidence summary only | pending |
+| coding | false completion rate >= 10% | P0 and P1 go ahead | **met** (17.9%, 7 of 39; the CI 9.0% to 32.7% contains 10%) |
+| coding | false completion rate < 10% | `check verify` and the PR evidence summary only | not met |
 | research | keeps not reproduced >= 30% | headline, skill adapters | pending |
 | research | keeps not reproduced 10-30% | compare with the stronger side | pending |
 | research | keeps not reproduced < 10% | the reproduction gate becomes optional | pending |

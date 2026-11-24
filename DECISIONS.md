@@ -507,3 +507,211 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   only when neither it (queued, dead or quarantined) nor a record of its processing (`adopted.done`, written by the
   processor before it removes the copy) exists. The old spool's lock is taken (without waiting) while moving from
   it.
+
+## Boundary mode, T01-T16 (2026-11-22, "benchbook swarm과 1M 너머")
+
+- **T01 pin metrics only on pinned runs.** `checks_source`, `checks_pin` and `checks_sha256` are written only when
+  the checks came from a pin; a run against a committed config keeps exactly the metrics it had, so the false
+  completion query and older readers see no new keys.
+- **T01 a re-pin is compared by hash.** Every pin is a new claim (unique dedup hash), so the newest is always the one
+  in effect. "A new pin after the first attempt" counts as a `[checks]` change only when the pin in effect at the
+  first attempt is missing or has another sha256: re-pinning the same declarations does not send a piece to a person.
+- **T01 the working tree is compared only for config pins.** A pin taken with `--check` never came from
+  config.toml and is not compared with it; a pin taken from config.toml is.
+- **T01 init keeps config.toml.** `write_config` used to overwrite the file; it now rewrites only the `project`
+  line of an existing one, so `init --pack code` can pin the `[checks]` already declared there.
+- **T03 an environment failure needs a pass elsewhere.** The spec counts any check that fails the same way at the
+  merge-base as an environment failure. A piece's goal check fails at the merge-base by design (a test written
+  before the fix, SWE-bench's FAIL_TO_PASS tests), so that rule would never refute a commit that leaves it failing,
+  and the false completion rate would lose exactly its subject. The rule adds the evidence that tells the two apart:
+  the implementer's own clean run of the commit (`via`) passed the check. Passing there and failing in the clean
+  worktree the same way as at the merge-base is the environment's signature. The merge-base run happens only then.
+- **T03 "the same way" includes subsets.** Besides an equal signature element, a JUnit check whose failing tests all
+  fail at the merge-base too is the same failure (the base can fail more).
+- **T03 a commit equal to its merge-base is not compared** with itself.
+- **T04 conftest.py is never "added only".** Lines added to a conftest.py (an autouse fixture, a collection hook)
+  can weaken every test without deleting any, so any change to one is a weakening, as the mutation table expects.
+- **T04 guard_weakened is always written** (a boolean on every attempt, like guard_touched); the file lists and the
+  test counts only when there is something to say.
+- **T07 the lead skill and the MCP server move to benchbook-mcp.** Both teach or serve ledger tools, which the hook
+  plugin must not load. The skill command becomes `/benchbook-mcp:benchbook-lead`, and the worker's tool names are
+  written as `mcp__plugin_benchbook-mcp_benchbook__*` on the assumption that Claude Code keeps a hyphenated plugin
+  name in the tool prefix; T08's session check confirms it. bench/real.py loads both plugin directories and counts
+  the pre-split server name as its own.
+- **T07 init defaults to the code pack only without --metric.** `init --metric X` keeps the core pack, so the
+  research quick start and its scripts are unchanged (spec open question 5). Proposals are appended to config.toml
+  only when it declares no `[checks]`; off a terminal they are written without asking.
+- **T07 uninstall removes the whole state directory.** The spool there holds results not yet recorded; uninstalling
+  is the decision to drop them, and the command lists what it removed.
+- **T10 "changed since" counts commits that touch the piece's paths** (`git rev-list --count <commit>..HEAD --
+  <paths>`), not every commit since: the number says how much of the piece moved, not how busy the branch was.
+- **T10 a line with nothing to compare has no mark.** A verified piece with neither task paths nor recorded
+  directories, and a git call that times out, leave the line unmarked rather than guess; `commit not in this
+  checkout` is shown only when there are paths to compare. A discarded approach whose commit is missing is not marked
+  either: its signature still says what failed.
+- **T10 "reported, not re-run" means no evidence either way.** A proposed completion with a supporting or refuting
+  link is under review, not merely reported, and stays out of the section.
+- **T10 the footer keeps the approach hint.** Only the details pointer changed (`benchbook get <id>`); naming the
+  approach is what makes a failure a discarded approach, so the brief still asks for it.
+- **T09 the 5-second limit covers the whole brief, not only the connection.** The brief runs in a daemon thread
+  joined for 5 s, so a slow embedded Postgres start, a slow query or slow git calls all fall back to STATE.md; the
+  entry point then ends the process with os._exit rather than wait for the abandoned thread.
+- **T09 STATE.md goes in the current checkout** (its git root), not the main worktree's folder that config.toml may
+  come from: the brief is scoped by that checkout's branch. It is excluded from git status when the folder is tracked.
+- **T09 STATE.md is written even when the brief is empty;** only the injection is skipped.
+- **T09 notes move before they are read,** so two hooks at once never deliver one note twice. Other harnesses get
+  the empty answer from `context_answer` until T16 reads their documentation.
+- **T11 verification deduplication follows the existing spool's database and writer boundary.** Verification
+  results are cached there by project, piece and commit. A different authenticated writer has its own processor
+  and may run the same piece independently. A reported commit with multiple matching local branches requires an
+  explicit piece in the commit or report. The completion report's hash is saved as attempt trace metadata.
+- **T11 also re-runs from SubagentStop (T08 run on Claude Code 2.1.330).** Every Agent call came back
+  `async_launched`, the one without `run_in_background` too, so the PostToolUse result the document relies on never
+  carries a report. SubagentStop does (`agent_type`, `last_assistant_message`), and it is the event with the
+  reporter's type, which `check verify` needs for `reported_by`; the task notification's UserPromptSubmit holds the
+  same text but no type. SubagentStop gives the lead no context, so the "re-running" line is written as a note
+  (`queued-<hash>.txt`, sorted before the result's `verify-<hash>.txt`) and nothing else is delivered there. When
+  both events carry the same report (a foreground run), the spool's cached result makes it one re-run.
+- **Compaction's SubagentStop is never a report.** Claude Code runs compaction as a subagent whose SubagentStop has
+  `agent_type: ""` and the summary as `last_assistant_message`. The capture hook drops it before the wildcard
+  settings are read, since the summary repeats the conversation's findings.
+- **T13 status groups reports by the latest active commit of each piece.** The queue and last 24 hours of hook
+  failures use the same database/writer health checks as doctor. A report overdue for processing also triggers
+  the replay warning.
+- **T15 live trials take a preregistered local task and oracle manifest.** The dry run exercises the capture
+  and scoring pipeline on scripted inputs. Compaction counts only when the SDK stream contains its boundary
+  event. The report separates immediate and delayed probes. H5 estimates report tokens from observed Agent
+  and Task result payloads.
+- **T16 uses the documented context hooks for each harness.** Codex re-injects on SessionStart after compaction.
+  Gemini CLI injects at SessionStart and AfterTool because PreCompress cannot modify the summary. OpenCode V2
+  uses the first outgoing model-context hook and later continuations for notes. Pi injects the startup brief
+  before the first agent turn and adds pending notes to tool results. The two native extensions are installed
+  per project.
+
+## After the review of PR #4 (2026-11-23)
+
+- **uninstall removes .benchbook/ only on git's answer.** `git ls-files` that fails (outside a repository, a corrupt
+  index) printed nothing, which read as "untracked". The folder is now kept unless git exits 0 with no tracked file.
+- **--purge removes a cluster, not a directory.** `BENCHBOOK_DATA_DIR` can name any directory, so purge needs
+  `PG_VERSION` there and `pg_ctl status` saying no server runs after the stop; otherwise it keeps the directory and
+  says why. `benchbook db stop` now fails when the server is not confirmed stopped.
+- **A retried verification finishes from the attempt it recorded.** The spool's receipt is the attempt id. When it is
+  already in the ledger, check verify does not run the checks again: it rebuilds the run from the stored metrics
+  (statuses, declared checks, guard columns, signature) and writes the link, the discarded approach, the decision
+  and the result line from that. A second run could disagree with what is stored and link the opposite way.
+- **STATE.md says whose brief it is.** Its first line names the project and the ledger (a hash of the database URL
+  without its password, or of the embedded data directory). The fallback is used only for the same project and
+  ledger, and only when the ledger could not be reached; a refusal (a revoked token, a failed login, an unknown
+  project) gives nothing. A STATE.md from before this change names neither and is not used.
+- **Fewer tests are counted per JUnit check.** Sums let tests added to one check hide tests gone from another.
+  `tests_before` and `tests_after` stay as sums for the record; `fewer_tests_checks` names the checks that dropped.
+- **T03's pass elsewhere must be the implementer's, of the same definition.** The attempt's author is one of the
+  piece's reporters, or the Bash hook's `run_by` (the agent type it saw) names one, and `check_definitions` matches
+  the merge-base's hash of cmd, junit and timeout. Passes recorded before this change have no definition and no
+  longer count: they fall back to refuting, the side that a person can overturn. A `check run` without
+  `--agent`/`BENCHBOOK_AGENT` is recorded under the hook's name and does not count either.
+- **T03's merge-base run is not cached.** The cache key cannot see the environment, and a failure cached while a
+  service was down would turn a real regression into an environment failure after it came back. The test counts
+  (T04) still read the cache, whose key now includes the content of the `[verify] copy` files.
+- **The boundary benchmark counts a resumed call's own spend.** Claude Code's receipt for a resumed session reports
+  the whole session (total_cost_usd and modelUsage); the runner subtracts the session's previous receipt for the
+  call's cap, the batch budget and the report, and keeps the session totals beside them.
+
+## PR #4 in use: issues from a real repository (2026-11-23)
+
+Five issues came from running PR #4 head `ec075da` against a scratch clone of a Python repository (hook inputs fed
+by hand, not a live session). Four are fixed; the fourth is not.
+
+- **1. The completion gate holds a task only on a live piece's branch.** The gate took every branch other than the
+  base as a piece, so where nothing is committed to main every to-do of the lead's own session was held. A branch is
+  now a piece when a live `piece start` intent names it (v_inflight) or `BENCHBOOK_PIECE` is set. A config key to
+  turn the gate off was the alternative; it adds a setting and leaves the lead blocked by default. The cost: an
+  implementer that works on a branch without `piece start` is no longer gated.
+- **2. A piece not in HEAD's history is "not merged into this branch".** `git diff` against a commit HEAD never had
+  is non-zero without any later change, and rev-list counted 0. `merge-base --is-ancestor` tells the two apart; a
+  discarded approach failed at such a commit keeps its place, as for a commit the checkout lacks. A squash-merged
+  piece still reads as unmerged once its paths change; telling that apart needs the PR's merge commit in the ledger.
+- **3. A report's findings take the piece its commit names** (part 1). The same function as the automatic re-run
+  (`verify_requests.reported_target`), so the finding and the verification agree. Part 2, a line in a scoped brief
+  counting open findings outside its scope, waits: it changes the brief's format, and the boundary pilot's arm F
+  is about to measure brief length and content.
+- **5. The automatic re-run is `rerun@<host>`, an orchestrator.** It shared `verifier@<host>` with `check verify`
+  without `--agent` (harness), and a project keeps a name's first role, so the run order decided whether a re-run
+  could decide. Separate names make both orders behave the same. Rows already written are left alone.
+- **4. Not done: caching the merge-base test counts.** Each verify of a piece that adds tests runs the JUnit checks
+  again at the merge-base, about 14 s per piece in the measurement, much of it plausibly the new worktree's missing
+  `__pycache__` (not measured apart). We keep it: the verdicts are the same, only slower; `ec075da` removed that
+  very cache ("Recheck JUnit baselines in the current environment") because its key cannot see the environment, so
+  a test skipped by an environment variable makes a cached count disagree with the current one and can report a
+  weakening that is not there or miss one that is; a cache would also carry state from one boundary trial into the
+  next and blur arm F's verify time and weakening verdicts; and cheaper ways exist that change no verdict (run the
+  commit's and the merge-base's worktrees in parallel, or first measure the `__pycache__` share). The pilot's H4
+  report states that F's verify time includes the merge-base run.
+  **Measured (2026-11-24, `scripts/measure_rerun_queue.py`, model-free).** A synthetic repository (90 tests, one
+  JUnit check, tests/** guarded), eight pieces that each add a test file reporting at once, two runs each, WSL2:
+  the merge-base run is 47% to 50% of a verify (0.53 s of 1.12 s when the tests only import; 11.4 s of 22.8 s at
+  120 ms per test). A fresh worktree's missing `__pycache__` costs 0.08 s of a 0.49 s run (16%) and nothing
+  measurable at 120 ms per test, so it is not where the time goes. The last of eight verdicts came after 183 s (9 s
+  without the per-test time), and a worker's `check run` queued 14 s in was recorded 168 s after it ran (5.4 s), as
+  it waited behind every re-run. Done: the spool's two lanes (the attempt is recorded 0.3 s after it ran; verdicts
+  unchanged) and `[verify] parallel_baseline` (verify 11.5 s, last verdict 92 s). Not done: several re-runs at
+  once; see "Swarm fan-in".
+
+## Spec §8 verdict for the code pack (2026-11-23)
+
+- **False completion rate 17.9% ≥ 10%: P0 and P1 go ahead.** SWE-bench Verified, 39 instances (40 pre-registered,
+  one dropped by the preflight with no reserve left), `claude-sonnet-5-5` on Claude Code 2.1.330: 7 of 39 reported
+  completions failed a declared check when re-run (95% Wilson CI 9.0% to 32.7%). **The interval contains 10%**, so
+  the sample alone cannot rule out a rate under the threshold; the decision follows the pre-registered point estimate.
+  Details: bench/results/2026-11-23-swe-verified/.
+- The hidden tests alone refuted 5 of 39 (12.8%, CI 5.6% to 26.7%). Two of the seven refutations come from the
+  visible check itself (the reference fix fails it on the same test); without them it is also 5 of 39, so the verdict
+  holds either way. The preflight gains a "reference fix passes visible" step for later batches (pre-registration
+  amendment of 2026-11-23).
+- 4 of 39 completions changed a test file and passed both checks; only 3 of 39 implementers ran any test before
+  reporting done, and none of the 7 refuted ones did. Spent USD 1.06 of the 120 cap.
+
+## Swarm fan-in: verdicts to the lead (2026-11-24)
+
+- **Notes go to the lead only.** Notes are found by `session_id`, and Claude Code gives the hooks of a subagent's tool
+  calls the lead's `session_id` with the subagent's `agent_id` (hooks reference; every line of a real subagent
+  transcript carries the parent's `sessionId`). `bash_result` delivered on every Bash result, a worker's included,
+  so with 16 to 30 workers a verdict most likely reached a worker and never the lead. Every delivery point now skips
+  an input with an `agent_id` (`session_notes.for_lead`). The boundary pilot's arm F runs 937f5ea, without this; its
+  pre-registration amendment of 2026-11-24 says so and counts where verdict lines landed.
+- **Every lead tool result can deliver.** The notes hook runs on PostToolUse with matcher `^(?!(Bash|Agent|Task)$)`
+  (a JavaScript regex, searched, per the hooks reference), so Bash and Agent results, which deliver from their own
+  hooks, do not start a second process. An `async_launched` Agent result delivers too: a lead fanning out calls Agent
+  most. Moving a note before reading it keeps any two hooks from delivering it twice (tested with 16 concurrent
+  deliveries). PostToolUseFailure of other tools is not wired.
+- **No shell fast path.** With no note waiting, `benchbook hook notes` takes p50 35 ms, p95 45 ms (50 runs, Linux
+  filesystem, WSL2), under the 100 ms that would have called for one in `bin/benchbook-hook`.
+- **The spool's lanes.** Re-runs go to their own lane with its own processor and lock (`.verify.lock`); reports
+  and attempts keep `.lock`. Before each re-run the verify lane drains the records lane once under its lock, so
+  everything queued before a request is recorded before it runs, as with one processor; an attempt queued while a
+  re-run runs may now be in the ledger before that re-run reads the implementers' passes (T03), where before it was
+  recorded after. That is the same as a re-run that started a moment later, and a later pass of the same commit is
+  the same evidence. Retries, receipts and dead letters are per entry and unchanged; `hook replay` and token
+  adoption take both locks, verify lane first, the order the verify lane takes them in. Neither lane strands the
+  other's entries (review of PR #6): an attempt written while the verify lane settles finds the records lock held, so
+  the verify lane starts the records processor for it afterwards; and each processor starts the other lane's when
+  entries wait there with none running, so a re-run left by a stopped processor or an older version is taken up by
+  the next hook that starts any processor, as one processor used to.
+- **`[verify] parallel_baseline` is opt-in.** The merge-base run is half of a verify that changed tests, and
+  running it beside the commit's changes no verdict when the two copies share nothing (the mutation table and the
+  test-count tests run both ways). A repository whose checks use a fixed port, a database or a shared directory
+  would get failures from the overlap, which would read as the commit's, so the default stays sequential. The early
+  run is used only when the commit's run counted exactly the same JUnit checks; its thread's commands can be
+  stopped from the main thread (`runner.stop_commands`), so an interrupted verify does not wait for it, and `git
+  worktree` add, remove and prune are serialized within the process. SIGTERM and SIGHUP are trapped for the early
+  run's whole life, not only while a check runs (run_checks restores the handlers it found): a signal while verify
+  waits for it stops the run, removes its worktree and is recorded as the interruption, as a sequential baseline's.
+- **Several re-runs at once: not done.** With lanes and the parallel baseline, eight pieces reporting together get
+  their last verdict after 92 s and the first after 11 s, and attempts are no longer held up. Pieces finish at
+  different times in practice, and concurrent re-runs bring the shared-resource question to every repository, so
+  this waits for a swarm run that shows the queue as the bottleneck.
+- **Completion gate stays opt-in (B3, pending evidence).** docs/code.md now says the lead runs `piece start` per
+  worker. Whether an implementer without one sent a false completion to a merge is read from the boundary pilot's
+  arm F and the B1 live check, after the paid measurements; the gate's default is not changed without that.
+- **Stop hook: not yet.** Whether a lead ends its turn with a verdict still waiting is to be seen in the live check
+  (after the paid measurements end) and arm F's streams; a Stop hook that blocks once is added only if it happens.

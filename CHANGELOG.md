@@ -2,6 +2,138 @@
 
 ## Unreleased: code pack
 
+- The hook spool has two lanes with a processor each: re-runs (`verify-request`) and everything else. A check run or
+  Bash-hook attempt queued while re-runs wait is recorded within about a second instead of after all of them (168 s
+  with eight queued re-runs, `scripts/measure_rerun_queue.py`). Before each re-run the verify lane records what the
+  other lane holds, so an implementer's pass queued before its report is in the ledger when the report's re-run
+  runs, as with one processor. `benchbook hook replay` takes both lanes.
+- `[verify] parallel_baseline = true` runs the merge-base's JUnit checks (the test counts that find a weakening)
+  beside the commit's checks instead of after them: a verify of a piece that changed tests takes about one run of
+  the checks instead of two. Off by default; leave it off when two copies of the checks share a port, a database or
+  another resource.
+- Re-run verdicts reach the lead, and only the lead, within its turn. A hook that fires inside a subagent (Claude Code
+  gives it the lead's `session_id` with an `agent_id`) no longer delivers the session's notes: a worker's Bash result
+  could take a verdict meant for the lead into the worker's context, which in a swarm is where most tool calls are.
+  The notes hook also runs on PostToolUse of every tool other than Bash, Agent and Task (which deliver from their own
+  hooks), and an `async_launched` Agent result delivers what is waiting instead of nothing. The hook names the event
+  that ran (`PostToolUse` or `UserPromptSubmit`). With no note waiting it takes 35 ms (p50; p95 45 ms; 50 runs).
+  The Claude Code plugin is 0.2.1 for the new hook: update it (`claude plugin update benchbook@benchbook`).
+- Out-of-scope findings from a report that recorded no attempt are tagged with the piece the report's commit names,
+  found the way the automatic re-run finds it (`verify_requests.reported_target`), so the piece's `--here` brief
+  shows them (PR #4 issue 3). The brief does not yet count open findings outside its scope.
+- The completion gate (TaskCompleted) holds a task only on a branch that is a live piece (`piece start`) or when
+  `BENCHBOOK_PIECE` is set (PR #4 issue 1). Where nothing is committed to main the lead works on a feature branch,
+  and every to-do of its own session was held as a piece's completion. Behavior change: an implementer working on
+  a branch without `piece start` is no longer gated; set `BENCHBOOK_PIECE` (or start the piece) to keep the gate.
+- The brief (`--here`, session start, pre-compact) marks a verified piece whose commit is not in HEAD's history
+  `· not merged into this branch` instead of `· changed since (0 commits)` (PR #4 issue 2): the lead reading the
+  brief before a merge saw every freshly verified piece as changed. A discarded approach failed at such a commit gets
+  no `test changed since` mark and keeps its place.
+- The automatic re-run of a `DONE <sha>` report runs as `rerun@<host>` with the orchestrator role, and `check
+  verify` without `--agent` keeps `verifier@<host>` with the harness role (PR #4 issue 5). Both used to share
+  `verifier@<host>`, so whichever ran first in a project fixed its role: after a manual `check verify` the
+  re-run passed but decided nothing (`checked: none`). A re-run that passed and decided nothing now says why
+  (`checked: none (recorded by a worker agent; a lead decides)`). Under `BENCHBOOK_TOKEN` nothing changes. A
+  ledger that already registered `verifier@<host>` as an orchestrator keeps it; nothing is migrated.
+- Measured the false completion rate on SWE-bench Verified (bench/results/2026-11-23-swe-verified/): 7 of 39
+  completions failed a re-run of the declared checks, 17.9% (95% CI 9.0% to 32.7%); spec §8 keeps P0 and P1.
+- Measured fan-in (H5) at 8, 16 and 30 requested workers (bench/results/2026-11-25-h5-sweep/), benchbook code
+  `cc5ed08`: the pre-registered gate is not met. C's lead reads less than half of A's report tokens, but its peak
+  context is higher at 8 and 16; at 30 neither C run kept the registered workload.
+- Ran the boundary pilot (bench/results/2026-11-25-boundary-pilot/): boltons, arms A, C and F, one trial each, USD
+  1.28. After a restart F answered 1 of 10 state questions against 6 for A and C, mostly because an edited import line
+  in a test file counts as a weakened test, so the brief never listed three of the four pieces as verified. Ruff skips
+  `bench/results/`, whose published task inputs are kept byte for byte.
+- Review fixes (PR #4). `benchbook uninstall` keeps `.benchbook/` when git cannot say whether it is tracked, and
+  `--purge` removes only a PostgreSQL cluster whose server is confirmed stopped (`benchbook db stop` now fails when
+  it is not). A retried automatic re-run finishes from the attempt its first try recorded instead of running the
+  checks again. STATE.md names its project and ledger, and the session-start fallback uses it only for the same
+  ones and only when the ledger cannot be reached, never after a refusal. A JUnit check that runs fewer tests than at
+  the merge-base is a weakening even when another check runs more (`fewer_tests_checks`). An environment failure
+  needs a pass by one of the piece's implementers under the same check definition (`check_definitions`, `run_by` on
+  check run and Bash hook attempts), and its merge-base run is never read from the cache. The boundary benchmark
+  counts a resumed call's own cost and tokens, not the session's running total.
+- README.md and README.ko.md lead with coding work: what a session gets at each boundary, what "verified" means,
+  the lead's commands and the harness table. The experiment swarm, autoresearch and the circle-packing benchmark
+  follow under "Experiment swarms".
+- CI runs once per change (pull requests and pushes to main, a newer push cancelling the older run), lints once,
+  and tests Python 3.11 and 3.13 on Linux and 3.13 on macOS instead of nine combinations. The wheel smoke test still
+  runs on Linux and macOS, in CI and before every release.
+- The automatic re-run also takes a report from SubagentStop. Claude Code 2.1.330 returns `async_launched` for
+  every Agent call, background or not, so the foreground PostToolUse result never came and no report was re-run.
+  The "re-running" line and the result are delivered as notes at the next hook that can give context (the task
+  notification's UserPromptSubmit follows right after). Compaction's SubagentStop (empty `agent_type`) is never
+  captured or re-run, not even with `BENCHBOOK_HOOK_AGENTS=*` or `[report] agents = ["*"]`.
+- docs/claude-code.md's "Boundary hooks: what Claude Code does" has the column observed on Claude Code 2.1.330, and
+  the Claude Code boundary fixtures are the inputs a real session sent (new: `subagent_stop_background.json`,
+  `subagent_stop_compaction.json`, `user_prompt_submit_task_notification.json`). `scripts/qa_boundary_hooks.sh` no
+  longer passes its prompts as `--allowedTools` values, and it reads the MCP tool prefix after the server connects.
+- The Gemini CLI context answer names its event (`SessionStart`, `AfterTool`) as Gemini's output types declare.
+- Two test expectations brought up to date: the `file:` tag a discarded approach now carries (T06) and the second
+  `init` of the wheel smoke test (T07).
+- Codex, Cursor and Gemini CLI hooks inject the scoped startup brief and deliver notes after tools. OpenCode V2
+  and Pi support the same boundary context and shell recording through project extensions.
+- Added a six-arm boundary benchmark with a model-free dry run and H1–H6 reporting. Circle-packing accepts a
+  worker-count sweep and reports delivered subagent reports and estimated report tokens.
+- Code project status shows piece outcomes, open findings and hook queue health. The brief surfaces recording
+  failures, and `benchbook statusline` reads a compact summary cached by the spool processor.
+- Claude Code's Agent/Task result hook queues an independent check run from a completion report. The next
+  supported hook in that session delivers its result once, with the completion ID and any review requirement.
+- Boundary hooks in the `benchbook` plugin: `benchbook hook session-start` (SessionStart) gives the branch's brief
+  (1,500 tokens, 6,000 characters) as additionalContext and writes it to `.benchbook/STATE.md`, which it gives instead
+  when the ledger does not answer within 5 seconds; `pre-compact` (PreCompact) gives a 1,000-character paragraph of
+  ids and statuses to keep in the compaction summary; `notes` (UserPromptSubmit) delivers notes queued for the
+  session once. `harnesses.context_answer` holds each harness's answer form. docs/claude-code.md, "The boundary hooks".
+- `scripts/qa_boundary_hooks.sh` (MANUAL_QA.md, scenario 5) checks on real sessions what the boundary hooks rely on:
+  SessionStart sources and injected context before and after compaction, PreCompact's input and output, PostToolUse
+  on the Agent tool (foreground and background), repeated `--plugin-dir` and the `benchbook-mcp` tool prefix.
+  `--save-fixtures` replaces the documented fixtures in `tests/fixtures/hooks/` with what it saw.
+- The code brief puts verified completions first, then a new section "Reported done, not re-run" (proposed
+  completions with no evidence, `checked: none`), then discarded approaches, findings and occupied paths. Verified
+  lines say how they were checked (`checked: re-run`, `checked: person`). `brief --here` marks a verified piece whose
+  paths changed since its commit (`changed since (N commits)`, `commit not in this checkout`) and a discarded
+  approach whose test file changed since (`test changed since`, moved to the end); computed when read, never stored.
+  `Ledger.brief` and `compile_brief` take `repo` and `max_chars`; the footer points to `benchbook get <id>`.
+- Two Claude Code plugins: `benchbook` (`integrations/claude-code/`, hooks only, plugin 0.2.0) and `benchbook-mcp`
+  (`integrations/claude-code-mcp/`: the MCP server, the worker subagent, the skills; the lead skill is now
+  `/benchbook-mcp:benchbook-lead` and the worker's tools `mcp__plugin_benchbook-mcp_benchbook__*`). Every hook runs
+  `"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT`, a shim that notes a missing CLI in `missing-cli` (reported
+  by `doctor`) instead of failing.
+- `benchbook install [--harness claude-code|codex|cursor] [--mcp] [--dry-run]` and `benchbook uninstall [--purge]
+  [--dry-run]`. The wheel ships the Codex and Cursor manifests for install to merge.
+- `benchbook init` without `--metric` and `--pack` makes a code project: it proposes the test and lint commands
+  found in pyproject.toml, package.json, a Makefile, go.mod or Cargo.toml as `[checks]` with guard paths and the
+  base branch (asking on a terminal; `--yes` does not ask).
+- `benchbook get <id>` prints at most 400 tokens of text (status, `checked:` label, statement, five links each way, the
+  last three decisions, cut items counted); `--json` is unchanged. Lookups are logged to `lookups.jsonl` in the
+  state directory. Pack.toml `[brief.labels]` names the oracles ("re-run", "person", ...).
+- `benchbook brief --here` scopes the code brief by what the current branch changed since its base (`file:<dir>/`
+  prefixes, at most 20, and `piece:<branch>`). Discarded approaches and completion claims carry the directories their
+  commit changed (`payload.paths`, `file:` tags; the spool's check attempts too), and the brief finds discarded
+  approaches and verified completions by those tags, without a `piece start`.
+- Out-of-scope findings in one line: `범위 밖: ...` (also as a list item, in bold, with a full-width colon) is a
+  finding. `[report] agents` (subagent types or `["*"]`) reads those subagents' reports for findings only, with no
+  `[auto-captured]` note, while `BENCHBOOK_HOOK_AGENTS` is unset. `init --pack code` writes a `[report]` table
+  with `agents = ["*"]`.
+- Environment failures: a failing check that the implementer's own clean run of the commit passed (`via`) is run
+  again at the merge-base (cached per merge-base and check definition in the state directory). When every failing
+  check fails the same way there, the attempt is an environment failure: `run_status` error,
+  `metrics.environment` and `baseline_signature`, no refutes link, no discarded approach.
+- Tests added are not tests weakened: guarded files are split into added (new files, lines only added) and weakened
+  (lines deleted or changed, skip markers, any conftest.py change), and fewer JUnit testcases than at the
+  merge-base is a weakening. `guard_weakened` (plus `guard_weakened_files`, `guard_added_files`, `tests_before`,
+  `tests_after`) replaces `guard_touched` in the all_pass rule, check verify's decision and the PR summary, which
+  now says "added" and "weakened" apart. Older attempts are read by `guard_touched`.
+- `[verify] copy` and `prepare` (config.toml or the pin) prepare check verify's clean worktree: gitignored files are
+  copied from the repository root (names recorded, never content) and a command runs first. A failed preparation
+  runs no check and is recorded as an environment failure (`run_status` error, `metrics.environment`), with no link
+  and no discarded approach.
+- Checks pinned in the ledger: `benchbook check pin [PIECE] [--check NAME=CMD]` and `piece start --check` record the
+  checks `check verify` runs when the merge-base has no committed config.toml (a `note` claim tagged `checks-pin`).
+  Pins by the piece's implementer are ignored; a pin that changed under the work sets `checks_changed`. The attempt
+  carries `checks_source`, `checks_pin` and `checks_sha256`. `init --pack code` adds `.benchbook/` to
+  `.git/info/exclude` when git does not track it, pins the declared checks, and keeps an existing config.toml's
+  tables (it rewrites only the `project` line). docs/code.md, "Checks pinned in the ledger".
 - `benchbook check verify <piece> <commit> [--reported-by NAME] [--report-file F] [--base REF] [--checks a,b]`
   re-runs the checks declared in `.benchbook/config.toml` `[checks]` on a reported commit in a clean worktree. It
   records the completion claim (the implementer's) and the attempt (the verifier's), linked supports/refutes, and
@@ -105,17 +237,15 @@
   entry records a digest of the token it was queued with. A processor or `hook replay` under another token (or
   none) leaves it queued, so one agent can no longer record another's queued reports or runs in its own name.
   Without a token the spool is where it was.
-- The Bash hook records a `junit = true` check that exited 0 only with a JUnit report of that run, named on the
-  command line where the declaration has `{junit}`, in which a test ran and none failed. Without such a report the
-  run is observed as `unrecordable`, and the completion gate asks for `benchbook check run`.
+- A passing `junit = true` check needs an invocation-specific report from `benchbook check run` or
+  `benchbook check verify`. The Bash hook observes a raw exit 0 and records explicit failures. The completion
+  gate also excludes legacy raw Bash JUnit passes from its evidence. Claude Code plugin 0.1.5 drops the
+  `bash-start` hook. The command remains available for older manifests.
 - `heartbeat` and `update_intent` refuse a lease that has run out (`LeaseLost`), so an expired piece is never
   revived next to the piece that took its paths. `piece start` without `--paths` after its lease ran out takes the
   same paths again as a new piece, through the overlap check.
 - After a timeout or an interruption the runner waits for the command's whole process group, not only the shell,
   and sends SIGKILL to what is left after 10 s: a child that ignores SIGTERM no longer outlives the run.
-- The Bash hook takes a JUnit report only if it was modified after the command started (1 s of slack, down from
-  120 s), and only once: a report already read for a recorded run is not this run's. A harness that reports no
-  duration cannot record a passing JUnit check through the hook.
 - `heartbeat` takes the intent lock the overlap check holds and reads the expiry after it, so a renewal can no
   longer commit next to a piece that took the paths meanwhile.
 - A partial pass gets no `supports` link: it no longer counts as a re-run in the false completion rate. A partial
@@ -125,16 +255,13 @@
 - `hook replay` under an agent's new token (after `agent add --rotate`) adopts the entries queued under its
   earlier token, when a processor had confirmed that token's agent (`writer.info` in the spool).
 - The Bash hook matches a check declared with a bare `--junitxml {junit}`: the word before the option was lost.
-- New `benchbook hook bash-start` (PreToolUse on Bash; plugin 0.1.4 and the manual hooks add it): it notes a
-  JUnit report's state before a declared check runs, and the Bash hook records a passing JUnit run only when the
-  report differs from that note afterwards. No clock is compared any more. Reading a report and marking it used
-  happen under one lock. Harnesses other than Claude Code cannot record a passing JUnit run through the hook.
 - A new piece and a renewal count their lease from the database's clock after the intent lock, and the overlap
   checks read expiry with the same clock.
-- `piece start` without `--paths` no longer restarts a piece that `piece done` released while it was renewing it.
-- `hook replay` reports entries queued under a token no processor ever confirmed as `held` (and exits non-zero),
-  instead of a clean, empty replay. Adopting an earlier token's entries is idempotent: a retry after a failed
-  removal of the original records nothing twice.
+- Piece start, renewal, and release use one project transaction for state lookup and mutation. After explicit
+  release, a fresh start requires `--paths`.
+- `hook replay` reports entries queued under a token no processor ever confirmed as `held` and exits nonzero.
+  Queued checks reuse their experiment ID across retries and token rotations. A retry after a committed write
+  returns the existing experiment, including when local queue cleanup failed.
 
 ## Unreleased: core for the verification ledger
 

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 from . import config
 from .config import env
@@ -114,11 +115,14 @@ def _spool_dir() -> Path:
     # Different database targets must never pick up one another's pending writes, nor different tokens on one target
     # (writer_identity). The key is built from the values, not the variable names, so entries queued under ASSAY_*
     # variables are found; without a token it is the key spools had before tokens.
+    return _state_dir() / "spool" / _spool_name(writer_identity())
+
+
+def _spool_name(writer: str | None) -> str:
     parts = _target_parts()
-    if (writer := writer_identity()) is not None:
+    if writer is not None:
         parts.append({"writer": writer})
-    key = hashlib.sha256(json.dumps(parts).encode()).hexdigest()
-    return _state_dir() / "spool" / key
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 
 def _read_info(path: Path) -> dict[str, Any] | None:
@@ -249,10 +253,22 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
             from .harnesses import report_input
 
             data = report_input(harness, data)
+        if data.get("hook_event_name") == "SubagentStop" and data.get("agent_type") == "":
+            # Claude Code runs compaction as a subagent whose SubagentStop has an empty agent_type (observed on
+            # 2.1.330, scripts/qa_boundary_hooks.sh). Its summary repeats the conversation and is nobody's report,
+            # so not even BENCHBOOK_HOOK_AGENTS=* or [report] agents = ["*"] captures it.
+            return None
+        findings_only = False
         if not is_worker(_agent_type(data)):
             # The plugin hook fires for every subagent; BENCHBOOK_HOOK_AGENTS decides which ones are captured. Leave
-            # before reading config, spooling or importing anything heavier.
-            return None
+            # before reading config, spooling or importing anything heavier. Without it, [report] agents may take a
+            # subagent's report for its findings only (T05).
+            if env("HOOK_AGENTS") is not None or event not in REPORT_EVENTS:
+                return None
+            cfg = config.load(Path(data.get("cwd") or os.getcwd()))
+            if not cfg.out_of_scope_heading or not _listed(_agent_type(data), cfg.report_agents):
+                return None
+            findings_only = True
         cwd = Path(data.get("cwd") or os.getcwd())
         cfg = config.load(cwd)
         project = cfg.project
@@ -261,6 +277,8 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
             # The capture decision is made here, under the environment Claude Code ran the hook with. A later
             # `benchbook hook replay` from a shell with another BENCHBOOK_HOOK_AGENTS must not undo it.
             entry = {"event": event, "project": project, "data": data, "spooled_at": time.time(), "accepted": True}
+            if findings_only:
+                entry["findings_only"] = True
             if cfg.out_of_scope_heading:  # read with the project, so a replay looks for the section this run had
                 entry["out_of_scope_heading"] = cfg.out_of_scope_heading
             _write_spool(spool, entry)
@@ -282,19 +300,28 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
     return None
 
 
-def start_processor(spool: Path) -> None:
-    """Start the detached processor for this spool unless one is draining it already (check run and the Bash hook
-    queue attempts here too)."""
-    if not _locked(spool):
-        subprocess.Popen([sys.executable, "-m", "benchbook.hooks", str(spool)], stdin=subprocess.DEVNULL,
+# A spool has two lanes, each drained by its own detached processor under its own lock: re-runs (verify-request,
+# tens of seconds each) and everything else (reports, check runs, Bash hook attempts, a few milliseconds each), so
+# a worker's attempt is not recorded only after every queued re-run. Before each re-run the verify lane settles the
+# records lane, so whatever was queued before a request is in the ledger when it runs, as with one processor.
+RECORDS, VERIFY = "records", "verify"
+LANES = (RECORDS, VERIFY)
+_LOCK_FILES = {RECORDS: ".lock", VERIFY: ".verify.lock"}
+
+
+def start_processor(spool: Path, lane: str = RECORDS) -> None:
+    """Start the detached processor for this spool's lane unless one is draining it already (check run and the Bash
+    hook queue attempts in the records lane, the agent-result hook re-runs in the verify lane)."""
+    if not _locked(spool, lane):
+        subprocess.Popen([sys.executable, "-m", "benchbook.hooks", str(spool), lane], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
 
 
 @contextmanager
-def _lock(spool: Path, blocking: bool) -> Iterator[bool]:
+def _lock(spool: Path, blocking: bool, lane: str = RECORDS) -> Iterator[bool]:
     import fcntl
 
-    with (spool / ".lock").open("a") as f:
+    with (spool / _LOCK_FILES[lane]).open("a") as f:
         try:
             fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
@@ -306,11 +333,27 @@ def _lock(spool: Path, blocking: bool) -> Iterator[bool]:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def _locked(spool: Path) -> bool:
-    """Whether a processor is draining this spool now. It rescans after releasing the lock, so it sees an entry
-    written before this check."""
-    with _lock(spool, blocking=False) as got:
+def _locked(spool: Path, lane: str = RECORDS) -> bool:
+    """Whether a processor is draining this lane of the spool now. It rescans after releasing the lock, so it sees an
+    entry written before this check."""
+    with _lock(spool, blocking=False, lane=lane) as got:
         return not got
+
+
+@contextmanager
+def _all_lanes(spool: Path, blocking: bool) -> Iterator[bool]:
+    """Both lanes' locks, the verify lane's first (the order the verify lane takes them in, so they never deadlock).
+    Without blocking, False when either processor is running."""
+    with _lock(spool, blocking, VERIFY) as got_verify, _lock(spool, blocking, RECORDS) as got_records:
+        yield got_verify and got_records
+
+
+def _lane(path: Path) -> str:
+    """The lane an entry belongs to; one that cannot be read goes to the records lane, which quarantines it."""
+    try:
+        return VERIFY if json.loads(path.read_text(encoding="utf-8")).get("event") == "verify-request" else RECORDS
+    except (OSError, ValueError, AttributeError):
+        return RECORDS
 
 
 def _write_spool(spool: Path, entry: dict[str, Any], name: str | None = None) -> None:
@@ -319,9 +362,12 @@ def _write_spool(spool: Path, entry: dict[str, Any], name: str | None = None) ->
     spool also gets its WRITER_INFO (target and writer, no agent yet), so a replay under a later token can tell
     whose database this queue is for even if the ledger was never reached."""
     writer = writer_identity()
-    entry = {**entry, "writer": writer}
+    entry = {**entry, "writer": writer, "receipt_id": entry.get("receipt_id") or uuid4().hex}
     if writer is not None and not (spool / WRITER_INFO).exists():
-        _write_info(spool / WRITER_INFO, {"target": _target_key(), "writer": writer, "agents": {}})
+        try:
+            _write_info(spool / WRITER_INFO, {"target": _target_key(), "writer": writer, "agents": {}}, create=True)
+        except OSError as e:
+            log(f"could not describe hook spool {spool}: {e}")
     with tempfile.NamedTemporaryFile(mode="w", dir=spool, encoding="utf-8", delete=False) as f:
         path = Path(f.name)
         try:
@@ -333,10 +379,22 @@ def _write_spool(spool: Path, entry: dict[str, Any], name: str | None = None) ->
             path.unlink(missing_ok=True)
 
 
-def _write_info(path: Path, info: dict[str, Any]) -> None:
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(info, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+def _write_info(path: Path, info: dict[str, Any], *, create: bool = False) -> None:
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, encoding="utf-8", delete=False) as f:
+        tmp = Path(f.name)
+        try:
+            json.dump(info, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+            if create:
+                try:
+                    os.link(tmp, path)
+                except FileExistsError:
+                    pass  # a processor may already have confirmed the agent
+            else:
+                tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def extract_text(data: dict[str, Any]) -> str:
@@ -400,6 +458,16 @@ def is_worker(agent_type: str | None, *, require_type: bool = True) -> bool:
     if not agent_type:
         return not require_type
     return agent_type in types or agent_type.rsplit(":", 1)[-1] in types
+
+
+REPORT_EVENTS = ("subagent-stop", "subagent-handback")
+
+
+def _listed(agent_type: str | None, agents: list[str]) -> bool:
+    """[report] agents: "*" lists every subagent, typed or not; a type matches with or without its plugin prefix."""
+    if "*" in agents:
+        return True
+    return bool(agent_type) and (agent_type in agents or str(agent_type).rsplit(":", 1)[-1] in agents)
 
 
 def _is_handback(data: dict[str, Any]) -> bool:
@@ -619,7 +687,8 @@ def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: dateti
 
 
 def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project: str | None = None,
-            fired_at: float | None = None, accepted: bool = False, out_of_scope_heading: str | None = None) -> str:
+            fired_at: float | None = None, accepted: bool = False, out_of_scope_heading: str | None = None,
+            findings_only: bool = False) -> str:
     """Returns 'skipped:<reason>', 'cited' or 'captured:<claim id>'. accepted: the hook entry point already decided
     to capture this event (spool entries record it), so the current BENCHBOOK_HOOK_AGENTS is not consulted again.
     out_of_scope_heading: [report] out_of_scope_heading as the hook read it; without a project the config of the
@@ -658,6 +727,8 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     if out_of_scope_heading and lg.pack.name == "code":
         _capture_findings(lg, event, text, out_of_scope_heading, data, when,
                           {k: v for k, v in source.items() if v})
+    if findings_only:  # taken by [report] agents, not as a worker: no note of the report itself (T05)
+        return "findings-only"
     if _cites_own_record(lg, text, data, when):
         return "cited"
     head = " ".join(text.split())[:STATEMENT_HEAD]
@@ -678,9 +749,21 @@ def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[s
     if not findings.parse(text, heading):
         return  # no section, or nothing in it: no transcript read, no writes
     cwd = data.get("cwd")
-    r = findings.capture(lg, text, heading, source=source, piece=_run_piece(lg, data, fired_at),
+    r = findings.capture(lg, text, heading, source=source,
+                         piece=_run_piece(lg, data, fired_at) or _reported_piece(cwd, text),
                          root=str(cwd) if cwd else None)
     log(f"{event}: out-of-scope findings: {r.findings} ({r.new} new) {' '.join(r.claims)}")
+
+
+def _reported_piece(cwd: str | None, text: str) -> str | None:
+    """The piece the report's own commit names (verify_requests.reported_target), for a subagent that recorded no
+    attempt: the same piece the automatic re-run of this report verifies."""
+    from .check_run import find_repo
+    from .verify_requests import reported_target
+
+    repo = find_repo(Path(cwd)) if cwd else None
+    target = reported_target(repo, text) if repo is not None else None
+    return target[1] if target is not None else None
 
 
 def _run_piece(lg: Any, data: dict[str, Any], fired_at: datetime) -> str | None:
@@ -728,6 +811,18 @@ def _bury(path: Path, reason: str) -> None:
     log(f"hook entry {path.name} moved to {dead}: {reason}")
 
 
+def _entry_receipt(path: Path, entry: dict[str, Any]) -> UUID:
+    if (receipt := entry.get("receipt_id")) is not None:
+        if not isinstance(receipt, str):
+            raise ValueError("invalid hook receipt")
+        return UUID(receipt)
+    if path.name.startswith(ADOPTED_PREFIX):
+        return UUID(path.stem.removeprefix(ADOPTED_PREFIX))
+    # Older entries have only a file name. Preserve the id earlier versions used when moving that file.
+    spool = path.parent.parent if path.parent.name == "dead" else path.parent
+    return UUID(hex=hashlib.sha256(f"{spool.name}/{path.name}".encode()).hexdigest()[:32])
+
+
 def process_file(path: Path) -> str:
     """'ok:<process result>', 'dead:<reason>' (moved to dead/ or quarantined), 'retry:<reason>' (left queued) or
     'held:<reason>' (left queued, not retried: another identity queued it)."""
@@ -762,6 +857,13 @@ def process_file(path: Path) -> str:
         return ("held:queued under " + ("another BENCHBOOK_TOKEN" if writer else "no BENCHBOOK_TOKEN")
                 + "; replay it with the environment it was queued in (after a token rotation, `benchbook hook "
                 "replay` with the agent's new token adopts it)")
+    adopted_id = path.stem.removeprefix(ADOPTED_PREFIX) if path.name.startswith(ADOPTED_PREFIX) else None
+    if adopted_id is not None and adopted_id in _adopted_done(path.parent):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            return f"retry:recorded, but could not remove {path.name}: {e}"
+        return "ok:skipped:already recorded"
     if not accepted and not is_worker(agent_type, require_type=False):
         # Queued by a build that did not record its decision: the BENCHBOOK_HOOK_AGENTS that accepted it may differ
         # from the current one. Keep it rather than drop it, so a replay with the original setting captures it.
@@ -777,19 +879,29 @@ def process_file(path: Path) -> str:
         if event in ATTEMPT_EVENTS:  # a check run (check run, the Bash hook): an attempt, not a report
             from .attempts import record_spooled
 
-            result = record_spooled(event, data, spooled["project"])
+            result = record_spooled(event, data, spooled["project"], _entry_receipt(path, spooled))
+        elif event == "verify-request":
+            from .verify_requests import process as verify_request
+
+            spool = path.parent.parent if path.parent.name == "dead" else path.parent
+            result = verify_request(data, spooled["project"], _entry_receipt(path, spooled), spool)
         else:
             heading = spooled.get("out_of_scope_heading")
             result = process(event, data, spooled.get("cwd"), project=spooled.get("project"),
                              fired_at=spooled.get("spooled_at"), accepted=accepted,
-                             out_of_scope_heading=heading if isinstance(heading, str) else None)
+                             out_of_scope_heading=heading if isinstance(heading, str) else None,
+                             findings_only=spooled.get("findings_only") is True)
         log(f"{event}: {result}")
-        if path.name.startswith(ADOPTED_PREFIX):  # before the removal: _adopt must never copy it again
+        if adopted_id is not None:  # before the removal: _adopt must never copy it again
             with (path.parent / ADOPTED_DONE).open("a", encoding="utf-8") as f:
-                f.write(path.name[len(ADOPTED_PREFIX):-len(".json")] + "\n")
+                f.write(adopted_id + "\n")
                 f.flush()
                 os.fsync(f.fileno())
         path.unlink(missing_ok=True)
+        if result.startswith(("captured", "recorded")) and isinstance(project := spooled.get("project"), str):
+            from .code_status import refresh_cache
+
+            refresh_cache(path.parent.parent if path.parent.name == "dead" else path.parent, project)
     except Exception as e:  # noqa: BLE001
         reason = f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
         if _permanent(e):
@@ -804,7 +916,8 @@ def process_file(path: Path) -> str:
     return f"ok:{result}"
 
 
-def _pending(spool: Path) -> list[Path]:
+def _pending(spool: Path, lane: str | None = None) -> list[Path]:
+    """The queued entries, of one lane or of both."""
     # Handbacks first: they mark their run, so its SubagentStop closing text is not captured as well.
     def key(p: Path) -> tuple[int, float]:
         try:
@@ -813,21 +926,43 @@ def _pending(spool: Path) -> list[Path]:
         except (OSError, UnicodeError):
             return (1, 0.0)
 
-    return sorted(spool.glob("*.json"), key=key)
+    paths = spool.glob("*.json")
+    return sorted(paths if lane is None else (p for p in paths if _lane(p) == lane), key=key)
+
+
+def _settle_records(spool: Path) -> None:
+    """Record what waits in the records lane (one pass, under its lock) before a re-run starts. An entry written
+    while the lock was held found it held and started no processor: one is started for it, as replay's rescan does,
+    and the re-run goes on (that entry came after the request)."""
+    with _lock(spool, blocking=True, lane=RECORDS):
+        seen = _drain(spool, (), ReplaySummary(), lane=RECORDS)
+    if any(p.name not in seen for p in _pending(spool, RECORDS)):
+        start_processor(spool, RECORDS)
+
+
+def _start_waiting_lanes(spool: Path, lane: str) -> None:
+    """Start the other lane's processor when entries wait there with none running: a re-run left by a stopped
+    processor or an older version, or a retry, would otherwise wait for the next request of its own kind (one
+    processor used to take everything whenever any hook started it)."""
+    other = VERIFY if lane == RECORDS else RECORDS
+    if _pending(spool, other) and not _locked(spool, other):
+        start_processor(spool, other)
 
 
 def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
-           attempted: Collection[str] = ()) -> set[str]:
+           attempted: Collection[str] = (), lane: str | None = None) -> set[str]:
     seen: set[str] = set()
     left: list[tuple[Path, str]] = []
     for delay in (0, *delays):
         if delay:
             time.sleep(delay)
         left = []  # the last pass decides what is still queued
-        for path in _pending(spool):
+        for path in _pending(spool, lane):
             if path.name in attempted:
                 continue
             seen.add(path.name)
+            if lane == VERIFY:
+                _settle_records(spool)
             try:
                 outcome = process_file(path)
             except Exception as e:  # noqa: BLE001 (one entry must not stop the others)
@@ -844,15 +979,16 @@ def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
     return seen
 
 
-def replay(spool: Path) -> None:
-    """Background processor: drain with retries, unless another processor already holds the spool."""
+def replay(spool: Path, lane: str = RECORDS) -> None:
+    """Background processor of one lane: drain with retries, unless another processor already holds that lane."""
+    _start_waiting_lanes(spool, lane)
     while True:
-        with _lock(spool, blocking=False) as got:
+        with _lock(spool, blocking=False, lane=lane) as got:
             if not got:
                 return
-            seen = _drain(spool, RETRY_DELAYS, ReplaySummary())
+            seen = _drain(spool, RETRY_DELAYS, ReplaySummary(), lane=lane)
         # an entry written while the lock was held got no processor of its own
-        if not any(p.name not in seen for p in spool.glob("*.json")):
+        if not any(p.name not in seen for p in _pending(spool, lane)):
             return
 
 
@@ -860,7 +996,7 @@ def replay_now(spool: Path) -> ReplaySummary:
     """`benchbook hook replay`: try each pending or dead report once in the foreground."""
     dead = spool / "dead"
     summary = ReplaySummary()
-    with _lock(spool, blocking=True):
+    with _all_lanes(spool, blocking=True):
         _adopt(spool, summary)
         if dead.is_dir():
             for p in dead.glob("*.json"):
@@ -869,7 +1005,7 @@ def replay_now(spool: Path) -> ReplaySummary:
         attempted = _drain(spool, (), summary)
     # A hook that enqueued after the snapshot may have seen our lock and skipped starting a processor.
     while any(p.name not in attempted for p in spool.glob("*.json")):
-        with _lock(spool, blocking=True):
+        with _all_lanes(spool, blocking=True):
             attempted.update(_drain(spool, (), summary, attempted))
     log(f"replay {spool}: {summary}")  # doctor reads which spool a clean replay settled
     return summary
@@ -895,15 +1031,17 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
     other agents and of other database targets stay where they are; entries whose token no processor ever
     confirmed stay too, and are counted as held, with the reason.
 
-    A move is idempotent: the copy's name is fixed by the original (adopted-<id>.json), a copy is written only when
-    neither it nor a record of its processing (ADOPTED_DONE) exists, and the original is removed after. A retry after
-    a failed removal therefore removes the original and copies nothing. The old spool's lock is held meanwhile, so
-    its own processor does not move the same files."""
+    The copy keeps its original receipt as its file name (adopted-<id>.json) across rotations. If the copy already
+    exists or is marked as done, only the original is removed. The old spool's lock is held meanwhile, so its own
+    processor does not move the same files."""
     me = writer_identity()
     if me is None or not spool.parent.is_dir():
         return
+    from .errors import InvalidAgentToken
+
     target = _target_key()
     current: dict[str, str | None] = {}
+    unavailable: dict[str, str] = {}
     done = _adopted_done(spool)
 
     def agent_in(project: str) -> str | None:
@@ -914,27 +1052,44 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
                 lg = Ledger.open(project=project)  # the current token's agent, or an error
                 current[project] = lg.agent
                 remember_writer(project, lg.agent)
+            except InvalidAgentToken:
+                # A token belongs to one project. Other projects' queues on this DB are not ours to adopt.
+                current[project] = None
             except Exception as e:  # noqa: BLE001 - not confirmed, so nothing is moved
-                log(f"replay: cannot confirm this token's agent in {project}: {type(e).__name__}: {e}")
+                unavailable[project] = type(e).__name__
                 current[project] = None
         return current[project]
 
     for old in sorted(p for p in spool.parent.iterdir() if p.is_dir() and p != spool):
-        info = _read_info(old / WRITER_INFO)
-        if info is None or info["target"] != target or info["writer"] == me:
+        if old.name == target:  # the owner spool has no token
             continue
-        with _lock(old, blocking=False) as got:
+        info = _read_info(old / WRITER_INFO)
+        if info is not None and (info["target"] != target or info["writer"] == me):
+            continue
+        with _all_lanes(old, blocking=False) as got:
             if not got:
                 summary.errors.append(f"{old.name}: its processor is running; entries queued there under an earlier "
                                       "token were not looked at (run replay again)")
                 continue
+            info = _read_info(old / WRITER_INFO)
+            if info is not None and (info["target"] != target or info["writer"] == me):
+                continue
             dead = old / "dead"
             unconfirmed = 0
+            old_done = _adopted_done(old)
             for path in [*old.glob("*.json"), *(dead.glob("*.json") if dead.is_dir() else [])]:
                 try:
                     entry = json.loads(path.read_text(encoding="utf-8"))
                     project = entry["project"]
+                    if not isinstance(project, str):
+                        continue
+                    receipt = _entry_receipt(path, entry)
                 except (OSError, ValueError, KeyError, TypeError):
+                    continue
+                if info is None:
+                    old_writer = entry.get("writer")
+                    if isinstance(old_writer, str) and old_writer != me and old.name == _spool_name(old_writer):
+                        unconfirmed += 1
                     continue
                 if entry.get("writer") != info["writer"]:
                     continue  # not queued under the token that spool belongs to
@@ -942,18 +1097,22 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
                 if not isinstance(known, str):
                     unconfirmed += 1
                     continue
-                if agent_in(project) != known:
-                    continue  # another agent's
-                mid = hashlib.sha256(f"{old.name}/{path.name}".encode()).hexdigest()[:32]
+                agent = agent_in(project)
+                if project in unavailable:
+                    summary.queued += 1
+                if agent != known:
+                    continue  # another agent's, or identity could not be checked
+                mid = receipt.hex
                 name = f"{ADOPTED_PREFIX}{mid}.json"
-                if mid not in done and not _copy_exists(spool, name):
-                    entry.pop("writer", None)
+                if mid not in done and mid not in old_done and not _copy_exists(spool, name):
+                    entry["receipt_id"] = mid
                     _write_spool(spool, entry, name=name)  # bound to the current token
                     summary.adopted += 1
                     log(f"replay: adopted {path.name} from {old.name} as {name} ({known} in {project})")
                 try:
                     path.unlink(missing_ok=True)
                 except OSError as e:
+                    summary.queued += 1
                     summary.errors.append(f"{old.name}/{path.name}: adopted, but the original could not be removed "
                                           f"({e}); the next replay removes it and copies nothing")
         if unconfirmed:
@@ -963,11 +1122,14 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
                 "this database, which no processor ever confirmed as an agent (the ledger was never reached with "
                 f"it); held there, not recorded. If it was this agent's token before a rotation, these are its "
                 f"reports: record them by hand from {old}")
+    for project, reason in unavailable.items():
+        summary.errors.append(f"could not confirm the current token's agent in {project} ({reason}); "
+                              "earlier entries are still queued")
 
 
 if __name__ == "__main__":
     path = Path(sys.argv[1])
     if path.is_dir():
-        replay(path)
+        replay(path, sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in LANES else RECORDS)
     else:
         print(process_file(path))

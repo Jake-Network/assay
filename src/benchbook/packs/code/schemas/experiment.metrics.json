@@ -50,6 +50,75 @@
     },
     "checks_changed": {
       "type": "boolean"
+    },
+    "prepared": {
+      "description": "What the verification worktree got before the checks ([verify]): the names of the copied files and whether prepare ran. Never their content.",
+      "type": "object",
+      "properties": {
+        "copied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100
+        },
+        "prepare": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "description": "The run says nothing about the commit: the worktree could not be prepared, or every failing check failed the same way at the merge-base. run_status is error.",
+      "type": "boolean"
+    },
+    "guard_weakened": {
+      "description": "A guarded file was weakened (lines deleted or changed, a skip marker added, a conftest.py changed) or a JUnit check ran fewer tests than it did at the merge-base (fewer_tests_checks). Tests only added are not.",
+      "type": "boolean"
+    },
+    "guard_weakened_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100
+    },
+    "guard_added_files": {
+      "description": "Guarded files that were added or only appended to.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100
+    },
+    "tests_before": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tests_after": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "fewer_tests_checks": {
+      "description": "The JUnit checks that ran fewer tests than at the merge-base, each compared with its own run there (tests_before and tests_after are the sums).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000
+    },
+    "check_definitions": {
+      "description": "An implementer's own run (via): the hash of each check's definition that ran (cmd, junit, timeout). check verify counts the pass only under the same definition.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "run_by": {
+      "description": "An implementer's own run (via): the agent, or the agent type the Bash hook saw, that ran it.",
+      "type": "string",
+      "maxLength": 100
     }
   },
   "additionalProperties": {

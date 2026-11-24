@@ -225,6 +225,7 @@ class Sim:
         metrics = RunMetrics(self.mode, self.run, len(evals), duplicate_ratio(evals), max(lost, 0), self.lead_ctx_max,
                              self.tokens, curve[-1][1] if curve else None, curve)
         metrics.usage_check = self.instrument()
+        metrics.lead_report_tokens, metrics.delivered_worker_reports = real.worker_reports(real._read_stream(self.out))
         return metrics
 
     def instrument(self) -> dict[str, Any]:

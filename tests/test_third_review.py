@@ -1,6 +1,5 @@
 """The holes a third review reproduced in the fixes of the second (tests/test_second_review.py), each closed:
 
-1. The Bash hook took a JUnit report written up to 120 s before the command started for this run's.
 2. A heartbeat that began before its lease ran out committed after another piece had taken the paths: two live
    leases on the same paths.
 3. A partial pass still linked "supports" to the completion, so it counted as a re-run in the false completion rate.
@@ -11,7 +10,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 import time
@@ -22,68 +20,13 @@ import psycopg
 import pytest
 
 from benchbook import checks, hooks, identity, pieces
-from benchbook.check_hooks import JUNIT_USED, junit_outcome, mark_report_used, match, remember_before
+from benchbook.check_hooks import match
 from benchbook.errors import BenchbookError, LeaseLost
-from tests.test_check_hooks import fixture, hook, observed
-from tests.test_check_run import cli_env, make_checkout, wait_attempts
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok
-from tests.test_second_review import JUNIT_CONFIG, PASSING_XML, PY, TWO_CHECKS, _capture_entry
+from tests.test_second_review import JUNIT_CONFIG, PY, TWO_CHECKS, _capture_entry
 from tests.writer import as_writer
 
 DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
-
-
-# ------------------------------------------------------------------------------------------- 1. stale reports
-
-
-def _junit_repo(tmp_path: Path, cmd_tail: str = "--junitxml={{junit}}") -> Path:
-    (tmp_path / ".benchbook").mkdir(parents=True)
-    cfg = JUNIT_CONFIG.format(project="p").replace("--junitxml={junit}", cmd_tail.replace("{{junit}}", "{junit}"))
-    (tmp_path / ".benchbook" / "config.toml").write_text(cfg)
-    return tmp_path
-
-
-def test_a_report_counts_for_one_run_only(tmp_path: Path) -> None:
-    repo = _junit_repo(tmp_path)
-    found = match(f"{PY} -m pytest -q tests --junitxml=r.xml", repo)
-    assert found is not None
-    remember_before(repo, "toolu_1", repo / "r.xml")
-    (repo / "r.xml").write_text(PASSING_XML)
-    fingerprint = junit_outcome(found, "toolu_1", repo)[3]
-    assert fingerprint is not None
-    mark_report_used(repo, fingerprint)
-    assert (repo / JUNIT_USED).exists()
-    os.utime(repo / "r.xml", ns=(1, 1))  # a different file state, so before and after differ
-    remember_before(repo, "toolu_2", repo / "r.xml")
-    os.utime(repo / "r.xml", ns=(2, 2))
-    st = (repo / "r.xml").stat()
-    mark_report_used(repo, json.dumps([str(repo / "r.xml"), st.st_ino, st.st_size, st.st_mtime_ns]))
-    assert "read for an earlier run" in junit_outcome(found, "toolu_2", repo)[2]
-
-
-def test_the_hook_records_a_report_once(db_url: str, tmp_path: Path) -> None:
-    from benchbook import Ledger
-    from tests.conftest import make_project
-
-    project = make_project(db_url, metric="checks_passed", direction="max", pack="code",
-                           settings={"partition_key": "piece"})
-    lg = Ledger.open(project=project, agent="lead", database_url=db_url)
-    repo = make_checkout(tmp_path / "repo", project, cfg=JUNIT_CONFIG.format(project=project))
-    env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
-    report = tmp_path / "report.xml"
-    data = fixture("post_tool_use_bash.json", repo, f"{PY} -m pytest -q tests --junitxml={report}")
-    assert hook("bash-start", data, env, repo).returncode == 0
-    report.write_text(PASSING_XML)
-    assert hook("bash-result", data, env, repo).returncode == 0
-    wait_attempts(lg, 1)
-    again = {**data, "tool_use_id": "toolu_again"}  # the same command again; it writes nothing this time
-    assert hook("bash-start", again, env, repo).returncode == 0
-    assert hook("bash-result", again, env, repo).returncode == 0
-    kinds = [o["kind"] for o in observed(tmp_path)]
-    assert kinds == ["direct", "unrecordable"]
-    assert "did not write the JUnit report" in observed(tmp_path)[1]["reason"]
-    time.sleep(1)
-    assert len(wait_attempts(lg, 2, timeout=2)) == 1
 
 
 # ------------------------------------------------------------------------------------------- 2. heartbeat and the lock
@@ -246,9 +189,11 @@ def test_entries_no_processor_confirmed_stay_where_they_are(db_url: str, tmp_pat
 
 
 def test_a_bare_junit_word_keeps_the_words_before_it(tmp_path: Path) -> None:
-    repo = _junit_repo(tmp_path, "--junitxml {{junit}}")
-    found = match(f"{PY} -m pytest -q tests --junitxml out/r.xml", repo)
-    assert found is not None and found.kind == "direct" and found.report == "out/r.xml"
-    bare = match(f"{PY} -m pytest -q tests", repo)
-    assert bare is not None and bare.kind == "direct" and bare.report is None
-    assert match(f"{PY} -m pytest -q --junitxml out/r.xml", repo) is None  # "tests" is part of the check
+    (tmp_path / ".benchbook").mkdir()
+    cfg = JUNIT_CONFIG.format(project="p").replace("--junitxml={junit}", "--junitxml {junit}")
+    (tmp_path / ".benchbook" / "config.toml").write_text(cfg)
+    found = match(f"{PY} -m pytest -q tests --junitxml out/r.xml", tmp_path)
+    assert found is not None and found.kind == "direct" and found.check == "unit" and found.junit
+    bare = match(f"{PY} -m pytest -q tests", tmp_path)
+    assert bare is not None and bare.kind == "direct" and bare.check == "unit" and bare.junit
+    assert match(f"{PY} -m pytest -q --junitxml out/r.xml", tmp_path) is None  # "tests" is part of the check

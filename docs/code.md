@@ -12,6 +12,7 @@ integration step.
 ## Set up
 
 ```bash
+benchbook init                    # in a git repository, no --metric: the code pack, with the checks it finds proposed
 benchbook init --pack code        # same as --pack code --metric checks_passed --direction max
 ```
 
@@ -53,6 +54,29 @@ is a conftest.py at any depth, the root included). Without `[guard] paths` the t
 
 ## The lead's line
 
+With the Claude Code hook plugin, a coding agent (foreground, or in the background as Claude Code runs every Agent
+call by default) can report its commit with a final `DONE <sha>`
+line, a `commit: <sha>` or `커밋: <sha>` line, or a single unambiguous full SHA. Benchbook takes the piece
+from the commit's `Benchbook-Piece:` trailer, the report's `piece:` line, or a unique local branch pointing to
+that commit, in that order. The processor runs the same declared checks in a clean worktree and sends the
+result back to the parent session: to the lead, after its next tool result, never to a subagent whose tool call
+happens to come first. A completion that needs human review includes that information in the note.
+
+### In a swarm
+
+- Before launching each worker, the lead runs `benchbook piece start <branch> --paths ...` for it. That occupies the
+  paths and turns the completion gate on for the branch; a branch with no live piece is not gated (Path occupancy,
+  below). Tell each worker its branch, and to end its report with `DONE <full sha>`.
+- Each `DONE` queues one re-run. Re-runs run one at a time per database and writer, in their own lane of the hook
+  spool: a worker's `check run` or Bash-hook attempt is recorded within about a second even while re-runs are
+  queued (it used to wait behind all of them: 168 s with eight queued). The verdicts arrive one per re-run: with
+  eight pieces reporting at once and a check suite of about 11 s, the first came after 23 s and the last after 183 s,
+  or 11 s and 92 s with `[verify] parallel_baseline` (`scripts/measure_rerun_queue.py`). With 30 pieces at once
+  the last would take about 30 re-runs; pieces rarely finish together, but a lead should not wait for every verdict
+  before merging the first ones.
+- Merge a piece after its verdict line (`re-run passed`, `tests not weakened`, `checked: re-run`), not after its
+  report.
+
 In the integration step, for each piece an implementer reported done:
 
 ```bash
@@ -91,6 +115,8 @@ What it does:
 
 The verifier is `--agent` or `BENCHBOOK_AGENT` when set (with `BENCHBOOK_TOKEN`, the token's agent), else
 `verifier@<host>` (registered with the harness role). It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
+The hook's automatic re-run of a reported `DONE <sha>` runs as another name, `rerun@<host>` (registered with the
+orchestrator role), or as the token's agent under `BENCHBOOK_TOKEN`.
 
 Verifying the same commit again is recorded too (the pack's `dedup_mode = "notify"`): the new attempt names the
 first one in `duplicate_of`, and its link goes to the same completion claim.
@@ -117,7 +143,10 @@ src/app/modules/media/* (both match src/app/modules/media/upload.py): piece medi
 
 **A piece is a task.** `piece start` creates a worker intent (the same mechanism the ml-research pack uses to
 occupy knobs): a task tagged `intent`, `piece` and `piece:<name>`, held by the agent that ran the command, with
-the spec `{"piece", "paths", "declared"}`. No table, status or queue is added.
+the spec `{"piece", "paths", "declared"}`. No table, status or queue is added. While it is live, its branch is a
+piece's checkout for the Claude Code completion gate (docs/claude-code.md, `benchbook hook task-completed`): a
+task completed there needs a passing run of every declared check at HEAD. A branch with no live piece is not gated,
+so a lead on its own feature branch completes its to-do items freely.
 
 **What a piece occupies.** Globs are read as in `[guard]`, from the repository root. Each is expanded against
 `git ls-files`: the tracked files it matches go into `paths` (escaped, so `app/[id]/page.tsx` stays that one
@@ -148,6 +177,8 @@ reserve a file you will create, name it (or a glob that matches no tracked file 
   `piece start <piece>` starts a new piece through the overlap check. Without `--paths` it takes the paths the
   expired piece declared, also when a `next_task` has since marked it failed; a piece released with `piece done`
   (even while a renewal was under way) needs `--paths` again.
+  Reading the current generation and renewing, restarting, or releasing it happen in the same transaction under the
+  project intent lock. If a restart acquires the lock first, `piece done` can see and release the new generation.
 - *Release:* `piece done <piece>` by the holder marks the task done (`--failed`: failed). A lead (orchestrator or
   human) running it on another agent's piece cancels that task, for instance after merging it. `check verify` does
   not release a piece: a refuted completion goes back to its implementer, who still needs the paths.
@@ -260,8 +291,8 @@ these hold; otherwise it is refused, and the message says why and that a person 
   (`config.piece`) at its commit (`code_ref`);
 - at least `min_runs` of them are by agents other than the implementer (see below), from at least
   `min_authors - 1` such agents, each with every name in `checks_declared` among its `checks` (not partial),
-  `checks_passed == checks_total`, `checks_total > 0`, and
-  `guard_touched` and `checks_changed` stored as `false`;
+  `checks_passed == checks_total`, `checks_total > 0`, and one `ok` result per counted check. Both
+  `guard_touched` and `checks_changed` must be stored as `false`;
 - no valid finished attempt of that piece at that commit, cited or not and by anyone, failed a check, touched a
   guarded path or changed `[checks]`. A clean re-run does not wash out another run's guard flag, and runs that
   disagree are a person's call. A lead who finds a run was broken (no network, wrong machine) invalidates it
@@ -326,6 +357,14 @@ decides nothing), or the rule refused (its message is printed).
 Without lead authority (the default `verifier@<host>` has the harness role) verify records the claim, the attempt
 and the link as before, decides nothing, and says so. A lead can decide later from those records.
 
+The automatic re-run of a subagent's report (`benchbook hook agent-result`) decides as `rerun@<host>`, which is
+registered with the orchestrator role; under `BENCHBOOK_TOKEN` it is the token's agent with the token's role. The
+two default names are separate because a project keeps the role a name was first registered with: before, both
+used `verifier@<host>`, and whichever ran first decided whether the other could decide. A ledger where
+`verifier@<host>` was already registered as an orchestrator keeps that row; nothing is migrated. When the re-run
+passed and still decided nothing, its line says why after `checked: none`, for example
+`checked: none (recorded by a worker agent; a lead decides)`.
+
 `--json` adds `decision` (`verified`, `inconclusive` or null), `decision_reason`, `needs_person`, `evidence`
 and `decisions`. The exit code still says only whether every check passed.
 
@@ -345,7 +384,114 @@ claim in the implementer's name: the verifier proposes it and puts `--reported-b
 which makes the reporter the implementer as described above. What tokens do not cover: an operator who issues one
 person two names, and the lead's role itself, which is trusted to record for others.
 
+## Checks pinned in the ledger
+
+`check verify` reads the `[checks]` committed at the merge-base when there are any: that is the team mode, and
+nothing below changes it. A person trying benchbook on a team repository should not have to commit a tool's config
+first, so the declarations can instead be **pinned in the ledger** before the work starts:
+
+```
+benchbook init --pack code              # .benchbook/ goes to .git/info/exclude; the [checks] of config.toml are pinned
+benchbook check pin                     # pin the working tree's [checks], [guard] and [verify] for the project again
+benchbook check pin media --check 'unit=uv run pytest tests/media --junitxml={junit}'   # one piece's own checks
+benchbook piece start media --paths 'media/**' --check 'unit=uv run pytest tests/media'  # the same, at the start
+```
+
+A pin is a `note` claim tagged `checks-pin` and `piece:<piece>` (`piece:*` for the project). Its payload holds the
+checks, the guard paths, the `[verify]` table and the sha256 of the three. Claims are append-only, so a pin is never
+edited: a new pin is a new claim, and pinning what the newest pin of that scope already holds records nothing.
+
+When the merge-base has no config, `check verify` uses the newest pin of the piece, else the newest pin of the
+project, leaving out pins written by any implementer of the piece at that commit. The integrity argument moves from
+"committed at the merge-base" to "declared, append-only, before the work, by someone other than the implementer". The
+attempt's metrics name the pin (`checks_source = "pin"`, `checks_pin`, `checks_sha256`), and `checks_changed` is
+true when:
+
+- the pin was taken from config.toml (`init`, `check pin` without `--check`) and the working tree's config.toml no
+  longer hashes to it (an implementer in a linked worktree reads the main checkout's config.toml, so editing it is
+  editing the checks), or
+- the piece's first attempt ran before the pin in effect now and under no pin or a pin with another hash. A lead may
+  re-pin after a failure, and a person then decides that piece once.
+
+A commit that adds its own config.toml still counts as a `[checks]` change, as before. In local mode the lead and
+the implementer are often the same person under two names, so a pin protects against an agent's mistake, not
+against its user; the team mode (a committed config, CI as the verifier) is the stronger one.
+
+## The verification worktree
+
+`check verify` runs the checks in a fresh detached worktree of the commit, so files git ignores (`.env`,
+`.venv`, `node_modules`) are not there. `[verify]` says what the worktree needs first:
+
+```toml
+[verify]
+copy = [".env"]                 # copied from the repository root to the same place in the worktree
+prepare = "uv sync --frozen"    # run in the worktree before the first check
+prepare_timeout = 600           # seconds (default 600)
+parallel_baseline = false       # true: the merge-base's JUnit run for test counts goes beside the commit's (below)
+```
+
+`copy` takes regular files inside the repository that the commit does not track; a path outside it, a symlink, a
+missing file or a tracked path fails the preparation. The attempt records the names of the copied files and whether
+`prepare` ran (`metrics.prepared`), never their content. When the preparation fails, no check runs: the attempt is
+an environment failure (`run_status = "error"`, `metrics.environment = true`), with no link to the completion and
+no discarded approach. `[verify]` comes from where the checks come from: the merge-base's config.toml, or the pin.
+
+`parallel_baseline = true` starts the merge-base run that counts JUnit testcases ([Added tests and weakened
+tests](#added-tests-and-weakened-tests)) in its own worktree at the same time as the commit's checks, instead of
+after them. The verdicts are the same (the mutation table runs both ways); a verify of a piece that changed guarded
+files takes about the time of one run of the checks instead of two when the machine has the cores for both
+(`scripts/measure_rerun_queue.py`: 22.8 s to 11.5 s for a suite that waits more than it computes). Leave it off when
+two copies of the checks would share something: a fixed port, a database, a lock file, a directory outside the
+worktree. The early run's result is used only when the commit's run counted exactly the same checks; an interrupted
+verify stops it with its own.
+
+### Environment failures
+
+A check can fail in the clean worktree for reasons that are not the commit's: a missing `.env`, a service that is
+down. It can also fail at the merge-base by design, because making it pass is the piece's job; a commit that leaves
+it failing is a false completion. The two look the same from the clean worktree, so `check verify` asks for evidence
+of an environment difference: a failing check is an environment failure only when
+
+1. the implementer's own run of this commit passed it: an attempt of the piece at the commit with `via` set and a
+   clean checkout, from `benchbook check run` or the Bash hook, whose author is one of the piece's reporters (or,
+   for the Bash hook, whose `metrics.run_by` names one: the agent type it saw), and which ran the same definition
+   of the check (`metrics.check_definitions`, a hash of cmd, junit and timeout, equal to the merge-base's). A raw
+   Bash pass of a JUnit check does not count, nor does a pass recorded by another agent, of another command under the
+   same name, or by a version that recorded no definition. Run `benchbook --agent NAME check run ...` (or set
+   `BENCHBOOK_AGENT`) with the name the report goes under, and
+2. run again at the merge-base, now, in a clean worktree with the same `[verify]` preparation, it fails the same
+   way (the same signature element, or every failing JUnit test fails there too).
+
+When every failing check is an environment failure, the attempt is `run_status = "error"` with
+`metrics.environment = true` and `baseline_signature`, and no refutes link or discarded approach is written; the
+command says "environment: unit fails the same way at the merge-base a1b2c3d4e5f6; not counted against the piece".
+Otherwise the failure refutes as before. The merge-base run happens only when condition 1 holds, and a commit that is
+its own merge-base is not compared. Declaring `[verify] copy` (above) avoids the question for known files.
+
+### Added tests and weakened tests
+
+A piece usually adds tests. `check verify` splits the guarded files a commit changed (`[guard] paths`, by default
+`tests/**`, `**/conftest.py` and `.benchbook/config.toml`) by what the change did:
+
+| change | metrics | a person decides? |
+| --- | --- | --- |
+| a new file, or lines added to a file with none deleted or changed | `guard_added_files` | no |
+| lines deleted or changed, a file deleted, a binary change | `guard_weakened_files` | yes |
+| an added line with a skip marker (`pytest.mark.skip`, `pytest.mark.xfail`, `pytest.skip(`, `unittest.skip`, `it.skip(`, `describe.skip(`, `test.skip(`, `xit(`, `t.Skip(`, `#[ignore]`, `@Disabled`, `@Ignore`) | `guard_weakened_files` | yes |
+| any change to a `conftest.py` (an autouse fixture or hook can weaken every test) | `guard_weakened_files` | yes |
+| a JUnit check ran fewer testcases than it did at the merge-base (each check against its own count) | `fewer_tests_checks`, `tests_before`, `tests_after` (sums) | yes |
+
+`guard_weakened` is true for the last four. The all_pass rule, `check verify`'s decision and the PR summary block
+on `guard_weakened` and `checks_changed`, not on `guard_touched`, which keeps its meaning (any guarded file
+changed). An attempt recorded before `guard_weakened` existed is read by `guard_touched`, as before. The testcase
+counts come from a fresh merge-base run of the JUnit checks in the same environment as the candidate (after the
+candidate's, or beside it with `[verify] parallel_baseline`). This comparison runs when a guarded file changed. The PR summary's "tests changed" column says "added" and "weakened" apart.
+
 ## The numbers
+
+Run `uv run python -m bench.boundary.run --dry` to generate a synthetic H1–H6 report for the boundary
+benchmark. For the fan-in experiment, the circle-packing runner accepts `--workers 8,16,30`.
+[Boundary benchmark preregistration](../bench/boundary/PREREGISTRATION.md)
 
 The false completion rate and the number of completions that touched guarded paths, in one `benchbook sql`
 statement over the reader's views:
@@ -498,40 +644,84 @@ benchbook search --all-tags discarded,piece:media-upload      # one piece's disc
 
 ## The brief
 
+`benchbook status` counts each piece at its latest active reported commit, open out-of-scope findings, pending
+and dead reports, and recent hook failures. If recording needs attention, the brief leads with the reason and
+the `benchbook hook replay` command. The spool and the cached `benchbook statusline` refer to the selected
+database and writer.
+
+Codex, Cursor, Gemini CLI, OpenCode V2 and Pi can load the same scoped brief when a session starts and deliver
+pending notes after tool use. [Harness setup and event support](harnesses.md)
+
 In a code project `benchbook brief` (MCP `benchbook_brief`) is the code pack's
 (`benchbook.packs.code.brief:compile_brief`, `brief_compiler` in pack.toml). Narrowed to a module:
 
 ```bash
 benchbook brief --tags mod:media                     # comma separated; --budget N (default 2000 tokens)
 benchbook brief --tags mod:media,file:src/app/modules/media/
+benchbook brief --here                               # what this branch changed: file:<dir>/ tags and piece:<branch>
 ```
 
 It shows, in this order:
 
-1. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
+1. **Last verified commit per piece**: the newest `verified` completion of each piece in scope, with how it was
+   checked (`checked: re-run`, `checked: person`, ...; the oracle of its last decision named by pack.toml
+   `[brief.labels]`).
+2. **Reported done, not re-run**: completions still `proposed` with no supporting and no refuting evidence, newest
+   first, each `checked: none`. A report is not a check; this section keeps the two apart.
+3. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
    signature, first attempt and number of failed attempts; most recently failed first.
-2. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
+4. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
    tag or by `file:` prefix; most reported first.
-3. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
-4. **Last verified commit per piece**: the newest `verified` completion of each piece in scope.
+5. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
+
+The footer names `benchbook get <id>` for one record's details (at most 400 tokens).
+
+**Changed since the check.** With `--here` (and from the boundary hooks) the brief compares each verified line with
+the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are those the piece's newest task
+occupies (`piece start`), else the directories its completion recorded. A line whose paths changed ends in
+`· changed since (2 commits)` (the commits since that touch those paths); one whose commit this checkout lacks ends
+in `· commit not in this checkout`; one whose commit exists but is not in HEAD's history (a piece's branch read from
+the base, or from the lead's branch before the merge) ends in `· not merged into this branch`, since its paths
+differ without any commit having changed them; an unchanged line has no mark. A squash-merged piece has no mark while
+its paths match, and `not merged into this branch` once a later commit changes them. A discarded approach whose
+failing test file (the part of the signature before `::`) changed since the commit it failed at, in HEAD's history,
+ends in `· test changed since` and
+moves to the end of its section: the failure may no longer hold. Only the lines shown are compared (at most 8 per
+section), each git call has 2 seconds, and nothing is stored: the same ledger at the same HEAD gives the same text.
+Without a checkout (`--tags`, MCP) the brief shows no marks.
 
 **Scope.** A tag matches records that carry it exactly (`mod:media`, `piece:x`). A `file:<prefix>` tag matches by
 prefix: the `file:` tags of findings and the paths pieces occupy. A piece is in scope when one of its tasks (`piece
 start`, any status) carries a matching tag or occupies a matching path; discarded approaches and verified commits
 are found through their piece (and a discarded approach also through its own `mod:` tags). Findings are matched by
-their own tags only, as in the [query](#reading-open-findings). A piece never started with `piece start` has no
-task, so it is found only without `--tags`. Without `--tags` the brief covers the whole project. With several tags
+their own tags only, as in the [query](#reading-open-findings). Discarded approaches and completions also carry the
+directories their commit changed since the merge-base (`payload.paths` and `file:<dir>/` tags, at most 20), so a
+piece never started with `piece start` is found by path, and a `piece:<name>` tag matches them directly.
+
+**`--here`** computes the scope from the checkout: the directories the current branch changed since its merge-base
+with the base ref (`[guard] base`, else `origin/main`) plus the working tree's changes and untracked files, each
+file reduced to its directory and the deepest lifted to their parent until at most 20 remain, as `file:` tags, plus
+`piece:<branch>`. On the base branch itself the scope is empty and the brief covers the whole project. The boundary
+hooks use the same scope. Without `--tags` the brief covers the whole project. With several tags
 the sections hold the union.
 
 **Budget.** At most 8 items per section (pack.toml `[brief]`), each line cut to a fixed length; then items are
 dropped from the last section upwards until the brief fits `--budget` (with the same 5% slack as the default brief),
 and each section says how many it left out (`(+3 more: benchbook piece list)`). Header and footer always stay; a
-budget too small for them is an error. Each brief is logged in `brief_log` as before.
+budget too small for them is an error. A character limit (`max_chars`, 6,000 in the boundary hooks) is applied the
+same way: whichever limit is reached first trims. Each brief is logged in `brief_log` as before.
 
 `--pack` is not an option: the project's pack already chooses the compiler. Other packs refuse `--tags` rather than
 ignore it; their briefs are unchanged.
 
 ## Reads that changed a plan
+
+**Looking an id up.** Every brief line carries an id; `benchbook get <id>` prints that record in at most 400 tokens:
+its kind and id, status and how it was checked (`checked: re-run`, `person`, `none`; pack.toml `[brief.labels]`),
+its statement or signature and the payload keys that matter, up to five links each way and the last three decisions,
+with what was cut counted ("… 45 more (--json)"). `--json` prints the whole record. Each lookup appends one line to
+`lookups.jsonl` in the state directory (time, project, id): an id a brief carried that was then looked up is the
+cheapest sign that the brief was read.
 
 The spec's unit for "a read that changed a plan" is a claim id cited by a plan document. Two things are recorded:
 the claims themselves (with their ids, tags and times) and `brief_log` (one row per brief compiled: project, agent,
@@ -663,6 +853,12 @@ written, by the hook's background processor, where it already writes the auto-ca
 itself still only queues the report and exits. A report that cites its own records gets its findings recorded too
 (the note is what such a report skips).
 
+`[report] agents` widens the reports read for findings without making them workers: a list of subagent types
+(with or without a plugin prefix), or `["*"]` for every subagent. While `BENCHBOOK_HOOK_AGENTS` is unset, the
+final report of a listed subagent is queued for its findings only: no `[auto-captured]` note is written for it.
+`BENCHBOOK_HOOK_AGENTS`, when set, still decides alone. `benchbook init --pack code` writes
+`out_of_scope_heading = "Out of scope"` and `agents = ["*"]` when config.toml has no `[report]` table yet.
+
 ### What counts as a finding
 
 - **The section**: a markdown heading of any level, or a line that is bold as a whole (`**범위 밖**`,
@@ -670,6 +866,9 @@ itself still only queues the report and exits. A report that cites its own recor
   whitespace collapsing and dropping a trailing colon. A heading section ends at the next heading of the same or a
   higher level (deeper headings inside it are group labels); a bold-line section ends at the next heading of any
   level or the next bold line. A thematic break (`---`) ends either. Every such section in the report is read.
+- **One line**: outside a section, a line `<heading>: <text>` (also as a list item, or with the heading in bold,
+  `**범위 밖:** ...`, and with a full-width colon) is one finding whose text is what follows the colon. `범위 밖: 없음`
+  is nothing.
 - **The items**: each top-level list item (`-`, `*`, `+`, `1.`, `1)`; a `[ ]` checkbox is dropped) is one finding.
   Its first paragraph, wrapped lines included, is the finding's text. Nested items and indented paragraphs are its
   details. Paragraphs between the items, and lines in fenced code blocks, are never findings. An item whose text is
@@ -690,7 +889,10 @@ One claim per distinct finding:
 kind       observation
 statement  the item's text (whitespace collapsed; cut at 500 characters)
 tags       out-of-scope
-           piece:<piece>     when the run recorded attempts (exp run / exp record) of exactly one piece
+           piece:<piece>     when the run recorded attempts (exp run / exp record) of exactly one piece; else
+                             the piece the report's commit names (DONE <sha> or commit: <sha>, then its
+                             Benchbook-Piece trailer, a piece: line or the one branch at it), the piece the
+                             automatic re-run of the same report verifies
            mod:<name>        each mod:<name> the item's text writes itself (never inferred from a path)
            file:<path>       each path the finding names, repository-relative, up to 10
 payload    {"text", "details", "file", "piece", "heading",
