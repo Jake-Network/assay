@@ -160,3 +160,18 @@ any rerun before paying for it.
   amendment and committed, and after the limit resets they run in a new `--out` (`boundary-pilot-2`, ...) with the
   same caps, selected with `--arms` or a manifest holding only the remaining task (its sha256 recorded). The pilot
   starts after the H5 sweep's driver ends, so the two never share the usage limit or the machine.
+- **2026-11-24, lean remaining runs.** Written before any further paid call, after the runs listed above and with
+  no new result seen. Runs stopped by the five-hour usage limit had already spent about USD 10 that bought no result,
+  so the remaining work is cut and paced. H5: workers 30 C run 1 goes next. If it ends on its USD 5 cap or fails, width
+  30 ends there (A n=1, C stopped at its cap), and the report says no matched pair was completed at 30. If it finishes
+  under the cap, one more pair (A run 2 in `h5-runs/30-A-2-try2`, C run 2) runs, and run 3 of either config does not.
+  `30-A-2-try1` (USD 1.95, stopped by the usage limit) is reported. Boundary pilot: one task, boltons, with arms A, C
+  and F and one repetition each (3 trials). toolz stays as registered but is not run. Each trial runs in its own
+  `--out` (`boundary-pilot-boltons-<arm>-try<k>`) from a manifest that holds only the boltons row
+  (`tasks-boltons.json`, sha256 aa7b7d0b38a87309bdf112e27317b2760968536c1e396c41a3ea995ad332b64d, the same row as
+  `tasks.json`). The pilot's total budget drops from USD 60 to USD 30 across all its trials, stopped ones included.
+  Each trial gets what is left as `--total-budget-usd`, and an arm is not run when less than USD 3.5 is left. The
+  per-call caps (USD 3 work, 0.5 probe) and turn and time limits are unchanged. Pacing: at most one unit per
+  five-hour window, and a second only if the window's spend so far is below USD 4. A unit stopped by the usage limit
+  is kept, reported and repeated after the reset. The repository head that runs arm F differs from the commit named
+  under Commits only in documentation.
