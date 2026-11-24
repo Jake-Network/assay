@@ -931,9 +931,22 @@ def _pending(spool: Path, lane: str | None = None) -> list[Path]:
 
 
 def _settle_records(spool: Path) -> None:
-    """Record what waits in the records lane (one pass, under its lock) before a re-run starts."""
+    """Record what waits in the records lane (one pass, under its lock) before a re-run starts. An entry written
+    while the lock was held found it held and started no processor: one is started for it, as replay's rescan does,
+    and the re-run goes on (that entry came after the request)."""
     with _lock(spool, blocking=True, lane=RECORDS):
-        _drain(spool, (), ReplaySummary(), lane=RECORDS)
+        seen = _drain(spool, (), ReplaySummary(), lane=RECORDS)
+    if any(p.name not in seen for p in _pending(spool, RECORDS)):
+        start_processor(spool, RECORDS)
+
+
+def _start_waiting_lanes(spool: Path, lane: str) -> None:
+    """Start the other lane's processor when entries wait there with none running: a re-run left by a stopped
+    processor or an older version, or a retry, would otherwise wait for the next request of its own kind (one
+    processor used to take everything whenever any hook started it)."""
+    other = VERIFY if lane == RECORDS else RECORDS
+    if _pending(spool, other) and not _locked(spool, other):
+        start_processor(spool, other)
 
 
 def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
@@ -968,6 +981,7 @@ def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
 
 def replay(spool: Path, lane: str = RECORDS) -> None:
     """Background processor of one lane: drain with retries, unless another processor already holds that lane."""
+    _start_waiting_lanes(spool, lane)
     while True:
         with _lock(spool, blocking=False, lane=lane) as got:
             if not got:
