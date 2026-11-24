@@ -58,6 +58,9 @@ def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
     assert "--resume" in compact["cmd"] and "--session-id" in restart["cmd"] and "--resume" in action["cmd"]
     assert compact["session"] != restart["session"] == action["session"]
     assert (out / "scripted" / "E-1" / "past-events" / "session-01" / "lead.jsonl").is_file()
+    calls = [d for d in (out / "scripted").glob("*-1/phase-*") if (d / "command.json").is_file()]
+    assert calls and all((d / "transcripts" / "lead.jsonl").is_file() and (d / "transcripts" / "subagents").is_dir()
+                         for d in calls)
     # The scripted receipts are cumulative per session, as Claude Code's are; each call counts only its own tokens.
     assert all(1650 < call["tokens"] < 1700 for trial in data["trials"] for call in trial["calls"])
 
@@ -89,6 +92,44 @@ def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path, session_cost: 
     assert second["cost_usd"] == pytest.approx(session_cost - 0.30) and second["tokens"] == 300
     assert (second["session_cost_usd"], second["session_tokens"]) == (session_cost, 1300)
     assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == session_cost
+
+
+def test_every_call_copies_its_session_transcripts(tmp_path: Path) -> None:
+    """Arm F's verdicts reach the lead through PostToolUse hooks, which the stream does not show: each call keeps the
+    session's transcripts, the lead's and its subagents', in its own folder."""
+    config = tmp_path / "claude-config"
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        session = prepared.session_id
+        saved = config / "projects" / "-work" / session
+        if session != "s-missing":
+            (saved / "subagents").mkdir(parents=True, exist_ok=True)
+            (saved.parent / f"{session}.jsonl").write_text(f'{{"call": "{target.name}"}}\n', encoding="utf-8")
+            (saved / "subagents" / "agent-a1.jsonl").write_text("{}\n", encoding="utf-8")
+            (saved / "subagents" / "agent-a1.meta.json").write_text('{"agentType": "general-purpose"}',
+                                                                    encoding="utf-8")
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01,
+                   "modelUsage": {"m": {"inputTokens": 11, "outputTokens": 0}}}]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": session}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=0.1, max_budget_usd=0.5, total_budget_usd=10.0, model="m", dry=False,
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    task = scripted.fixture(tmp_path)
+    trial = run.Trial(run.Batch(args, tmp_path, execute), task, "F", tmp_path / "F-1", tmp_path / "work",
+                      {"CLAUDE_CONFIG_DIR": str(config)})
+    trial.target.mkdir()
+    trial.invoke("phase-01", "work", "s-1", resume=False)
+    trial.invoke("phase-01-action", "act", "s-1", resume=True)
+    for name in ("phase-01", "phase-01-action"):
+        copied = trial.target / name / "transcripts"
+        assert json.loads((copied / "lead.jsonl").read_text()) == {"call": name}
+        assert {p.name for p in (copied / "subagents").iterdir()} == {"agent-a1.jsonl", "agent-a1.meta.json"}
+        assert json.loads((trial.target / name / "transcripts.json").read_text())["copy"] == "transcripts"
+    trial.invoke("phase-01-restart", "probe", "s-missing", resume=False)  # a session with no transcript
+    assert "error" in json.loads((trial.target / "phase-01-restart" / "transcripts.json").read_text())
 
 
 @pytest.mark.parametrize("completed_b", [True, False])

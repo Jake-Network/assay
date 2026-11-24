@@ -144,6 +144,7 @@ class Trial:
                probe: bool = False) -> list[tuple[int, dict[str, Any]]]:
         path = self.target / name
         events = self.batch.capture(self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe)
+        self.transcripts(session, path)
         measured = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
         self.run_data["calls"].append({**measured, "kind": "probe" if probe else "work"})
         return events
@@ -203,6 +204,19 @@ class Trial:
             resume = True
         write_json(self.target / "trial.json", self.run_data)
         return self.run_data
+
+    def transcripts(self, session: str, call: Path) -> None:
+        """Copy the session's transcripts (lead and subagents) into call/transcripts after every call of every arm.
+        The stream has the hooks' SessionStart output only, not what a PostToolUse hook added to the lead's context,
+        which is where arm F's re-run verdicts arrive (the pilot's amendment asks when the lead saw them). A resumed
+        session's copy holds the whole session so far. A dry run copies the scripted stream to the same place."""
+        if self.batch.args.dry:
+            (call / "transcripts" / "subagents").mkdir(parents=True)
+            shutil.copyfile(call / "lead.stream.jsonl", call / "transcripts" / "lead.jsonl")
+            found: dict[str, Any] = {"lead": "lead.stream.jsonl", "subagents": [], "copy": "transcripts"}
+        else:
+            found = real.collect_transcripts(real.claude_config_dir(self.env), session, call)
+        write_json(call / "transcripts.json", found)  # a transcript not found is recorded, not raised
 
     def archive(self, session: str, work_call: Path, i: int) -> None:
         dest = Path(self.env["BENCH_BOUNDARY_PAST_EVENTS"]) / f"session-{i:02d}"
