@@ -90,6 +90,13 @@ the visible check itself: [bench/results/2026-11-23-swe-verified/](bench/results
 `bench/code/` is the harness. `bench/boundary/` measures what a lead still knows after compaction and restarts, across
 six arms ([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
 
+**What a lead still knows after a restart (boundary pilot, 2026-11-25):** one task and one trial per arm, so directions
+only. Asked five state questions in a new session after each phase, benchbook's boundary mode (F) answered 1 of 10,
+against 6 of 10 for a single resumed session (A) and for progress files (C). Most of F's misses come from benchbook: a
+test file whose import line a worker edited counted as weakened, so three of the four pieces never became verified in
+the brief. No compaction happened (largest lead prompt 24k of a 100k window), and no arm trusted the stale check.
+Details: [bench/results/2026-11-25-boundary-pilot/](bench/results/2026-11-25-boundary-pilot/README.md).
+
 ## Experiment swarms
 
 benchbook started as a lab notebook for agents that run experiments, and that mode is unchanged. Workers record each

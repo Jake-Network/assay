@@ -86,6 +86,13 @@ PR이 완료한 조각을 다시 돌리고, 독립 재실행이 확인한 완료
 `bench/code/`다. `bench/boundary/`는 compaction과 재시작 뒤에 리드가 무엇을 아직 아는지 여섯 구성으로
 잰다([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
 
+**재시작 뒤 리드가 아직 아는 것(boundary 파일럿, 2026-11-25):** 과제 하나, 구성마다 1회라 방향만 본다. 각 단계 뒤 새
+세션에서 상태 질문 다섯 개를 물었을 때 benchbook boundary 모드(F)는 10개 중 1개를 맞혔고, 한 세션을 이어 쓴 A와 진행
+파일을 쓴 C는 10개 중 6개를 맞혔다. F가 틀린 답의 대부분은 benchbook 쪽 원인이다. worker가 import 줄 하나를 고친 테스트
+파일이 약화로 잡혀, 조각 넷 중 셋이 brief에서 끝내 verified가 되지 못했다. compaction은 일어나지 않았고(리드 최대
+prompt 24k, window 100k), stale 검사를 믿은 구성도 없었다. 자세한 내용:
+[bench/results/2026-11-25-boundary-pilot/](bench/results/2026-11-25-boundary-pilot/README.md).
+
 ## 실험 swarm
 
 benchbook은 실험을 돌리는 에이전트들의 연구 노트로 시작했고, 이 모드는 그대로다. worker는 실험이 끝나는 즉시(실패도)
