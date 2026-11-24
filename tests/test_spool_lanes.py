@@ -101,6 +101,48 @@ def test_each_lane_starts_its_own_processor(setup: dict[str, Any], monkeypatch: 
     assert launched == [[str(spool), hooks.VERIFY], [str(spool), hooks.RECORDS]]
 
 
+def test_an_attempt_queued_while_a_re_run_settles_gets_a_processor(setup: dict[str, Any],
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """An attempt written while the verify lane holds the records lock (settling) finds that lock held and starts
+    nothing; the verify lane starts the records processor for it after settling."""
+    _queue_verify(setup)
+    real, arrived = hooks._drain, []
+
+    def drain_then_arrive(spool: Path, delays: tuple[float, ...], summary: Any, attempted: Any = (),
+                          lane: str | None = None) -> set[str]:
+        out = real(spool, delays, summary, attempted, lane)
+        if lane == hooks.RECORDS and not arrived:
+            arrived.append(_queue_check_run(setup))  # its producer saw the records lock held
+        return out
+
+    monkeypatch.setattr(hooks, "_drain", drain_then_arrive)
+    setup["started"].clear()
+    hooks.replay(setup["spool"], hooks.VERIFY)
+    assert arrived and setup["started"] == [hooks.RECORDS] and _events(setup["spool"]) == ["check-run"]
+
+
+def test_a_records_processor_starts_a_waiting_re_run(setup: dict[str, Any]) -> None:
+    """A re-run left in the spool (a stopped processor, an older version) is started by the next processor of the
+    other lane, as one processor used to take everything."""
+    _queue_verify(setup)
+    _queue_check_run(setup)
+    setup["started"].clear()
+    hooks.replay(setup["spool"], hooks.RECORDS)
+    assert setup["started"] == [hooks.VERIFY] and _events(setup["spool"]) == ["verify-request"]
+
+
+def test_the_real_processors_drain_a_left_re_run_and_a_new_attempt(setup: dict[str, Any]) -> None:
+    import time
+
+    _queue_verify(setup)  # left: no processor was started for it
+    _queue_check_run(setup)
+    REAL_START(setup["spool"])  # what the Bash hook or check run does: the records lane only
+    deadline = time.monotonic() + 120
+    while list(setup["spool"].glob("*.json")) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert _events(setup["spool"]) == []
+
+
 def test_replay_now_takes_both_lanes(setup: dict[str, Any]) -> None:
     _queue_check_run(setup)
     _queue_verify(setup)
