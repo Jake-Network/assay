@@ -661,3 +661,21 @@ by hand, not a live session). Four are fixed; the fourth is not.
   amendment of 2026-11-23).
 - 4 of 39 completions changed a test file and passed both checks; only 3 of 39 implementers ran any test before
   reporting done, and none of the 7 refuted ones did. Spent USD 1.06 of the 120 cap.
+
+## Swarm fan-in: verdicts to the lead (2026-11-24)
+
+- **Notes go to the lead only.** Notes are found by `session_id`, and Claude Code gives the hooks of a subagent's tool
+  calls the lead's `session_id` with the subagent's `agent_id` (hooks reference; every line of a real subagent
+  transcript carries the parent's `sessionId`). `bash_result` delivered on every Bash result, a worker's included,
+  so with 16 to 30 workers a verdict most likely reached a worker and never the lead. Every delivery point now skips
+  an input with an `agent_id` (`session_notes.for_lead`). The boundary pilot's arm F runs 937f5ea, without this; its
+  pre-registration amendment of 2026-11-24 says so and counts where verdict lines landed.
+- **Every lead tool result can deliver.** The notes hook runs on PostToolUse with matcher `^(?!(Bash|Agent|Task)$)`
+  (a JavaScript regex, searched, per the hooks reference), so Bash and Agent results, which deliver from their own
+  hooks, do not start a second process. An `async_launched` Agent result delivers too: a lead fanning out calls Agent
+  most. Moving a note before reading it keeps any two hooks from delivering it twice (tested with 16 concurrent
+  deliveries). PostToolUseFailure of other tools is not wired.
+- **No shell fast path.** With no note waiting, `benchbook hook notes` takes p50 35 ms, p95 45 ms (50 runs, Linux
+  filesystem, WSL2), under the 100 ms that would have called for one in `bin/benchbook-hook`.
+- **Stop hook: not yet.** Whether a lead ends its turn with a verdict still waiting is to be seen in the live check
+  (after the paid measurements end) and arm F's streams; a Stop hook that blocks once is added only if it happens.

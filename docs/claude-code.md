@@ -273,14 +273,14 @@ The `benchbook` plugin also gives the model what the ledger says at the points w
 |---|---|---|
 | `benchbook hook session-start` | SessionStart (every source: startup, resume, clear, compact) | the brief scoped by what this branch changed (`brief --here`), at most 1,500 tokens and 6,000 characters, as `additionalContext`; nothing when every section is empty |
 | `benchbook hook pre-compact` | PreCompact | one paragraph of at most 1,000 characters, "Keep these ids and statuses verbatim in the summary: ...", three lines per section, on plain stdout (instructions for the compaction summary) |
-| `benchbook hook notes` | UserPromptSubmit | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once; they move to `delivered/` |
-| `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
+| `benchbook hook notes` | UserPromptSubmit; PostToolUse of every tool but Bash, Agent and Task (matcher `^(?!(Bash\|Agent\|Task)$)`; those deliver from their own hooks) | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once, under the event that ran; they move to `delivered/`. A hook that fired inside a subagent (`agent_id` in its input) delivers nothing, so the notes wait for the lead |
+| `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; an `async_launched` result queues nothing and delivers what is waiting; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
 
 The detached processor verifies the reported commit using the project's declared checks. It stores the report's
 hash and structured identifiers. Repeated reports for the same project, piece and commit share one completed
 re-run within the database and writer's spool. An environment failure is kept for that report in its session, so a
 new report or session can re-run the checks after the environment recovers. SessionStart, UserPromptSubmit, and
-subsequent Agent or Bash results can deliver the pending note once. For a background agent, SubagentStop queues
+the lead's subsequent tool results (any tool) can deliver the pending note once. Only the lead's: Claude Code gives a subagent's hooks the lead's `session_id` with the subagent's `agent_id`, and a worker's tool result that took a verdict would leave the lead without it. For a background agent, SubagentStop queues
 the check after the report arrives.
 
 Each brief is also written to `.benchbook/STATE.md` for harnesses without hooks and for people. Its first line

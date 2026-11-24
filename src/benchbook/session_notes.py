@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from . import config
 
@@ -16,6 +18,13 @@ def notes_dir(session_id: object) -> Path | None:
     if not isinstance(session_id, str) or not _SESSION.fullmatch(session_id) or session_id in (".", ".."):
         return None
     return config.state_dir() / "notes" / session_id
+
+
+def for_lead(data: Mapping[str, Any]) -> bool:
+    """Whether a hook may hand this session's notes over: not from inside a subagent. Claude Code gives a subagent's
+    hooks the lead's session_id with the subagent's agent_id, and a note queued for the session (a re-run's verdict)
+    is for the lead: a worker's tool result that took it would leave the lead without it."""
+    return not data.get("agent_id")
 
 
 def write_note(path: Path, line: str) -> None:

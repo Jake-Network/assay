@@ -69,18 +69,23 @@ CONTEXT_EVENTS = {CLAUDE_CODE: {"session-start": "SessionStart", "notes": "UserP
                   "codex": {"session-start": "SessionStart", "notes": "PostToolUse"},
                   # Gemini CLI reads only additionalContext; its output types still declare hookEventName
                   "gemini": {"session-start": "SessionStart", "notes": "AfterTool"}}
+# Claude Code events the notes hook runs on: its answer names the one that ran (hookEventName must match it).
+CLAUDE_CODE_NOTES_EVENTS = frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"})
 PLAIN_EVENTS = {CLAUDE_CODE: frozenset({"pre-compact"}),
                 "opencode": frozenset({"session-start", "notes"}),
                 "pi": frozenset({"session-start", "notes"})}
 
 
-def context_answer(harness: str, event: str, text: str) -> str:
-    """The harness-specific answer for a boundary event."""
+def context_answer(harness: str, event: str, text: str, hook_event: object = None) -> str:
+    """The harness-specific answer for a boundary event. hook_event: the input's hook_event_name, which for Claude
+    Code's notes hook says which of its events ran."""
     if not text:
         return answer(harness)
     if event in PLAIN_EVENTS.get(harness, ()):
         return text if text.endswith("\n") else text + "\n"
     if (name := CONTEXT_EVENTS.get(harness, {}).get(event)) is not None:
+        if harness == CLAUDE_CODE and event == "notes" and hook_event in CLAUDE_CODE_NOTES_EVENTS:
+            name = str(hook_event)
         return json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext": text}},
                           ensure_ascii=False) + "\n"
     if event in ("session-start", "notes") and harness == "cursor":

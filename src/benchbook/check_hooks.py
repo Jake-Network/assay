@@ -302,9 +302,9 @@ def bash_result(harness: str = "claude-code") -> int:
     output = ""
     try:
         data = _read_input()
-        if harness == "claude-code" and data.get("session_id"):
-            from .session_notes import deliver
+        from .session_notes import deliver, for_lead
 
+        if harness == "claude-code" and data.get("session_id") and for_lead(data):
             event = "PostToolUseFailure" if data.get("hook_event_name") == "PostToolUseFailure" else "PostToolUse"
             if notes := deliver(data["session_id"]):
                 output = json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": notes}},
