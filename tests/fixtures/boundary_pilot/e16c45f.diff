@@ -1,0 +1,99 @@
+diff --git a/tests/test_iterutils.py b/tests/test_iterutils.py
+index e3d0695..8642b96 100644
+--- a/tests/test_iterutils.py
++++ b/tests/test_iterutils.py
+@@ -13,7 +13,8 @@ from boltons.iterutils import (first,
+                                research,
+                                default_enter,
+                                default_exit,
+-                               get_path)
++                               get_path,
++                               run_length)
+ from boltons.namedutils import namedtuple
+ 
+ CUR_PATH = os.path.abspath(__file__)
+@@ -780,3 +781,11 @@ def test_frange_xfrange_zero_step():
+         frange(10, step=0)
+     with pytest.raises(ValueError):
+         list(xfrange(10, step=0))
++
++
++def test_run_length():
++    assert run_length([]) == []
++    assert run_length([1, 1, 2, 1]) == [(1, 2), (2, 1), (1, 1)]
++    assert run_length([[1], [1], [2]]) == [([1], 2), ([2], 1)]
++    assert run_length(c for c in 'aaab') == [('a', 3), ('b', 1)]
++    assert run_length('aAbB', key=str.lower) == [('a', 2), ('b', 2)]
+diff --git a/tests/test_mathutils.py b/tests/test_mathutils.py
+index 39f9e0c..9375960 100644
+--- a/tests/test_mathutils.py
++++ b/tests/test_mathutils.py
+@@ -1,5 +1,5 @@
+ from pytest import raises
+-from boltons.mathutils import clamp, ceil, floor, Bits
++from boltons.mathutils import clamp, ceil, floor, Bits, weighted_median
+ import math
+ 
+ INF, NAN = float('inf'), float('nan')
+@@ -157,3 +157,39 @@ def test_bits_rshift_past_width():
+     assert len(shifted) == 0
+     assert shifted.as_bin() == ''
+     assert Bits('101') >> 1 == Bits('10')
++
++
++def test_weighted_median_basic():
++    assert weighted_median([1, 2, 3], [1, 1, 1]) == 2
++    assert weighted_median([5], [3]) == 5
++    assert weighted_median([1, 2, 3], [1, 1, 10]) == 3
++
++
++def test_weighted_median_lower_on_tie():
++    assert weighted_median([1, 2], [1, 1]) == 1
++    assert weighted_median([1, 2, 3, 4], [1, 1, 1, 1]) == 2
++
++
++def test_weighted_median_zero_weights_ignored():
++    assert weighted_median([1, 2, 3], [0, 1, 0]) == 2
++    assert weighted_median([1, 100, 3], [1, 0, 1]) == 1
++
++
++def test_weighted_median_unsorted():
++    assert weighted_median([3, 1, 2], [1, 1, 1]) == 2
++    assert weighted_median([9, 1, 5], [1, 5, 1]) == 1
++
++
++def test_weighted_median_iterators():
++    assert weighted_median(iter([3, 1, 2]), (w for w in [1, 1, 1])) == 2
++
++
++def test_weighted_median_errors():
++    with raises(ValueError):
++        weighted_median([1, 2], [1])
++    with raises(ValueError):
++        weighted_median([1, 2], [1, -1])
++    with raises(ValueError):
++        weighted_median([1, 2], [0, 0])
++    with raises(ValueError):
++        weighted_median([], [])
+diff --git a/tests/test_strutils.py b/tests/test_strutils.py
+index 1c7e45a..79258c2 100644
+--- a/tests/test_strutils.py
++++ b/tests/test_strutils.py
+@@ -443,3 +443,17 @@ def test_args2cmd_sep():
+     assert strutils.args2cmd(['aa', 'bb']) == 'aa bb'
+     assert strutils.args2cmd(['aa', 'bb'], sep='|') == 'aa|bb'
+     assert strutils.args2cmd(['a a', 'bb'], sep='|') == '"a a"|bb'
++
++
++def test_split_camel():
++    sc = strutils.split_camel
++    assert sc('') == []
++    assert sc('parseHTTPResponse') == ['parse', 'HTTP', 'Response']
++    assert sc('HTTPServer2Go') == ['HTTP', 'Server', '2', 'Go']
++    assert sc('camelCase') == ['camel', 'Case']
++    assert sc('PascalCase') == ['Pascal', 'Case']
++    assert sc('lower') == ['lower']
++    assert sc('HTTP') == ['HTTP']
++    assert sc('snake_case-and x.y') == ['snake', 'case', 'and', 'x', 'y']
++    assert sc('__') == []
++    assert sc('abc123def') == ['abc', '123', 'def']

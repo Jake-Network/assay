@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- Adding a name to an import in a guarded Python test file (`get_path)` → `get_path,` + `run_length)`, or
+  `from x import a` → `from x import a, b`) no longer counts as weakening the tests: the file is "appended" when
+  every deleted line is inside an import and the file still imports everything it did. In the boundary pilot's arm
+  F this sent three of four passing pieces to a person. Removing, renaming or re-aliasing an imported name, any
+  other rewritten line, a skip marker, a conftest.py change and fewer JUnit tests are still weakenings; non-Python
+  test files keep the old rule.
 - The hook spool has two lanes with a processor each: re-runs (`verify-request`) and everything else. A check run or
   Bash-hook attempt queued while re-runs wait is recorded within about a second instead of after all of them (168 s
   with eight queued re-runs, `scripts/measure_rerun_queue.py`). Before each re-run the verify lane records what the

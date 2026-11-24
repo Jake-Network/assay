@@ -533,6 +533,17 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   can weaken every test without deleting any, so any change to one is a weakening, as the mutation table expects.
 - **T04 guard_weakened is always written** (a boolean on every attempt, like guard_touched); the file lists and the
   test counts only when there is something to say.
+- **T04 names added to an import are lines added (2026-11-25, after the boundary pilot).** In arm F three of four
+  merged pieces passed their re-run and still went to a person, because each rewrote one line of an import to add
+  a name (`get_path)` as `get_path,` + `run_length)`, and `..., Bits` as `..., Bits, weighted_median`); that is
+  most of why F's lead knew 1 of 10 verified pieces. A modified Python test file whose deleted lines all sit inside
+  import statements, none on a line shared with another statement or a compound statement's header, and that still
+  imports every (module, level, name, alias) it imported before, now counts as appended. The handoff's textual
+  rule (drop whitespace and a trailing `,`, `)` or `\\`, then match an added line) was not taken: it also passes
+  `assert f(1)` rewritten as `assert f(1,` + `2)`, an argument added to a call under an assert, and needs another
+  rule for one-line imports. Parsing both versions closes that and covers `from x import a` → `from x import a, b`.
+  Other languages keep the old rule (a rewritten line is a weakening), and a file that does not parse at either
+  commit is weakened. The rows are in tests/test_mutations.py (`IMPORT_ROWS`, and the pilot's own diffs).
 - **T07 the lead skill and the MCP server move to benchbook-mcp.** Both teach or serve ledger tools, which the hook
   plugin must not load. The skill command becomes `/benchbook-mcp:benchbook-lead`, and the worker's tool names are
   written as `mcp__plugin_benchbook-mcp_benchbook__*` on the assumption that Claude Code keeps a hyphenated plugin

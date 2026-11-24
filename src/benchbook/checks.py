@@ -20,6 +20,7 @@ piece that failed the same way (failures.py). Nothing here imports the database 
 passed in."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -33,6 +34,7 @@ import tempfile
 import threading
 import time
 import tomllib
+from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -545,7 +547,8 @@ def classify_guard(repo: Path, merge_base: str, commit: str,
                    files: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
     """T04: (added, appended, weakened) of the changed guarded files. A new file is added and a file with lines added
     and none deleted is appended, unless an added line carries a SKIP_MARKERS entry or the file is a conftest.py;
-    everything else (deleted, rewritten, binary) is weakened."""
+    everything else (deleted, rewritten, binary) is weakened. A Python file whose deleted lines are all in import
+    statements, and that still imports everything it did, counts as lines added (_imports_extended)."""
     if not files:
         return [], [], []
     out = _git(repo, "diff", "--numstat", "--no-renames", "-z", merge_base, commit, "--", *files).stdout
@@ -564,19 +567,68 @@ def classify_guard(repo: Path, merge_base: str, commit: str,
     weakened: list[str] = []
     for f in files:
         st, dels = status.get(f, ""), deleted.get(f)
-        if Path(f).name in ALWAYS_WEAKENING or st not in ("A", "M") or dels is None or (st == "M" and dels > 0):
+        if Path(f).name in ALWAYS_WEAKENING or st not in ("A", "M") or dels is None:
             weakened.append(f)
-        elif _adds_skip(repo, merge_base, commit, f):
+        elif _adds_skip(diff := _diff_u0(repo, merge_base, commit, f)):
+            weakened.append(f)
+        elif st == "M" and dels > 0 and not _imports_extended(repo, merge_base, commit, f, diff):
             weakened.append(f)
         else:
             (added if st == "A" else appended).append(f)
     return added, appended, weakened
 
 
-def _adds_skip(repo: Path, merge_base: str, commit: str, path: str) -> bool:
-    diff = _git(repo, "diff", "-U0", "--no-renames", "--no-color", merge_base, commit, "--", path).stdout
+def _diff_u0(repo: Path, merge_base: str, commit: str, path: str) -> str:
+    return _git(repo, "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", merge_base, commit,
+                "--", path).stdout
+
+
+def _adds_skip(diff: str) -> bool:
     return any(line.startswith("+") and not line.startswith("+++") and any(m in line for m in SKIP_MARKERS)
                for line in diff.splitlines())
+
+
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", re.MULTILINE)
+
+
+def _imports_extended(repo: Path, merge_base: str, commit: str, path: str, diff: str) -> bool:
+    """T04 after the boundary pilot: a Python test file whose every deleted line is inside an import statement (and
+    not on a line that also holds another statement or a compound statement's header), and whose imports after the
+    change include all of those before (module, level, name and alias, counted), only had names added to an import:
+    `get_path)` rewritten as `get_path,` + `run_length)`, or `import a, b` as `import a, b, c`. Anything that
+    does not parse at either commit is not."""
+    if not path.endswith(".py"):
+        return False
+    deleted = {start + i for m in HUNK.finditer(diff)
+               for start, n in [(int(m.group(1)), 1 if m.group(2) is None else int(m.group(2)))] for i in range(n)}
+    trees = []
+    for ref in (merge_base, commit):
+        shown = _git(repo, "show", f"{ref}:{path}", check=False)
+        if shown.returncode != 0:
+            return False
+        try:
+            trees.append(ast.parse(shown.stdout))
+        except (SyntaxError, ValueError):
+            return False
+    old, new = trees
+    in_import: set[int] = set()
+    elsewhere: set[int] = set()
+    for node in ast.walk(old):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            in_import.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        elif isinstance(node, ast.stmt):
+            # a compound statement holds its body's lines: only its header line is its own
+            own = node.lineno if hasattr(node, "body") else None
+            elsewhere.update([own] if own is not None else range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    if not deleted or not deleted <= in_import or deleted & elsewhere:
+        return False
+    return not _imports(old) - _imports(new)
+
+
+def _imports(tree: ast.AST) -> Counter[tuple[str | None, int, str, str | None]]:
+    return Counter((getattr(node, "module", None), getattr(node, "level", 0) or 0, alias.name, alias.asname)
+                   for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                   for alias in node.names)
 
 
 # ---------------------------------------------------------------------------------------------------- running

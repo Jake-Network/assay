@@ -5,6 +5,7 @@ link and a discarded approach), sent to a person (guard_weakened or checks_chang
 docs/code.md's trust table measures "decision accuracy" and "needless person decisions" with it."""
 from __future__ import annotations
 
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -79,6 +80,136 @@ def test_mutation(tmp_path: Path, vtmp: Path, lead: Ledger, files: dict[str, str
             assert v.integrity.checks_changed and out.checks_changed
         else:
             assert v.integrity.guard_weakened
+
+
+# Rows for a test file with imports (after the boundary pilot, where a worker's `get_path)` -> `get_path,` +
+# `run_length)` was a weakening): names added to an import are lines added; the rest still goes to a person.
+TEST_NAMES = """import os, sys
+from os.path import (basename,
+                     dirname)
+from os.path import join
+
+
+def test_names():
+    assert basename("a/b") == "b"
+    assert len([1, 2]) == 2
+    assert sorted([3, 1]) == sorted(
+        [1, 3])
+"""
+JS_NAMES = "import { a } from './names.js';\n\ntest('a', () => expect(a).toBe(1));\n"
+
+
+def _names(old: str, new: str) -> dict[str, str | None]:
+    assert old in TEST_NAMES
+    return {**FIXED, "tests/test_names.py": TEST_NAMES.replace(old, new)}
+
+
+IMPORT_ROWS = [
+    ("parenthesized-import-extended", _names("dirname)", "dirname,\n                     splitext)"), "verified"),
+    ("from-import-extended", _names("import join\n", "import join, normpath\n"), "verified"),
+    ("import-extended", _names("import os, sys", "import os, sys, json"), "verified"),
+    ("import-line-added", _names("import join\n", "import join\nfrom os.path import normpath\n"), "verified"),
+    ("import-name-replaced", _names("import join\n", "import normpath\n"), "person"),
+    ("import-name-aliased", _names("import join\n", "import join as j\n"), "person"),
+    ("import-module-changed", _names("from os.path import join", "from posixpath import join"), "person"),
+    ("import-extended-and-expectation-changed",
+     {**_names("import join\n", "import join, normpath\n"),
+      "tests/test_names.py": TEST_NAMES.replace("import join\n", "import join, normpath\n")
+      .replace("len([1, 2]) == 2", "len([1, 2, 3]) == 3")}, "person"),
+    ("import-extended-and-skip-added",
+     _names("import join\n\n\ndef", "import join\nimport pytest\n\n\n@pytest.mark.skip\ndef"), "person"),
+    # whitespace and a trailing ")" do not make a rewritten line: this adds an argument to a call in an assert
+    ("assert-call-argument-added", _names("        [1, 3])", "        [1, 3],\n        reverse=False)"), "person"),
+    ("js-import-extended", {**FIXED, "tests/names.test.js": JS_NAMES.replace("{ a }", "{ a, b }")}, "person"),
+]
+
+
+@pytest.mark.parametrize(("files", "expected"), [r[1:] for r in IMPORT_ROWS], ids=[r[0] for r in IMPORT_ROWS])
+def test_mutation_of_imports(tmp_path: Path, vtmp: Path, lead: Ledger, files: dict[str, str | None],
+                             expected: str) -> None:
+    repo = make_repo(tmp_path / "repo", CONFIG)
+    (repo / "tests/test_names.py").write_text(TEST_NAMES)
+    (repo / "tests/names.test.js").write_text(JS_NAMES)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "names")
+    sha = piece(repo, "mutant", files)
+    v, rec = checks.verify(lead, "mutant", sha, repo=repo, reported_by="impl")
+    out = rec.outcome
+    assert out is not None and v.environment is None and v.all_passed
+    if expected == "verified":
+        assert out.decision == "verified" and lead.claim_status(rec.claim_id) == "verified", out.reason
+        assert v.integrity.guard_appended and not v.integrity.guard_weakened
+    else:
+        assert out.decision is None and out.person, out.reason
+        assert v.integrity.guard_weakened_files
+
+
+PILOT = Path(__file__).parent / "fixtures" / "boundary_pilot"
+# The pilot's base files, cut down to the context lines of its diffs (the rest of boltons is not needed to apply them)
+PILOT_BASE = {
+    "tests/test_iterutils.py": """import os
+
+import pytest
+
+from boltons.iterutils import (first,
+                               research,
+                               default_enter,
+                               default_exit,
+                               get_path)
+from boltons.namedutils import namedtuple
+
+CUR_PATH = os.path.abspath(__file__)
+
+
+def test_frange_xfrange_zero_step():
+    with pytest.raises(ValueError):
+        frange(10, step=0)
+    with pytest.raises(ValueError):
+        list(xfrange(10, step=0))
+""",
+    "tests/test_mathutils.py": """from pytest import raises
+from boltons.mathutils import clamp, ceil, floor, Bits
+import math
+
+INF, NAN = float('inf'), float('nan')
+
+
+def test_bits_rshift_past_width():
+    shifted = Bits('1') >> 1
+    assert len(shifted) == 0
+    assert shifted.as_bin() == ''
+    assert Bits('101') >> 1 == Bits('10')
+""",
+    "tests/test_strutils.py": """from boltons import strutils
+
+
+def test_args2cmd_sep():
+    assert strutils.args2cmd(['aa', 'bb']) == 'aa bb'
+    assert strutils.args2cmd(['aa', 'bb'], sep='|') == 'aa|bb'
+    assert strutils.args2cmd(['a a', 'bb'], sep='|') == '"a a"|bb'
+""",
+}
+
+
+@pytest.mark.parametrize("commit", ["07ee866", "e16c45f", "6feff72"])
+def test_pilot_import_rewrites_are_appended(tmp_path: Path, commit: str) -> None:
+    """The three pieces of the boundary pilot's arm F that a re-run passed and the guard sent to a person: each added
+    tests and one name to an import (`get_path)` -> `get_path,` + `run_length)`; `..., Bits` -> `..., Bits,
+    weighted_median`). None of them is a weakening."""
+    repo = make_repo(tmp_path / "repo", CONFIG)
+    for path, text in PILOT_BASE.items():
+        (repo / path).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "pilot base")
+    base = git(repo, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(repo), "apply", str(PILOT / f"{commit}.diff")], check=True)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", commit)
+    head = git(repo, "rev-parse", "HEAD")
+    files = sorted(checks.changed_paths(repo, base, head))
+    assert "tests/test_iterutils.py" in files
+    added, appended, weakened = checks.classify_guard(repo, base, head, files)
+    assert (added, weakened) == ([], []) and appended == files
 
 
 def test_mutation_failing_at_the_merge_base_too_is_the_environment(tmp_path: Path, vtmp: Path,

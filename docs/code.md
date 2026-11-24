@@ -476,7 +476,8 @@ A piece usually adds tests. `check verify` splits the guarded files a commit cha
 | change | metrics | a person decides? |
 | --- | --- | --- |
 | a new file, or lines added to a file with none deleted or changed | `guard_added_files` | no |
-| lines deleted or changed, a file deleted, a binary change | `guard_weakened_files` | yes |
+| names added to an import in a Python file: every deleted line is inside an import statement (`get_path)` → `get_path,` + `run_length)`, `from x import a` → `from x import a, b`) and the file still imports every name, module and alias it did | `guard_added_files` | no |
+| any other line deleted or changed (an imported name removed, renamed or re-aliased; an import changed in a file that is not Python or does not parse), a file deleted, a binary change | `guard_weakened_files` | yes |
 | an added line with a skip marker (`pytest.mark.skip`, `pytest.mark.xfail`, `pytest.skip(`, `unittest.skip`, `it.skip(`, `describe.skip(`, `test.skip(`, `xit(`, `t.Skip(`, `#[ignore]`, `@Disabled`, `@Ignore`) | `guard_weakened_files` | yes |
 | any change to a `conftest.py` (an autouse fixture or hook can weaken every test) | `guard_weakened_files` | yes |
 | a JUnit check ran fewer testcases than it did at the merge-base (each check against its own count) | `fewer_tests_checks`, `tests_before`, `tests_after` (sums) | yes |
