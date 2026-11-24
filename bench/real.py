@@ -139,7 +139,7 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
     # finds it without guessing.
     session_id = str(uuid4())
     cmd = [
-        "claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--forward-subagent-text",
+        claude_bin(args), "-p", prompt, "--output-format", "stream-json", "--verbose", "--forward-subagent-text",
         "--session-id", session_id, "--setting-sources", "", "--model", args.model, "--max-turns", str(args.max_turns),
         "--max-budget-usd", str(args.max_budget_usd), "--tools", "Agent,Bash,Read,Write,Glob",
         "--json-schema", json.dumps(REPORT_SCHEMA),
@@ -243,6 +243,45 @@ def session_mcp_servers(out: Path) -> dict[str, Any]:
     except OSError:
         pass
     return {"servers": names, "foreign": [n for n in names if n not in OWN_SERVERS], "tools": tools}
+
+
+CLAUDE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\s|$)")
+
+
+def version_arg(value: str) -> str:
+    """argparse type of --claude-version: X.Y.Z."""
+    import argparse
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        raise argparse.ArgumentTypeError("use the version number Claude Code prints, such as 2.1.330")
+    return value
+
+
+def claude_bin(args: Any) -> str:
+    """The CLI a driver runs: --claude-bin (such as ~/.local/share/claude/versions/2.1.330, which the auto-updater
+    leaves in place), or claude on PATH."""
+    return str(getattr(args, "claude_bin", None) or "claude")
+
+
+def pin_claude(args: Any) -> str:
+    """`claude --version` of the CLI a paid run will use, checked before its first paid call. With --claude-version
+    a different version stops the run (ValueError); without it, a warning. The installed CLI updates itself between
+    runs: 2.1.330 became 2.1.331 on 2026-11-24 during the H5 sweep, and DISABLE_AUTOUPDATER in a run's environment
+    does not hold back the claude on PATH that the next run starts."""
+    binary = claude_bin(args)
+    try:
+        found = subprocess.run([binary, "--version"], capture_output=True, check=True, timeout=60,
+                               text=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"could not read {binary} --version: {exc}") from exc
+    expected = getattr(args, "claude_version", None)
+    match = CLAUDE_VERSION.match(found)
+    if expected is None:
+        print(f"warning: no --claude-version: running {binary} {found!r} unchecked", file=sys.stderr)
+    elif match is None or ".".join(match.groups()) != expected:
+        raise ValueError(f"--claude-version {expected}: {binary} --version says {found!r}; nothing was run "
+                         "(pin the CLI with --claude-bin ~/.local/share/claude/versions/<version>)")
+    return found
 
 
 def claude_config_dir(env: Mapping[str, str]) -> Path:

@@ -53,6 +53,7 @@ class Batch:
         cmd = arms.command(arm, prompt, session, resume=resume, model=self.args.model, budget=cap,
                            max_turns=self.args.probe_turns if probe else self.args.max_turns,
                            claude_mem=self.args.claude_mem_plugin, schema=probes.SCHEMA if probe else None)
+        cmd[0] = real.claude_bin(self.args)
         target.mkdir()
         write_json(target / "command.json", {"cmd": cmd, "cwd": str(work), "session": session, "resume": resume})
         self.spent += cap  # reserve the full cap until a valid cost receipt is available
@@ -286,6 +287,9 @@ def options() -> argparse.ArgumentParser:
     p.add_argument("--max-turns", type=int, default=80)
     p.add_argument("--probe-turns", type=int, default=8)
     p.add_argument("--compact-window", type=int, default=100_000)
+    p.add_argument("--claude-version", type=real.version_arg,
+                   help="stop before any paid call unless claude --version is this (X.Y.Z)")
+    p.add_argument("--claude-bin", help="the Claude Code binary to run (default: claude on PATH)")
     return p
 
 
@@ -324,10 +328,8 @@ def run(args: argparse.Namespace, chosen: list[str]) -> None:
             if manifest is None or not manifest.is_file() or shutil.which("claude-mem") is None:
                 raise ValueError("--execute with arm D needs --claude-mem-plugin and the claude-mem launcher")
             args.claude_mem_plugin = args.claude_mem_plugin.resolve()
-        version = subprocess.run(
-            ["claude", "--version"], capture_output=True, check=True, timeout=30, text=True,
-        ).stdout.strip()
-        match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\s|$)", version)
+        version = real.pin_claude(args)
+        match = real.CLAUDE_VERSION.match(version)
         if match is None or tuple(map(int, match.groups())) < MIN_CLAUDE_VERSION:
             required = ".".join(map(str, MIN_CLAUDE_VERSION))
             raise ValueError(f"--execute needs Claude Code {required} or newer for cumulative receipts "

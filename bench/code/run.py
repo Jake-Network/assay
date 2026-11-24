@@ -43,9 +43,12 @@ from ..real import (
     PreparedRun,
     _capture,
     _read_stream,
+    claude_bin,
     claude_config_dir,
     collect_transcripts,
+    pin_claude,
     usage_check,
+    version_arg,
 )
 from .scripted import make_toy
 
@@ -325,7 +328,7 @@ def implementer_cmd(batch: Batch, inst: dict[str, Any], session_id: str) -> list
     visible = shlex.join(batch.check_argv(inst, "visible"))
     prompt = PROMPT.format(repo=inst["repo"], problem=inst["problem_statement"].strip(), visible=visible)
     # The same isolation as bench/real.py: no settings, hooks, plugins or MCP servers of the machine's user.
-    return ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--session-id", session_id,
+    return [claude_bin(a), "-p", prompt, "--output-format", "stream-json", "--verbose", "--session-id", session_id,
             "--setting-sources", "", "--strict-mcp-config", "--model", a.model, "--max-turns", str(a.max_turns),
             "--max-budget-usd", str(a.max_budget_usd), "--tools", TOOLS, "--allowedTools", TOOLS]
 
@@ -497,7 +500,8 @@ def init_ledger(batch: Batch) -> None:
     claude = None
     if not batch.dry:  # the version only; no model call
         try:
-            claude = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=60).stdout.strip()
+            claude = subprocess.run([claude_bin(batch.args), "--version"], capture_output=True, text=True,
+                                    timeout=60).stdout.strip()
         except OSError as e:
             raise SystemExit(f"claude is not on PATH: {e}") from e
     write_json(batch.out / "batch.json", {
@@ -580,6 +584,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", help="comma separated instance ids")
     ap.add_argument("--limit", type=int, help="run at most this many unfinished instances now")
     ap.add_argument("--database-url", help="use this Postgres instead of an embedded one in DIR/pg")
+    ap.add_argument("--claude-version", type=version_arg,
+                    help="real: stop before any paid call unless claude --version is this (X.Y.Z)")
+    ap.add_argument("--claude-bin", help="real: the Claude Code binary to run (default: claude on PATH)")
     args = ap.parse_args(argv)
     if not args.out:
         if not args.dry:
@@ -590,6 +597,11 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"--{name.replace('_', '-')} must be a positive amount")
     if min(args.wall_clock, args.max_turns) <= 0 or (args.limit is not None and args.limit < 0):
         ap.error("limits must be positive")
+    if args.execute and not args.dry and not args.preflight:  # the preflight runs Docker, not Claude Code
+        try:
+            pin_claude(args)
+        except ValueError as exc:
+            ap.exit(1, f"{exc}\n")
     batch = open_batch(args)
     try:
         return _run(batch, args, ap)

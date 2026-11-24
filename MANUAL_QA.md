@@ -64,8 +64,13 @@ table, with the Claude Code version, into docs/claude-code.md "Boundary hooks: w
 
 ```bash
 uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5
-uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5 --execute
+uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5 --execute --claude-version 2.1.330
 ```
+
+`--claude-version X.Y.Z` (in `bench.run`, `bench.boundary.run` and `bench.code.run`) stops a run before its first
+paid call when `claude --version` says otherwise; without it `--execute` only warns. The installed CLI updates
+itself between runs (2.1.330 to 2.1.331 on 2026-11-24, during the H5 sweep), so pass the registered version, and
+`--claude-bin ~/.local/share/claude/versions/2.1.330` to run that build whatever `claude` on PATH has become.
 
 The first command creates local command previews and does not start Claude or initialize a ledger. The second
 uses the same Claude dollar cap, worker count, model, turn limit and wall-clock limit for each run. With the
