@@ -1,0 +1,651 @@
+{
+  "conditions": {
+    "model": "claude-sonnet-5-5",
+    "max_budget_usd": 5.0,
+    "execute": true,
+    "rebuilt_from": [
+      "h5-runs/30-A-1-try1/A-1:A-1",
+      "h5-runs/30-A-2-try1/A-1:A-2",
+      "h5-runs/30-A-2-try2/A-1:A-3",
+      "h5-runs/30-C-1-try1/C-1:C-1",
+      "h5-runs/30-C-2-try1/C-1:C-2"
+    ],
+    "failed": [
+      {
+        "dir": "h5-runs/30-A-2-try1/A-1",
+        "error": "Claude did not finish successfully (success)"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "config": "A",
+      "run": 1,
+      "evaluations": 444,
+      "duplicate_ratio": 0.7252252252252253,
+      "lost_results": 0,
+      "lead_context_max": 159560,
+      "tokens_total": 438564,
+      "final_best": 2.6359830849,
+      "curve": [
+        [
+          438564,
+          2.6359830849
+        ]
+      ],
+      "cost_usd": 4.097795399999997,
+      "curve_source": "final aggregate only",
+      "usage_check": {
+        "final": {
+          "lead": {
+            "input_tokens": 8,
+            "cache_creation_input_tokens": 159558,
+            "cache_read_input_tokens": 176176,
+            "output_tokens": 102822,
+            "total": 438564
+          },
+          "session": {
+            "input_tokens": 402,
+            "cache_creation_input_tokens": 452860,
+            "cache_read_input_tokens": 1240044,
+            "output_tokens": 260150,
+            "total": 1953456
+          },
+          "models": {
+            "claude-sonnet-5-5": {
+              "input_tokens": 402,
+              "cache_creation_input_tokens": 452860,
+              "cache_read_input_tokens": 1240044,
+              "output_tokens": 260150,
+              "total": 1953456
+            }
+          }
+        },
+        "sources": {
+          "stream": {
+            "messages": 201,
+            "lead_messages": 4,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 8,
+              "cache_creation_input_tokens": 159558,
+              "cache_read_input_tokens": 176176,
+              "output_tokens": 30,
+              "total": 335772
+            },
+            "session": {
+              "input_tokens": 402,
+              "cache_creation_input_tokens": 452860,
+              "cache_read_input_tokens": 1240044,
+              "output_tokens": 90306,
+              "total": 1783612
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -102792,
+                "total": -102792
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -169844,
+                "total": -169844
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -169844,
+                "total": -169844
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": false,
+              "session": false,
+              "prompt_side": true
+            }
+          },
+          "transcripts": {
+            "messages": 201,
+            "lead_messages": 4,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 8,
+              "cache_creation_input_tokens": 159558,
+              "cache_read_input_tokens": 176176,
+              "output_tokens": 102822,
+              "total": 438564
+            },
+            "session": {
+              "input_tokens": 402,
+              "cache_creation_input_tokens": 452860,
+              "cache_read_input_tokens": 1240044,
+              "output_tokens": 260150,
+              "total": 1953456
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": true,
+              "session": true,
+              "prompt_side": true
+            }
+          }
+        },
+        "reconciled": true,
+        "source": "transcripts"
+      },
+      "lead_report_tokens": 62217,
+      "delivered_worker_reports": 89,
+      "source_dir": "h5-runs/30-A-1-try1/A-1"
+    },
+    {
+      "config": "A",
+      "run": 3,
+      "evaluations": 430,
+      "duplicate_ratio": 0.7813953488372093,
+      "lost_results": 0,
+      "lead_context_max": 142043,
+      "tokens_total": 549998,
+      "final_best": 2.6359830849,
+      "curve": [
+        [
+          549998,
+          2.6359830849
+        ]
+      ],
+      "cost_usd": 4.0112997,
+      "curve_source": "final aggregate only",
+      "usage_check": {
+        "final": {
+          "lead": {
+            "input_tokens": 14,
+            "cache_creation_input_tokens": 142041,
+            "cache_read_input_tokens": 313169,
+            "output_tokens": 94774,
+            "total": 549998
+          },
+          "session": {
+            "input_tokens": 550,
+            "cache_creation_input_tokens": 435812,
+            "cache_read_input_tokens": 1883582,
+            "output_tokens": 251925,
+            "total": 2571869
+          },
+          "models": {
+            "claude-sonnet-5-5": {
+              "input_tokens": 550,
+              "cache_creation_input_tokens": 435812,
+              "cache_read_input_tokens": 1883582,
+              "output_tokens": 251925,
+              "total": 2571869
+            }
+          }
+        },
+        "sources": {
+          "stream": {
+            "messages": 275,
+            "lead_messages": 7,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 14,
+              "cache_creation_input_tokens": 142041,
+              "cache_read_input_tokens": 313169,
+              "output_tokens": 42,
+              "total": 455266
+            },
+            "session": {
+              "input_tokens": 550,
+              "cache_creation_input_tokens": 435812,
+              "cache_read_input_tokens": 1883582,
+              "output_tokens": 83491,
+              "total": 2403435
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -94732,
+                "total": -94732
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -168434,
+                "total": -168434
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -168434,
+                "total": -168434
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": false,
+              "session": false,
+              "prompt_side": true
+            }
+          },
+          "transcripts": {
+            "messages": 275,
+            "lead_messages": 7,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 14,
+              "cache_creation_input_tokens": 142041,
+              "cache_read_input_tokens": 313169,
+              "output_tokens": 94774,
+              "total": 549998
+            },
+            "session": {
+              "input_tokens": 550,
+              "cache_creation_input_tokens": 435812,
+              "cache_read_input_tokens": 1883582,
+              "output_tokens": 251925,
+              "total": 2571869
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": true,
+              "session": true,
+              "prompt_side": true
+            }
+          }
+        },
+        "reconciled": true,
+        "source": "transcripts"
+      },
+      "lead_report_tokens": 55994,
+      "delivered_worker_reports": 86,
+      "source_dir": "h5-runs/30-A-2-try2/A-1"
+    },
+    {
+      "config": "C",
+      "run": 1,
+      "evaluations": 426,
+      "duplicate_ratio": 0.5727699530516432,
+      "lost_results": 0,
+      "lead_context_max": 130699,
+      "tokens_total": 2269571,
+      "final_best": 2.6359830849,
+      "curve": [
+        [
+          2269571,
+          2.6359830849
+        ]
+      ],
+      "cost_usd": 1.9092495200000044,
+      "curve_source": "final aggregate only",
+      "usage_check": {
+        "final": {
+          "lead": {
+            "input_tokens": 60,
+            "cache_creation_input_tokens": 130697,
+            "cache_read_input_tokens": 2071742,
+            "output_tokens": 67072,
+            "total": 2269571
+          },
+          "session": {
+            "input_tokens": 3118,
+            "cache_creation_input_tokens": 983809,
+            "cache_read_input_tokens": 20609894,
+            "output_tokens": 499314,
+            "total": 22096135
+          },
+          "models": {
+            "claude-sonnet-5-5": {
+              "input_tokens": 60,
+              "cache_creation_input_tokens": 130697,
+              "cache_read_input_tokens": 2071742,
+              "output_tokens": 67072,
+              "total": 2269571
+            },
+            "claude-haiku-5-5": {
+              "input_tokens": 3058,
+              "cache_creation_input_tokens": 853112,
+              "cache_read_input_tokens": 18538152,
+              "output_tokens": 432242,
+              "total": 19826564
+            }
+          }
+        },
+        "sources": {
+          "stream": {
+            "messages": 1559,
+            "lead_messages": 30,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 60,
+              "cache_creation_input_tokens": 130697,
+              "cache_read_input_tokens": 2071742,
+              "output_tokens": 583,
+              "total": 2203082
+            },
+            "session": {
+              "input_tokens": 3118,
+              "cache_creation_input_tokens": 983809,
+              "cache_read_input_tokens": 20609894,
+              "output_tokens": 47036,
+              "total": 21643857
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -66489,
+                "total": -66489
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -452278,
+                "total": -452278
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -66489,
+                "total": -66489
+              },
+              "claude-haiku-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -385789,
+                "total": -385789
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": false,
+              "session": false,
+              "prompt_side": true
+            }
+          },
+          "transcripts": {
+            "messages": 1559,
+            "lead_messages": 30,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 60,
+              "cache_creation_input_tokens": 130697,
+              "cache_read_input_tokens": 2071742,
+              "output_tokens": 67072,
+              "total": 2269571
+            },
+            "session": {
+              "input_tokens": 3118,
+              "cache_creation_input_tokens": 983809,
+              "cache_read_input_tokens": 20609894,
+              "output_tokens": 499314,
+              "total": 22096135
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              },
+              "claude-haiku-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": true,
+              "session": true,
+              "prompt_side": true
+            }
+          }
+        },
+        "reconciled": true,
+        "source": "transcripts"
+      },
+      "lead_report_tokens": 22292,
+      "delivered_worker_reports": 90,
+      "source_dir": "h5-runs/30-C-1-try1/C-1"
+    },
+    {
+      "config": "C",
+      "run": 2,
+      "evaluations": 133,
+      "duplicate_ratio": 0.3082706766917293,
+      "lost_results": 0,
+      "lead_context_max": 53798,
+      "tokens_total": 760007,
+      "final_best": 2.6359830849,
+      "curve": [
+        [
+          760007,
+          2.6359830849
+        ]
+      ],
+      "cost_usd": 2.7022774000000003,
+      "curve_source": "final aggregate only",
+      "usage_check": {
+        "final": {
+          "lead": {
+            "input_tokens": 40,
+            "cache_creation_input_tokens": 53796,
+            "cache_read_input_tokens": 684345,
+            "output_tokens": 21826,
+            "total": 760007
+          },
+          "session": {
+            "input_tokens": 588,
+            "cache_creation_input_tokens": 314355,
+            "cache_read_input_tokens": 3694699,
+            "output_tokens": 146505,
+            "total": 4156147
+          },
+          "models": {
+            "claude-sonnet-5-5": {
+              "input_tokens": 588,
+              "cache_creation_input_tokens": 314355,
+              "cache_read_input_tokens": 3694699,
+              "output_tokens": 146505,
+              "total": 4156147
+            }
+          }
+        },
+        "sources": {
+          "stream": {
+            "messages": 294,
+            "lead_messages": 20,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 40,
+              "cache_creation_input_tokens": 53796,
+              "cache_read_input_tokens": 684345,
+              "output_tokens": 429,
+              "total": 738610
+            },
+            "session": {
+              "input_tokens": 588,
+              "cache_creation_input_tokens": 314355,
+              "cache_read_input_tokens": 3694699,
+              "output_tokens": 14940,
+              "total": 4024582
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -21397,
+                "total": -21397
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -131565,
+                "total": -131565
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": -131565,
+                "total": -131565
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": false,
+              "session": false,
+              "prompt_side": true
+            }
+          },
+          "transcripts": {
+            "messages": 294,
+            "lead_messages": 20,
+            "unusable_records": 0,
+            "lead": {
+              "input_tokens": 40,
+              "cache_creation_input_tokens": 53796,
+              "cache_read_input_tokens": 684345,
+              "output_tokens": 21826,
+              "total": 760007
+            },
+            "session": {
+              "input_tokens": 588,
+              "cache_creation_input_tokens": 314355,
+              "cache_read_input_tokens": 3694699,
+              "output_tokens": 146505,
+              "total": 4156147
+            },
+            "difference": {
+              "lead": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              },
+              "session": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models": {
+              "claude-sonnet-5-5": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+                "total": 0
+              }
+            },
+            "models_without_messages": {},
+            "matches": {
+              "lead": true,
+              "session": true,
+              "prompt_side": true
+            }
+          }
+        },
+        "reconciled": true,
+        "source": "transcripts"
+      },
+      "lead_report_tokens": 7957,
+      "delivered_worker_reports": 28,
+      "source_dir": "h5-runs/30-C-2-try1/C-1"
+    }
+  ]
+}

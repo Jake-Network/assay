@@ -166,6 +166,20 @@ its API cost (B: 3.2x and 1.5x). Where C's tokens go is broken down in
 [cost-breakdown.md](bench/results/2026-11-21-claude-sonnet-5-5-rerun/cost-breakdown.md): mostly more model calls,
 each re-reading its context, rather than large tool results.
 
+**Fan-in (H5, 2026-11-25).** The same task at 8, 16 and 30 requested workers per round, A against C, USD 5 cap per
+run (mean over completed runs: 3 per configuration at 8 and 16; at 30, 2 for A and 1 for C):
+
+| workers | lead context (max), A | lead context (max), C | report tokens to the lead, A | report tokens to the lead, C |
+|---|---|---|---|---|
+| 8 | 47.2k | 55.2k | 15.4k | 6.9k |
+| 16 | 83.5k | 85.9k | 31.1k | 13.8k |
+| 30 | 150.8k | 130.7k (Haiku workers) | 59.1k | 22.3k (Haiku workers) |
+
+Pre-registered H5 gate, C lower than A at every width and growing more slowly: **not met**. C's lead reads less than
+half of A's report tokens, but its peak context is higher at 8 and 16. At 30 neither C run is a like-for-like sample:
+to stay under USD 5, one lead ran its workers on Haiku and the other ran 28 of 90 workers. Width 30 ran on Claude Code
+2.1.331. Details: [bench/results/2026-11-25-h5-sweep/](bench/results/2026-11-25-h5-sweep/README.md).
+
 `python -m bench.run --dry` reproduces the pipeline without model calls.
 
 ## How the ledger works
