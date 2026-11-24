@@ -194,3 +194,12 @@ any rerun before paying for it.
   the runner does not run. Arm F's instructions do not run `piece start` and the runner does not set
   `BENCHBOOK_PIECE`, so in 937f5ea (PR #4 issue 1) the TaskCompleted gate does not hold arm F's to-dos; the re-run
   of a reported commit is not affected. The report says so beside H2.
+- **2026-11-25, deviations found after the runs.** Written after every paid run, while writing the reports; no
+  procedure, metric or gate changes. (1) The installed Claude Code was updated to 2.1.331 on 2026-11-24 at about 07:03
+  KST, and the H5 driver did not check the version. H5 widths 8 and 16 ran on 2.1.330. Every width-30 run
+  (`30-A-1-try1`, `30-A-2-try1`, `30-A-2-try2`, `30-C-1-try1`, `30-C-2-try1`) and all three boundary pilot trials
+  ran on 2.1.331, as each stream's `system/init` event and the pilot's `metrics.json` record. (2) In `30-C-1-try1`
+  the lead passed `model: "haiku"` to every Agent call, so its workers ran on claude-haiku-5-5 rather than the
+  registered claude-sonnet-5-5; in `30-C-2-try1` the lead ran 28 workers instead of 90. Both stayed under the USD 5
+  cap, both are reported with these conditions, and neither is treated as a like-for-like width-30 sample. The H5
+  verdict does not rest on them: the gate already fails on peak lead context at width 8.
