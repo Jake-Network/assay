@@ -41,6 +41,8 @@ documentation states only in part. Check it on the installed version:
 
 ```bash
 scripts/qa_boundary_hooks.sh --keep                 # haiku by default; --model sonnet to match a real lead
+# scenario 6 (2026-11-24): a subagent's hook input carries the lead's session_id and an agent_id; the notes matcher
+# ^(?!(Bash|Agent|Task)$) fires on a lead Read and its additionalContext reaches the model
 scripts/qa_boundary_hooks.sh --save-fixtures        # also replace tests/fixtures/hooks/{session_start_*,pre_compact,
                                                     #   post_tool_use_agent*,user_prompt_submit}.json with what it saw
 ```

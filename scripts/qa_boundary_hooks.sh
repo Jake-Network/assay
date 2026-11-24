@@ -55,7 +55,9 @@ def hook(event, matcher=None):
 print(json.dumps({"hooks": {
     "SessionStart": hook("SessionStart"), "PreCompact": hook("PreCompact"), "PostCompact": hook("PostCompact"),
     "UserPromptSubmit": hook("UserPromptSubmit"), "SubagentStop": hook("SubagentStop"),
-    "PostToolUse": hook("PostToolUse", "Bash|Agent|Task")}}, indent=2))
+    # The second PostToolUse entry is the notes hook's matcher: every tool but Bash, Agent and Task.
+    "PostToolUse": hook("PostToolUse", "Bash|Agent|Task") + hook("PostToolUse", "^(?!(Bash|Agent|Task)$)")}},
+    indent=2))
 PY
 
 export ENABLE_CLAUDEAI_MCP_SERVERS=false
@@ -79,15 +81,20 @@ run 2-after --resume "$A" "$ASK Then, on its own line, say whether your conversa
 run 3-agents --allowedTools "Agent" -- "Use the Agent tool twice with subagent_type general-purpose. First in the foreground with the prompt: Reply with exactly: DONE 0123456789abcdef0123456789abcdef01234567. Then the same prompt with run_in_background set to true. Wait for the background agent to report, then reply OK."
 # 4. PostToolUse on Bash: its additionalContext
 run 4-bash --allowedTools "Bash(echo:*)" -- "Run the shell command: echo bb-qa. Then: $ASK"
+# 6. a subagent's tool call: its PostToolUse input's session_id (the lead's?) and agent_id; and a lead Read result's
+#    additionalContext through the notes hook's matcher. Background tasks stay on (the default).
+B="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+run 6-subagent --session-id "$B" --allowedTools "Agent,Bash(echo:*),Read" -- "Use the Agent tool once with subagent_type general-purpose and the prompt: Run the shell command: echo bb-sub. Then reply with exactly: DONE. Wait for it to report. Then use the Read tool on app.py. Then: $ASK"
 # 5. both plugins from repeated --plugin-dir, and the MCP tool prefix of the hyphenated plugin. The MCP server is
 #    still connecting at init, so the session waits once with Bash and then names the tools it can call.
 PATH="$ROOT/.venv/bin:$PATH" run 5-plugins --max-turns 3 --plugin-dir "$ROOT/integrations/claude-code" \
     --plugin-dir "$ROOT/integrations/claude-code-mcp" --allowedTools "Bash(sleep:*)" -- \
     "Run the shell command: sleep 8. Then reply with the full name of every tool you can call whose name starts with mcp__plugin, one per line. Nothing else."
 
-python3 - "$WORK" "$(claude --version 2>/dev/null || echo unknown)" "$SAVE" "$ROOT" <<'PY'
+python3 - "$WORK" "$(claude --version 2>/dev/null || echo unknown)" "$SAVE" "$ROOT" "$B" <<'PY'
 import json, pathlib, re, sys
 work, version, save, root = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3] == "1", pathlib.Path(sys.argv[4])
+lead6 = sys.argv[5]
 inputs = []
 for f in sorted((work / "hooks").glob("*.json")):
     try:
@@ -142,6 +149,11 @@ rows = [
     ("3. PostToolUse Agent (tool_name, status)", ", ".join(map(str, statuses)) or "none"),
     ("3. event order in the agents session", " > ".join(order[:20])),
     ("4. Bash marker visible", str("BB-MARKER-PostToolUse-Bash" in answer("4-bash"))),
+    ("6. subagent Bash PostToolUse (session_id is the lead's, agent_id set)",
+     ", ".join(f"({i.get('session_id') == lead6}, {bool(i.get('agent_id'))})" for i in of("PostToolUse", tool_name="Bash")
+               if i.get("agent_id") or i.get("session_id") == lead6) or "none"),
+    ("6. lead Read marker visible (the notes hook's matcher)",
+     str("BB-MARKER-PostToolUse-Read" in answer("6-subagent"))),
     ("5. plugins loaded", ", ".join(map(str, plugins)) or "none (see 5-plugins.err)"),
     ("5. MCP tool prefixes", ", ".join(prefixes) or "none"),
 ]
