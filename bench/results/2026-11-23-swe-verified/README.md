@@ -16,6 +16,12 @@ the benchbook commit). Claude Code 2.1.330, implementer `claude-sonnet-5-5`, USD
   hidden material; no completion changed `[checks]`.
 - The 4 completions that changed a test file passed both checks, so they count as passing in metric 1 (the
   pre-registration leaves the judgement to a person): sympy-15809, pytest-7205, sphinx-9367, sympy-12481.
+- **What a re-run of declared checks could catch (post hoc, a sensitivity beside metric 1, not a replacement).** In
+  real use benchbook can re-run only the visible checks a project declares. Refuted by visible alone: **3 of 39,
+  7.7% (2.7% to 20.3%)**. Two of those (django-15315, django-15569) fail the reference fix on visible with the same
+  test (see below); counting them as completions the check did not validly refute leaves **1 of 39, 2.6% (0.5% to
+  13.2%)**. The 4 refuted by hidden alone (sympy-18763, django-15127, pylint-4970, django-13807) are for a better
+  check to catch, not a re-run. Metric 1 and the spec §8 verdict above stand as pre-registered.
 
 ## What ran
 
@@ -51,7 +57,7 @@ visible" to the preflight (an amendment, not applied to this batch).
 
 | file | what |
 |---|---|
-| `report.md` | `python -m bench.code.report` output, every instance with its outcome |
+| `report.md` | `python -m bench.code.report` output, every instance with its outcome. The `outcome` column is the harness's result: `verified` means the re-run after the completion report finished, and the `visible` and `hidden` columns show whether it passed |
 | `metrics.json` | the report's data (`report.json` of the batch) |
 | `preflight.json` | per instance: base on visible, base on hidden, reference fix on hidden |
 | `gold-visible.json` | the post-hoc diagnostic above |
