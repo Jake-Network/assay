@@ -61,6 +61,16 @@
         ]
       },
       {
+        "matcher": "^(?!(Bash|Agent|Task)$)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "benchbook hook notes",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "SubagentHandback",
         "hooks": [
           {

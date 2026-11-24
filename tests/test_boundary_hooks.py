@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -332,6 +333,80 @@ def test_notes_are_given_once(env: Path, capsys: pytest.CaptureFixture[str], mon
     assert run("notes", {**data, "session_id": "../../etc"}, capsys, monkeypatch) == ""
 
 
+def _pending(env: Path, session: str, *lines: str) -> Path:
+    notes = env / "state" / "benchbook" / "notes" / session
+    notes.mkdir(parents=True, exist_ok=True)
+    for i, line in enumerate(lines):
+        (notes / f"verify-{i:03}.txt").write_text(line + "\n")
+    return notes
+
+
+def _tool_result(session: str, cwd: Path, tool: str = "Read", **extra: Any) -> dict[str, Any]:
+    return {"session_id": session, "cwd": str(cwd), "hook_event_name": "PostToolUse", "tool_name": tool,
+            "tool_input": {"file_path": "app.py"}, "tool_response": {}, **extra}
+
+
+def test_notes_after_any_tool_answer_as_post_tool_use(env: Path, capsys: pytest.CaptureFixture[str],
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lead calling a tool whose own hook does not deliver (Read, Grep, an MCP tool) gets the verdict right
+    after that tool's result, under the event that ran."""
+    _pending(env, "s-lead", "benchbook: media-upload abc1234: re-run passed")
+    assert context(run("notes", _tool_result("s-lead", env), capsys, monkeypatch), "PostToolUse") == (
+        "benchbook: media-upload abc1234: re-run passed")
+    assert run("notes", _tool_result("s-lead", env), capsys, monkeypatch) == ""
+
+
+def test_a_subagents_tool_result_leaves_the_leads_notes(env: Path, capsys: pytest.CaptureFixture[str],
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code gives a subagent's hooks the lead's session_id and the subagent's agent_id. A worker's Bash or
+    Read result must not take the lead's verdict into the worker's context; the lead's next tool result gets it."""
+    from benchbook import check_hooks
+
+    notes = _pending(env, "s-swarm", "benchbook: media-upload abc1234: re-run failed")
+    worker = {"agent_id": "a1b2c3", "agent_type": "general-purpose"}
+    assert run("notes", _tool_result("s-swarm", env, **worker), capsys, monkeypatch) == ""
+    bash = {**fixture("post_tool_use_bash.json", env), "session_id": "s-swarm"}
+    bash["tool_input"]["command"] = "true"
+    assert bash["agent_id"]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(bash)))
+    assert check_hooks.bash_result() == 0
+    assert capsys.readouterr() == ("", "")
+    agent_call = {**fixture("post_tool_use_agent_async.json", env), "session_id": "s-swarm", **worker}
+    assert run("agent-result", agent_call, capsys, monkeypatch) == ""
+    assert [p.name for p in notes.iterdir()] == ["verify-000.txt"]
+    lead_bash = {key: value for key, value in bash.items() if key not in ("agent_id", "agent_type")}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(lead_bash)))
+    assert check_hooks.bash_result() == 0
+    assert "re-run failed" in context(capsys.readouterr().out, "PostToolUse")
+    assert not (notes / "verify-000.txt").exists()
+
+
+def test_a_launched_background_agent_delivers_the_leads_notes(env: Path, capsys: pytest.CaptureFixture[str],
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lead fanning work out calls Agent more than any other tool, and on Claude Code 2.1.330 every call comes back
+    async_launched: that result queues nothing (there is no report yet) but hands over what is waiting."""
+    _pending(env, "s-fan", "benchbook: auth def5678: re-run passed")
+    launched = {**fixture("post_tool_use_agent_async.json", env), "session_id": "s-fan"}
+    assert context(run("agent-result", launched, capsys, monkeypatch), "PostToolUse") == (
+        "benchbook: auth def5678: re-run passed")
+    assert run("agent-result", launched, capsys, monkeypatch) == ""
+
+
+def test_hooks_running_at_once_deliver_a_note_once(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bash's hook, the notes hook and agent-result can run at the same moment in one session (parallel tool
+    calls): each note goes to exactly one of them."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from benchbook import session_notes
+
+    lines = [f"benchbook: piece-{i} {i:07}: re-run passed" for i in range(20)]
+    _pending(env, "s-race", *lines)
+    with ThreadPoolExecutor(8) as pool:
+        given = list(pool.map(lambda _: session_notes.deliver("s-race"), range(16)))
+    delivered = [line for text in given for line in text.split("\n\n") if line]
+    assert sorted(delivered) == sorted(lines)
+
+
 # ------------------------------------------------------------------------------------------- fast path and wiring
 
 @pytest.mark.parametrize(("event", "name"), [("session-start", "session_start_startup.json"),
@@ -376,6 +451,15 @@ def test_the_plugin_runs_the_boundary_hooks() -> None:
         [agent_hook] = [entry for entry in h["PostToolUse"] if entry["matcher"] == "Agent|Task"]
         assert [x["command"] for x in agent_hook["hooks"]] == [prefix + "agent-result"]
         assert hook_args(["hook", "agent-result"]) == ("agent-result", None)
+        # Every other tool's result delivers notes too; Bash and Agent deliver from their own hooks.
+        [notes_hook] = [entry for entry in h["PostToolUse"] if [x["command"] for x in entry["hooks"]]
+                        == [prefix + "notes"]]
+        matches = {tool: re.search(notes_hook["matcher"], tool) is not None
+                   for tool in ("Bash", "Agent", "Task", "Read", "Edit", "Grep", "BashOutput", "TaskCreate",
+                                "mcp__plugin_benchbook-mcp_benchbook__brief")}
+        assert matches == {"Bash": False, "Agent": False, "Task": False, "Read": True, "Edit": True, "Grep": True,
+                           "BashOutput": True, "TaskCreate": True,
+                           "mcp__plugin_benchbook-mcp_benchbook__brief": True}, f
 
 
 def test_context_answer_per_harness() -> None:
@@ -383,6 +467,13 @@ def test_context_answer_per_harness() -> None:
     assert ss == {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "brief"}}
     ups = json.loads(harnesses.context_answer("claude-code", "notes", "n"))
     assert ups["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    for ran in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
+        answer = json.loads(harnesses.context_answer("claude-code", "notes", "n", ran))
+        assert answer["hookSpecificOutput"]["hookEventName"] == ran
+    other = json.loads(harnesses.context_answer("claude-code", "notes", "n", "Stop"))
+    assert other["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    codex = json.loads(harnesses.context_answer("codex", "notes", "n", "UserPromptSubmit"))
+    assert codex["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert harnesses.context_answer("claude-code", "pre-compact", "keep c:1") == "keep c:1\n"
     assert harnesses.context_answer("claude-code", "session-start", "") == ""
     gemini = json.loads(harnesses.context_answer("gemini", "notes", "n"))

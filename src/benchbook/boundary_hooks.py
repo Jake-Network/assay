@@ -11,8 +11,10 @@
 - `benchbook hook pre-compact` (PreCompact): the same brief cut to three lines per section, as one paragraph of at
   most 1,000 characters on stdout, which Claude Code reads as instructions for the compaction summary. Nothing when
   the ledger does not answer.
-- `benchbook hook notes` (UserPromptSubmit): notes queued for this session (`<state dir>/notes/<session_id>/`,
-  written by the automatic re-run, T11), given once and moved to `delivered/`.
+- `benchbook hook notes` (UserPromptSubmit, and PostToolUse of the tools whose own hooks do not deliver them): notes
+  queued for this session (`<state dir>/notes/<session_id>/`, written by the automatic re-run, T11), given once and
+  moved to `delivered/`. Only the lead gets them: a hook that fired inside a subagent (an `agent_id` in its input)
+  leaves them for the lead's next hook.
 
 A directory without a benchbook project leaves after reading config.toml, before the database layer is imported.
 Nothing reaches stderr and every path exits 0; failures go to hook.log.
@@ -68,18 +70,16 @@ def main(event: str, harness: str | None = None) -> None:
     config.hold_notices()  # the harness runs this: nothing may reach stderr
     harness = harness or "claude-code"
     text = ""
+    data: dict[str, Any] = {}
     try:
         data = read_input()
         if harness != "claude-code":
             from .harnesses import boundary_input
 
             data = boundary_input(harness, data)
-        if event == "agent-result":
-            response = data.get("tool_response")
-            if isinstance(response, dict) and response.get("status") == "async_launched":
-                return  # The launch has no report; leave pending notes for the next hook.
+        lead = session_notes.for_lead(data)
         if event == "notes":
-            text = session_notes.deliver(data.get("session_id"))
+            text = session_notes.deliver(data.get("session_id")) if lead else ""
         elif event == "session-start":
             text = session_start(data)
         elif event == "pre-compact":
@@ -87,10 +87,11 @@ def main(event: str, harness: str | None = None) -> None:
         elif event == "agent-result":
             from .verify_requests import enqueue
 
-            text = enqueue(data)
+            text = enqueue(data)  # nothing for an async_launched result, which has no report yet
             if data.get("hook_event_name") == "SubagentStop":
                 return  # SubagentStop has no context for the lead; pending notes wait for a hook that has
-        if event in ("session-start", "agent-result"):
+        if event in ("session-start", "agent-result") and lead:
+            # An async_launched result delivers too: a lead fanning work out calls Agent more than anything else.
             notes = session_notes.deliver(data.get("session_id"), min(MAX_CHARS, 10_000 - len(text) - 2))
             text = "\n\n".join(part for part in (text, notes) if part)
     except Exception:  # noqa: BLE001 - a hook must not fail the session
@@ -102,7 +103,7 @@ def main(event: str, harness: str | None = None) -> None:
         return  # Claude Code's empty answer is no output; harnesses.py is not imported for it
     from .harnesses import context_answer
 
-    sys.stdout.write(context_answer(harness, event, text))
+    sys.stdout.write(context_answer(harness, event, text, data.get("hook_event_name")))
     sys.stdout.flush()
 
 

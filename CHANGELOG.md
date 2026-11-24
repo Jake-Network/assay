@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- Re-run verdicts reach the lead, and only the lead, within its turn. A hook that fires inside a subagent (Claude Code
+  gives it the lead's `session_id` with an `agent_id`) no longer delivers the session's notes: a worker's Bash result
+  could take a verdict meant for the lead into the worker's context, which in a swarm is where most tool calls are.
+  The notes hook also runs on PostToolUse of every tool other than Bash, Agent and Task (which deliver from their own
+  hooks), and an `async_launched` Agent result delivers what is waiting instead of nothing. The hook names the event
+  that ran (`PostToolUse` or `UserPromptSubmit`). With no note waiting it takes 35 ms (p50; p95 45 ms; 50 runs).
 - Out-of-scope findings from a report that recorded no attempt are tagged with the piece the report's commit names,
   found the way the automatic re-run finds it (`verify_requests.reported_target`), so the piece's `--here` brief
   shows them (PR #4 issue 3). The brief does not yet count open findings outside its scope.
