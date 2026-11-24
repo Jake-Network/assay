@@ -692,14 +692,20 @@ by hand, not a live session). Four are fixed; the fourth is not.
   re-run runs may now be in the ledger before that re-run reads the implementers' passes (T03), where before it was
   recorded after. That is the same as a re-run that started a moment later, and a later pass of the same commit is
   the same evidence. Retries, receipts and dead letters are per entry and unchanged; `hook replay` and token
-  adoption take both locks, verify lane first, the order the verify lane takes them in.
+  adoption take both locks, verify lane first, the order the verify lane takes them in. Neither lane strands the
+  other's entries (review of PR #6): an attempt written while the verify lane settles finds the records lock held, so
+  the verify lane starts the records processor for it afterwards; and each processor starts the other lane's when
+  entries wait there with none running, so a re-run left by a stopped processor or an older version is taken up by
+  the next hook that starts any processor, as one processor used to.
 - **`[verify] parallel_baseline` is opt-in.** The merge-base run is half of a verify that changed tests, and
   running it beside the commit's changes no verdict when the two copies share nothing (the mutation table and the
   test-count tests run both ways). A repository whose checks use a fixed port, a database or a shared directory
   would get failures from the overlap, which would read as the commit's, so the default stays sequential. The early
   run is used only when the commit's run counted exactly the same JUnit checks; its thread's commands can be
   stopped from the main thread (`runner.stop_commands`), so an interrupted verify does not wait for it, and `git
-  worktree` add, remove and prune are serialized within the process.
+  worktree` add, remove and prune are serialized within the process. SIGTERM and SIGHUP are trapped for the early
+  run's whole life, not only while a check runs (run_checks restores the handlers it found): a signal while verify
+  waits for it stops the run, removes its worktree and is recorded as the interruption, as a sequential baseline's.
 - **Several re-runs at once: not done.** With lanes and the parallel baseline, eight pieces reporting together get
   their last verdict after 92 s and the first after 11 s, and attempts are no longer held up. Pieces finish at
   different times in practice, and concurrent re-runs bring the shared-resource question to every repository, so

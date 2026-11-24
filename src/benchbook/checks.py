@@ -733,7 +733,15 @@ class EarlyBaseline:
             self._box["error"] = e
 
     def result(self) -> tuple[dict[str, BaseRun], BaseException | None]:
-        self._thread.join()
+        """The run's result; an interruption while waiting for it (verify traps SIGTERM and SIGHUP while the run
+        lives) stops the run and comes back as the run's interruption, as a sequential baseline's would."""
+        try:
+            while self._thread.is_alive():
+                self._thread.join(0.1)
+        except (Interrupted, KeyboardInterrupt) as e:
+            with _signals_held():
+                self.stop()
+            return {}, e
         if "error" in self._box:
             raise self._box["error"]
         return self._box["value"]  # type: ignore[no-any-return]
@@ -949,8 +957,12 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     prepared = Prepared()
     env = check_env()
     early = None
+    trapped: dict[int, Any] = {}
     if b.prep.parallel_baseline and integ.guard_files and sha != b.merge_base:
         if junit := [b.checks[n] for n in names if b.checks[n].junit]:
+            # SIGTERM and SIGHUP raise Interrupted for as long as the early run lives, not only while a check runs
+            # (run_checks restores the handlers it found): a signal while waiting for it reaches early.stop().
+            trapped = _trap_signals()
             early = EarlyBaseline(repo, b, junit, env)
     try:
         results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], env, b.prep, prepared)
@@ -962,7 +974,10 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
             interrupted = count_tests(repo, b, results, integ, env, early)
     finally:
         if early is not None:
-            early.stop()  # unused (an interruption, an environment failure, other counts) or already finished
+            with _signals_held():
+                early.stop()  # unused (an interruption, an environment failure, other counts) or already finished
+        for signum, handler in trapped.items():
+            signal.signal(signum, handler)
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
                      paths=scope)
