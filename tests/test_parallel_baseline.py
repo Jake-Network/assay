@@ -86,6 +86,55 @@ def test_an_interrupted_commit_run_stops_the_merge_base_run(tmp_path: Path, lead
     assert git(repo, "worktree", "list", "--porcelain").count("worktree ") == 1
 
 
+def test_sigterm_while_waiting_for_the_merge_base_run_leaves_nothing(tmp_path: Path, lead: Ledger, db_url: str) -> None:
+    """The real CLI: the commit's checks are done and verify waits for the merge-base run (30 s there, not here)
+    when SIGTERM comes. The run is stopped, its worktree and temporary folder removed, and the process ends by the
+    Interrupted it records, not by the signal."""
+    import os
+    import subprocess
+    import sys
+
+    cfg = SLOW.replace('project = "ignored"', f'project = "{lead.project_id}"')
+    repo = make_repo(tmp_path / "repo", cfg + "\n[verify]\nparallel_baseline = true\n")
+    (repo / "tests" / "test_slow.py").write_text(
+        "import os\nimport time\n\n\ndef test_slow():\n    if os.path.exists('slow.flag'):\n        time.sleep(30)\n")
+    (repo / "slow.flag").write_text("x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "slow at the merge-base")
+    sha = piece(repo, "more-tests", {"impl.txt": "fixed\n", "slow.flag": None,
+                                     "tests/test_more.py": "def test_more():\n    assert True\n"})
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "XDG_STATE_HOME": str(tmp_path / "state"),
+           "TMPDIR": str(tmp)}
+    for name in ("BENCHBOOK_TOKEN", "BENCHBOOK_AGENT", "BENCHBOOK_PROJECT"):
+        env.pop(name, None)
+    p = subprocess.Popen([sys.executable, "-m", "benchbook.cli", "check", "verify", "more-tests", sha,
+                          "--reported-by", "impl"], cwd=repo, env=env, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+    try:
+        deadline, seen_both = time.monotonic() + 60, False
+        while time.monotonic() < deadline:  # both runs' folders, then only the merge-base's: verify is waiting
+            n = len(list(tmp.glob("benchbook-verify-*")))
+            seen_both = seen_both or n == 2
+            if seen_both and n == 1:
+                break
+            assert p.poll() is None, p.communicate()
+            time.sleep(0.05)
+        else:
+            pytest.fail("verify did not reach the wait for the merge-base run")
+        time.sleep(0.5)
+        p.send_signal(signal.SIGTERM)
+        _, err = p.communicate(timeout=20)
+    finally:
+        if p.poll() is None:
+            p.kill()
+    assert p.returncode != -signal.SIGTERM, "ended by the signal, without cleaning up"
+    assert "Interrupted" in err or "SIGTERM" in err, err[-2000:]
+    assert git(repo, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert not list(tmp.glob("benchbook-verify-*"))
+
+
 def test_parallel_baseline_is_read_strictly() -> None:
     assert parse_verify({"parallel_baseline": True}).parallel_baseline
     assert parse_verify({"parallel_baseline": True}).table() == {"parallel_baseline": True}
