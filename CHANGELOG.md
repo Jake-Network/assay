@@ -2,6 +2,15 @@
 
 ## Unreleased: code pack
 
+- The hook spool has two lanes with a processor each: re-runs (`verify-request`) and everything else. A check run or
+  Bash-hook attempt queued while re-runs wait is recorded within about a second instead of after all of them (168 s
+  with eight queued re-runs, `scripts/measure_rerun_queue.py`). Before each re-run the verify lane records what the
+  other lane holds, so an implementer's pass queued before its report is in the ledger when the report's re-run
+  runs, as with one processor. `benchbook hook replay` takes both lanes.
+- `[verify] parallel_baseline = true` runs the merge-base's JUnit checks (the test counts that find a weakening)
+  beside the commit's checks instead of after them: a verify of a piece that changed tests takes about one run of
+  the checks instead of two. Off by default; leave it off when two copies of the checks share a port, a database or
+  another resource.
 - Re-run verdicts reach the lead, and only the lead, within its turn. A hook that fires inside a subagent (Claude Code
   gives it the lead's `session_id` with an `agent_id`) no longer delivers the session's notes: a worker's Bash result
   could take a verdict meant for the lead into the worker's context, which in a swarm is where most tool calls are.

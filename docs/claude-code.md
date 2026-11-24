@@ -276,7 +276,9 @@ The `benchbook` plugin also gives the model what the ledger says at the points w
 | `benchbook hook notes` | UserPromptSubmit; PostToolUse of every tool but Bash, Agent and Task (matcher `^(?!(Bash\|Agent\|Task)$)`; those deliver from their own hooks) | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once, under the event that ran; they move to `delivered/`. A hook that fired inside a subagent (`agent_id` in its input) delivers nothing, so the notes wait for the lead |
 | `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; an `async_launched` result queues nothing and delivers what is waiting; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
 
-The detached processor verifies the reported commit using the project's declared checks. It stores the report's
+The detached processor verifies the reported commit using the project's declared checks. Re-runs have a processor
+of their own (the spool's verify lane, `.verify.lock`), so reports and check-run attempts queued meanwhile are
+recorded without waiting for them; each re-run first records what was queued before it. It stores the report's
 hash and structured identifiers. Repeated reports for the same project, piece and commit share one completed
 re-run within the database and writer's spool. An environment failure is kept for that report in its session, so a
 new report or session can re-run the checks after the environment recovers. SessionStart, UserPromptSubmit, and
