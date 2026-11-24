@@ -85,9 +85,11 @@ def main(event: str, harness: str | None = None) -> None:
         elif event == "pre-compact":
             text = pre_compact(data)
         elif event == "agent-result":
-            from .verify_requests import enqueue
+            response = data.get("tool_response")
+            if not (isinstance(response, dict) and response.get("status") == "async_launched"):
+                from .verify_requests import enqueue  # not for a launch: it has no report, and the import costs
 
-            text = enqueue(data)  # nothing for an async_launched result, which has no report yet
+                text = enqueue(data)
             if data.get("hook_event_name") == "SubagentStop":
                 return  # SubagentStop has no context for the lead; pending notes wait for a hook that has
         if event in ("session-start", "agent-result") and lead:
