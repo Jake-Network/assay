@@ -93,6 +93,8 @@ packages = ["src/benchbook"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+# Published benchmark inputs are kept byte for byte: their sha256 is in a pre-registration.
+extend-exclude = ["bench/results"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

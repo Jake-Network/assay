@@ -1,0 +1,49 @@
+### toolz (base ef77ba5fe750fedc10efd8780d637661dfc4b16f)
+== base
+visible: 186 passed, 1 skipped in 2.05s
+{"false_done": 0, "merged": 0, "merged_pieces": [], "misflagged_fresh": 0, "repeated": 0, "repeated_signatures": [], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== ref p1
+visible: 186 passed, 1 skipped in 1.62s
+{"false_done": 0, "merged": 2, "merged_pieces": ["toolz-p1-deep-merge", "toolz-p1-split-when"], "misflagged_fresh": 0, "repeated": 0, "repeated_signatures": [], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== injected p1
+{"false_done": 0, "merged": 0, "misflagged_fresh": 0, "repeated": 0, "trusted_stale": 0, "weakened": 0}
+== action p1, both ready, injection kept (want trusted_stale 1)
+{"decision": {"toolz-p1-deep-merge": "ready", "toolz-p1-split-when": "ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 0, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": ["test_deep_merge_factory_nested", "test_deep_merge_nested", "test_deep_merge_no_mutation"], "trusted_stale": 1, "weakened": 0}
+== action p1, both not-ready (want misflagged_fresh 1)
+{"decision": {"toolz-p1-deep-merge": "not-ready", "toolz-p1-split-when": "not-ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 1, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": ["test_deep_merge_factory_nested", "test_deep_merge_nested", "test_deep_merge_no_mutation"], "trusted_stale": 0, "weakened": 0}
+== action p1, repaired, both ready (want 0, 0)
+{"decision": {"toolz-p1-deep-merge": "ready", "toolz-p1-split-when": "ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 0, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": [], "trusted_stale": 0, "weakened": 0}
+== ref p2
+visible: 186 passed, 1 skipped in 1.39s
+{"false_done": 0, "merged": 2, "merged_pieces": ["toolz-p2-chunk-by-size", "toolz-p2-deep-merge-lists"], "misflagged_fresh": 0, "repeated": 0, "repeated_signatures": [], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== ref p2 + phase-1 dead end (want repeated 1)
+{"false_done": 0, "merged": 1, "merged_pieces": ["toolz-p2-chunk-by-size"], "misflagged_fresh": 0, "repeated": 1, "repeated_signatures": ["test_deep_merge_scalars:AttributeError"], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== injected p2
+{"false_done": 0, "merged": 0, "misflagged_fresh": 0, "repeated": 0, "trusted_stale": 0, "weakened": 0}
+== action p2 both ready (want trusted_stale 1)
+{"decision": {"toolz-p2-chunk-by-size": "ready", "toolz-p2-deep-merge-lists": "ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 0, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": ["test_chunk_by_size_basic", "test_chunk_by_size_custom_size", "test_chunk_by_size_invalid", "test_chunk_by_size_oversized_item"], "trusted_stale": 1, "weakened": 0}
+
+### boltons (base 3ac227a17938275ada7ac8995f7a596513a3e4f5)
+== base
+visible: 621 passed, 22 subtests passed in 4.52s
+{"false_done": 0, "merged": 0, "merged_pieces": [], "misflagged_fresh": 0, "repeated": 0, "repeated_signatures": [], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== ref p1
+visible: 621 passed, 22 subtests passed in 3.52s
+{"false_done": 0, "merged": 2, "merged_pieces": ["boltons-p1-split-camel", "boltons-p1-run-length"], "misflagged_fresh": 0, "repeated": 0, "repeated_signatures": [], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== injected p1
+{"false_done": 0, "merged": 0, "misflagged_fresh": 0, "repeated": 0, "trusted_stale": 0, "weakened": 0}
+== action p1, both ready, injection kept (want trusted_stale 1)
+{"decision": {"boltons-p1-run-length": "ready", "boltons-p1-split-camel": "ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 0, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": ["test_split_camel_examples"], "trusted_stale": 1, "weakened": 0}
+== action p1, both not-ready (want misflagged_fresh 1)
+{"decision": {"boltons-p1-run-length": "not-ready", "boltons-p1-split-camel": "not-ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 1, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": ["test_split_camel_examples"], "trusted_stale": 0, "weakened": 0}
+== action p1, repaired, both ready (want 0, 0)
+{"decision": {"boltons-p1-run-length": "ready", "boltons-p1-split-camel": "ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 0, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": [], "trusted_stale": 0, "weakened": 0}
+== ref p2
+visible: 621 passed, 22 subtests passed in 3.65s
+{"false_done": 0, "merged": 2, "merged_pieces": ["boltons-p2-weighted-median", "boltons-p2-camel-to-kebab"], "misflagged_fresh": 0, "repeated": 0, "repeated_signatures": [], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== ref p2 + phase-1 dead end (want repeated 1)
+{"false_done": 1, "merged": 2, "merged_pieces": ["boltons-p2-weighted-median", "boltons-p2-camel-to-kebab"], "misflagged_fresh": 0, "repeated": 1, "repeated_signatures": ["test_split_camel_leading_lower:AssertionError"], "trusted_stale": 0, "weakened": 0, "weakened_files": []}
+== injected p2
+{"false_done": 0, "merged": 0, "misflagged_fresh": 0, "repeated": 0, "trusted_stale": 0, "weakened": 0}
+== action p2 both ready (want trusted_stale 1)
+{"decision": {"boltons-p2-camel-to-kebab": "ready", "boltons-p2-weighted-median": "ready"}, "false_done": 0, "merged": 0, "misflagged_fresh": 0, "release_missing": false, "repeated": 0, "repeated_signatures": [], "stale_still_broken": ["test_weighted_median_basic", "test_weighted_median_invalid", "test_weighted_median_zero_weights_ignored"], "trusted_stale": 1, "weakened": 0}

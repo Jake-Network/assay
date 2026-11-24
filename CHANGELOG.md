@@ -24,6 +24,10 @@
 - Measured fan-in (H5) at 8, 16 and 30 requested workers (bench/results/2026-11-25-h5-sweep/), benchbook code
   `cc5ed08`: the pre-registered gate is not met. C's lead reads less than half of A's report tokens, but its peak
   context is higher at 8 and 16; at 30 neither C run kept the registered workload.
+- Ran the boundary pilot (bench/results/2026-11-25-boundary-pilot/): boltons, arms A, C and F, one trial each, USD
+  1.28. After a restart F answered 1 of 10 state questions against 6 for A and C, mostly because an edited import line
+  in a test file counts as a weakened test, so the brief never listed three of the four pieces as verified. Ruff skips
+  `bench/results/`, whose published task inputs are kept byte for byte.
 - Review fixes (PR #4). `benchbook uninstall` keeps `.benchbook/` when git cannot say whether it is tracked, and
   `--purge` removes only a PostgreSQL cluster whose server is confirmed stopped (`benchbook db stop` now fails when
   it is not). A retried automatic re-run finishes from the attempt its first try recorded instead of running the
