@@ -161,10 +161,13 @@ class CheckSpec:
 class VerifyPrep:
     """[verify]: what a clean verification worktree needs before the checks run (T02). copy: gitignored files
     (.env) copied from the repository root, read there and never recorded beyond their names; prepare: a command run
-    in the worktree first (uv sync --frozen)."""
+    in the worktree first (uv sync --frozen). parallel_baseline: when a piece changed guarded files, run the JUnit
+    checks at the merge-base (for their test counts) beside the commit's instead of after them; only for checks that
+    share no port, database or other resource between two worktrees."""
     copy: tuple[str, ...] = ()
     prepare: str | None = None
     prepare_timeout: float = 600.0
+    parallel_baseline: bool = False
 
     def table(self) -> dict[str, Any]:
         """The table as a pin keeps it: empty when nothing is declared."""
@@ -174,6 +177,8 @@ class VerifyPrep:
         if self.prepare is not None:
             out["prepare"] = self.prepare
             out["prepare_timeout"] = self.prepare_timeout
+        if self.parallel_baseline:
+            out["parallel_baseline"] = True
         return out
 
 
@@ -350,7 +355,7 @@ def parse_guard(table: Any, where: str = "config.toml") -> tuple[list[str], str 
     return list(paths), base
 
 
-_VERIFY_KEYS = {"copy", "prepare", "prepare_timeout"}
+_VERIFY_KEYS = {"copy", "prepare", "prepare_timeout", "parallel_baseline"}
 
 
 def parse_verify(table: Any, where: str = "config.toml") -> VerifyPrep:
@@ -363,7 +368,7 @@ def parse_verify(table: Any, where: str = "config.toml") -> VerifyPrep:
         raise BenchbookError(f"{where}: [verify] must be a table")
     if unknown := sorted(set(table) - _VERIFY_KEYS):
         raise BenchbookError(f"{where}: [verify]: unknown key {', '.join(unknown)} (known: copy, prepare, "
-                             "prepare_timeout)")
+                             "prepare_timeout, parallel_baseline)")
     copy, prepare = table.get("copy", []), table.get("prepare")
     timeout = table.get("prepare_timeout", VerifyPrep.prepare_timeout)
     if not isinstance(copy, list) or not all(isinstance(x, str) and x.strip() for x in copy):
@@ -377,7 +382,10 @@ def parse_verify(table: Any, where: str = "config.toml") -> VerifyPrep:
         raise BenchbookError(f"{where}: [verify] prepare must be a non-empty command")
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 86400:
         raise BenchbookError(f"{where}: [verify] prepare_timeout must be a number of seconds (0 < t <= 86400)")
-    return VerifyPrep(tuple(dict.fromkeys(copy)), prepare.strip() if prepare else None, float(timeout))
+    parallel = table.get("parallel_baseline", False)
+    if not isinstance(parallel, bool):
+        raise BenchbookError(f"{where}: [verify] parallel_baseline must be true or false")
+    return VerifyPrep(tuple(dict.fromkeys(copy)), prepare.strip() if prepare else None, float(timeout), parallel)
 
 
 _REPORT_KEYS = {"out_of_scope_heading", "agents"}

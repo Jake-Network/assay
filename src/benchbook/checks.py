@@ -30,6 +30,7 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Collection, Iterator, Sequence
@@ -44,7 +45,7 @@ from . import failures, signature
 from .config import CheckSpec, VerifyPrep, parse_checks, parse_guard, parse_verify
 from .errors import BenchbookError, InvalidTransition
 from .globs import matching
-from .runner import Interrupted, _trap_signals, run_command
+from .runner import Interrupted, _trap_signals, forget_stopped, run_command, stop_commands
 
 if TYPE_CHECKING:
     from .ledger import Ledger
@@ -594,7 +595,8 @@ def run_checks(repo: Path, commit: str, specs: Sequence[CheckSpec], env: dict[st
     previous = _trap_signals()  # a SIGTERM between two checks must reach the finally below too
     try:
         try:
-            _git(repo, "worktree", "add", "--detach", "--quiet", str(wt), commit)
+            with _WORKTREES:
+                _git(repo, "worktree", "add", "--detach", "--quiet", str(wt), commit)
             done = prepared if prepared is not None else Prepared()
             if prep is not None and (prep.copy or prep.prepare):
                 _prepare(repo, commit, wt, out, prep, env, done)
@@ -660,11 +662,17 @@ def _signals_held() -> Iterator[None]:
         signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
 
+# git worktree add, remove and prune of one process, one at a time: with [verify] parallel_baseline two runs of the
+# checks add and remove their worktrees at once, and both are named "worktree" under their own temporary folders.
+_WORKTREES = threading.Lock()
+
+
 def _remove_worktree(repo: Path, wt: Path) -> None:
-    p = _git(repo, "worktree", "remove", "--force", "--force", str(wt), check=False)
-    if p.returncode != 0:  # never registered, or half created by an interrupted `worktree add`
-        shutil.rmtree(wt, ignore_errors=True)
-        _git(repo, "worktree", "prune", check=False)
+    with _WORKTREES:
+        p = _git(repo, "worktree", "remove", "--force", "--force", str(wt), check=False)
+        if p.returncode != 0:  # never registered, or half created by an interrupted `worktree add`
+            shutil.rmtree(wt, ignore_errors=True)
+            _git(repo, "worktree", "prune", check=False)
 
 
 def _run_one(spec: CheckSpec, wt: Path, out: Path, env: dict[str, str] | None = None) -> CheckResult:
@@ -707,8 +715,40 @@ def baseline(repo: Path, b: Base, specs: Sequence[CheckSpec],
             for r in results}, None
 
 
+class EarlyBaseline:
+    """[verify] parallel_baseline: count_tests's merge-base run, started in a thread beside the commit's checks. Its
+    result is used only when count_tests would have run exactly these checks; otherwise it runs them as before."""
+
+    def __init__(self, repo: Path, b: Base, specs: list[CheckSpec], env: dict[str, str] | None) -> None:
+        self.names = [s.name for s in specs]
+        self._box: dict[str, Any] = {}
+        self._thread = threading.Thread(target=self._run, args=(repo, b, specs, env), daemon=True,
+                                        name="benchbook-merge-base")
+        self._thread.start()
+
+    def _run(self, repo: Path, b: Base, specs: list[CheckSpec], env: dict[str, str] | None) -> None:
+        try:
+            self._box["value"] = baseline(repo, b, specs, env)
+        except BaseException as e:  # noqa: BLE001 - handed to the caller
+            self._box["error"] = e
+
+    def result(self) -> tuple[dict[str, BaseRun], BaseException | None]:
+        self._thread.join()
+        if "error" in self._box:
+            raise self._box["error"]
+        return self._box["value"]  # type: ignore[no-any-return]
+
+    def stop(self) -> None:
+        """End the run if it is still going (its check's process group is killed) and wait for its cleanup."""
+        ident = self._thread.ident
+        if ident is not None and self._thread.is_alive():
+            stop_commands(ident)
+            self._thread.join()
+            forget_stopped(ident)
+
+
 def count_tests(repo: Path, b: Base, results: list[CheckResult], integ: Integrity,
-                env: dict[str, str] | None) -> BaseException | None:
+                env: dict[str, str] | None, early: EarlyBaseline | None = None) -> BaseException | None:
     """T04: the JUnit testcases that ran here and at the merge-base. Each JUnit check that reported a count is
     compared with its own merge-base run (integ.fewer_tests_in names those that ran fewer); tests_before and
     tests_after are the sums, for the record. Run only when guarded files changed; the merge-base runs come from
@@ -716,7 +756,10 @@ def count_tests(repo: Path, b: Base, results: list[CheckResult], integ: Integrit
     counted = [r for r in results if b.checks[r.name].junit and r.tests is not None]
     if not counted:
         return None
-    runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in counted], env)
+    if early is not None and early.names == [r.name for r in counted]:
+        runs, interrupted = early.result()
+    else:
+        runs, interrupted = baseline(repo, b, [b.checks[r.name] for r in counted], env)
     if interrupted is not None:
         return interrupted
     before = after = 0
@@ -905,13 +948,21 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     t0 = time.monotonic()
     prepared = Prepared()
     env = check_env()
-    results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], env, b.prep, prepared)
-    environment, base_sig = prepared.error, None
-    if interrupted is None and environment is None and sha != b.merge_base:  # the base can't tell a commit from itself
-        environment, base_sig, interrupted = classify_environment(repo, b, results, env,
-                                                                  passed_elsewhere(lg, piece, sha, b, impl))
-    if interrupted is None and environment is None and integ.guard_files and sha != b.merge_base:
-        interrupted = count_tests(repo, b, results, integ, env)
+    early = None
+    if b.prep.parallel_baseline and integ.guard_files and sha != b.merge_base:
+        if junit := [b.checks[n] for n in names if b.checks[n].junit]:
+            early = EarlyBaseline(repo, b, junit, env)
+    try:
+        results, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], env, b.prep, prepared)
+        environment, base_sig = prepared.error, None
+        if interrupted is None and environment is None and sha != b.merge_base:  # the base can't tell a commit apart
+            environment, base_sig, interrupted = classify_environment(repo, b, results, env,
+                                                                      passed_elsewhere(lg, piece, sha, b, impl))
+        if interrupted is None and environment is None and integ.guard_files and sha != b.merge_base:
+            interrupted = count_tests(repo, b, results, integ, env, early)
+    finally:
+        if early is not None:
+            early.stop()  # unused (an interruption, an environment failure, other counts) or already finished
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
                      paths=scope)

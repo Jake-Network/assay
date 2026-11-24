@@ -53,9 +53,15 @@ def lead(db_url: str) -> Ledger:
     return Ledger.open(project=pid, agent="lead", role="orchestrator", database_url=db_url)
 
 
+# [verify] parallel_baseline runs the merge-base's JUnit checks beside the commit's: every row must come out the same.
+PARALLEL = "\n[verify]\nparallel_baseline = true\n"
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["sequential", "parallel-baseline"])
 @pytest.mark.parametrize(("files", "expected"), [r[1:] for r in ROWS], ids=[r[0] for r in ROWS])
-def test_mutation(tmp_path: Path, vtmp: Path, lead: Ledger, files: dict[str, str | None], expected: str) -> None:
-    repo = make_repo(tmp_path / "repo")
+def test_mutation(tmp_path: Path, vtmp: Path, lead: Ledger, files: dict[str, str | None], expected: str,
+                  parallel: bool) -> None:
+    repo = make_repo(tmp_path / "repo", CONFIG + (PARALLEL if parallel else ""))
     sha = piece(repo, "mutant", files)
     v, rec = checks.verify(lead, "mutant", sha, repo=repo, reported_by="impl")
     out = rec.outcome
@@ -92,8 +98,9 @@ def test_mutation_failing_at_the_merge_base_too_is_the_environment(tmp_path: Pat
     assert not lead.sql_internal("SELECT 1 FROM benchbook.links WHERE dst_id = %s", (rec.claim_id,))
 
 
-def test_tests_counts_are_recorded_when_tests_change(tmp_path: Path, vtmp: Path, lead: Ledger) -> None:
-    repo = make_repo(tmp_path / "repo")
+@pytest.mark.parametrize("parallel", [False, True], ids=["sequential", "parallel-baseline"])
+def test_tests_counts_are_recorded_when_tests_change(tmp_path: Path, vtmp: Path, lead: Ledger, parallel: bool) -> None:
+    repo = make_repo(tmp_path / "repo", CONFIG + (PARALLEL if parallel else ""))
     sha = piece(repo, "mutant", {**FIXED, "tests/test_new.py": "def test_new():\n    assert True\n"})
     _, rec = checks.verify(lead, "mutant", sha, repo=repo, reported_by="impl")
     m = lead.sql_internal("SELECT metrics FROM benchbook.experiments WHERE id = %s", (rec.experiment_id,))[0]["metrics"]
@@ -121,10 +128,12 @@ CASES = ('import pytest\n\n\n@pytest.mark.parametrize("c", open("cases/{0}.txt")
          'def test_{0}(c):\n    assert c\n')
 
 
-def test_fewer_tests_in_one_junit_check_are_not_made_up_by_another(tmp_path: Path, vtmp: Path, lead: Ledger) -> None:
+@pytest.mark.parametrize("parallel", [False, True], ids=["sequential", "parallel-baseline"])
+def test_fewer_tests_in_one_junit_check_are_not_made_up_by_another(tmp_path: Path, vtmp: Path, lead: Ledger,
+                                                                   parallel: bool) -> None:
     """unit ran 2 tests at the merge-base and 1 here, smoke 1 and 2: 3 and 3 in all, and still a weakening. The test
     files are untouched (the cases moved in an unguarded file); a note added under tests/ makes the guard look."""
-    repo = make_repo(tmp_path / "repo", TWO_JUNIT)
+    repo = make_repo(tmp_path / "repo", TWO_JUNIT + (PARALLEL if parallel else ""))
     for path, text in {"tests/unit/test_unit.py": CASES.format("unit"), "tests/smoke/test_smoke.py":
                        CASES.format("smoke"), "cases/unit.txt": "a\nb\n", "cases/smoke.txt": "a\n"}.items():
         (repo / path).parent.mkdir(parents=True, exist_ok=True)
