@@ -113,6 +113,28 @@ def _wait_group(proc: subprocess.Popen[bytes], within: float) -> bool:
         time.sleep(0.05)
 
 
+# The command each thread is running, so one thread can stop another's (checks.verify's early merge-base run, which
+# runs beside the candidate's and must end with it): stop_commands kills it, and the thread's next run_command raises
+# Interrupted at once instead of starting one.
+_RUNNING: dict[int, subprocess.Popen[bytes]] = {}
+_STOPPED: set[int] = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def stop_commands(thread_id: int) -> None:
+    """End the command that thread runs now, if any, and every one it would start until forget_stopped."""
+    with _RUNNING_LOCK:
+        _STOPPED.add(thread_id)
+        proc = _RUNNING.get(thread_id)
+    if proc is not None:
+        _kill_group(proc)
+
+
+def forget_stopped(thread_id: int) -> None:
+    with _RUNNING_LOCK:
+        _STOPPED.discard(thread_id)
+
+
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
     """End the command's whole process group: SIGTERM, then SIGKILL to whatever is left after the grace time. The
     shell is only the group's leader: it can exit at once while a child that ignores SIGTERM goes on, so the wait is
@@ -250,12 +272,21 @@ def run_command(cmd: str, cwd: Path, log_path: Path, timeout: float, metric: str
         kw["bufsize"] = 0
     t0 = time.monotonic()
     timed_out = False
+    me = threading.get_ident()
+    with _RUNNING_LOCK:
+        if me in _STOPPED:
+            raise Interrupted(signal.SIGTERM)
     previous = _trap_signals()
     try:
         with open(log_path, "wb") as log:
             proc = subprocess.Popen(cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE if tee else log,  # noqa: S602
                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
                                     **kw)  # type: ignore[call-overload]
+            with _RUNNING_LOCK:
+                _RUNNING[me] = proc
+                stopped = me in _STOPPED
+            if stopped:  # stop_commands ran between the check above and the registration
+                _kill_group(proc)
             copy: _Tee | None = None
             try:
                 try:
@@ -272,6 +303,8 @@ def run_command(cmd: str, cwd: Path, log_path: Path, timeout: float, metric: str
                 if copy is not None:
                     copy.finish()
     finally:
+        with _RUNNING_LOCK:
+            _RUNNING.pop(me, None)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     duration_ms = int((time.monotonic() - t0) * 1000)
