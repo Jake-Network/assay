@@ -333,9 +333,9 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
     pending = hooks._pending
     queued = False
 
-    def append_after_snapshot(path: Path) -> list[Path]:
+    def append_after_snapshot(path: Path, lane: str | None = None) -> list[Path]:
         nonlocal queued
-        snapshot = pending(path)
+        snapshot = pending(path, lane)
         if not queued:
             queued = True
             assert hooks._locked(spool)

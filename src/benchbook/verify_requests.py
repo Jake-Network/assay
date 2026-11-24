@@ -86,7 +86,7 @@ def enqueue(data: dict[str, Any]) -> str:
                "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
     hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True, "data": request})
     hooks._log_notices()
-    hooks.start_processor(spool)
+    hooks.start_processor(spool, hooks.VERIFY)
     line = f"benchbook: re-running the checks of {piece} at {commit[:7]} in the background"
     if data.get("hook_event_name") == "SubagentStop":
         # SubagentStop gives the lead no context: leave the line for the next hook that does (the task-notification's

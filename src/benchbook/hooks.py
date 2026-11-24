@@ -300,19 +300,28 @@ def _main(event: str, harness: str | None) -> ReplaySummary | None:
     return None
 
 
-def start_processor(spool: Path) -> None:
-    """Start the detached processor for this spool unless one is draining it already (check run and the Bash hook
-    queue attempts here too)."""
-    if not _locked(spool):
-        subprocess.Popen([sys.executable, "-m", "benchbook.hooks", str(spool)], stdin=subprocess.DEVNULL,
+# A spool has two lanes, each drained by its own detached processor under its own lock: re-runs (verify-request,
+# tens of seconds each) and everything else (reports, check runs, Bash hook attempts, a few milliseconds each), so
+# a worker's attempt is not recorded only after every queued re-run. Before each re-run the verify lane settles the
+# records lane, so whatever was queued before a request is in the ledger when it runs, as with one processor.
+RECORDS, VERIFY = "records", "verify"
+LANES = (RECORDS, VERIFY)
+_LOCK_FILES = {RECORDS: ".lock", VERIFY: ".verify.lock"}
+
+
+def start_processor(spool: Path, lane: str = RECORDS) -> None:
+    """Start the detached processor for this spool's lane unless one is draining it already (check run and the Bash
+    hook queue attempts in the records lane, the agent-result hook re-runs in the verify lane)."""
+    if not _locked(spool, lane):
+        subprocess.Popen([sys.executable, "-m", "benchbook.hooks", str(spool), lane], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
 
 
 @contextmanager
-def _lock(spool: Path, blocking: bool) -> Iterator[bool]:
+def _lock(spool: Path, blocking: bool, lane: str = RECORDS) -> Iterator[bool]:
     import fcntl
 
-    with (spool / ".lock").open("a") as f:
+    with (spool / _LOCK_FILES[lane]).open("a") as f:
         try:
             fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except BlockingIOError:
@@ -324,11 +333,27 @@ def _lock(spool: Path, blocking: bool) -> Iterator[bool]:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def _locked(spool: Path) -> bool:
-    """Whether a processor is draining this spool now. It rescans after releasing the lock, so it sees an entry
-    written before this check."""
-    with _lock(spool, blocking=False) as got:
+def _locked(spool: Path, lane: str = RECORDS) -> bool:
+    """Whether a processor is draining this lane of the spool now. It rescans after releasing the lock, so it sees an
+    entry written before this check."""
+    with _lock(spool, blocking=False, lane=lane) as got:
         return not got
+
+
+@contextmanager
+def _all_lanes(spool: Path, blocking: bool) -> Iterator[bool]:
+    """Both lanes' locks, the verify lane's first (the order the verify lane takes them in, so they never deadlock).
+    Without blocking, False when either processor is running."""
+    with _lock(spool, blocking, VERIFY) as got_verify, _lock(spool, blocking, RECORDS) as got_records:
+        yield got_verify and got_records
+
+
+def _lane(path: Path) -> str:
+    """The lane an entry belongs to; one that cannot be read goes to the records lane, which quarantines it."""
+    try:
+        return VERIFY if json.loads(path.read_text(encoding="utf-8")).get("event") == "verify-request" else RECORDS
+    except (OSError, ValueError, AttributeError):
+        return RECORDS
 
 
 def _write_spool(spool: Path, entry: dict[str, Any], name: str | None = None) -> None:
@@ -891,7 +916,8 @@ def process_file(path: Path) -> str:
     return f"ok:{result}"
 
 
-def _pending(spool: Path) -> list[Path]:
+def _pending(spool: Path, lane: str | None = None) -> list[Path]:
+    """The queued entries, of one lane or of both."""
     # Handbacks first: they mark their run, so its SubagentStop closing text is not captured as well.
     def key(p: Path) -> tuple[int, float]:
         try:
@@ -900,21 +926,30 @@ def _pending(spool: Path) -> list[Path]:
         except (OSError, UnicodeError):
             return (1, 0.0)
 
-    return sorted(spool.glob("*.json"), key=key)
+    paths = spool.glob("*.json")
+    return sorted(paths if lane is None else (p for p in paths if _lane(p) == lane), key=key)
+
+
+def _settle_records(spool: Path) -> None:
+    """Record what waits in the records lane (one pass, under its lock) before a re-run starts."""
+    with _lock(spool, blocking=True, lane=RECORDS):
+        _drain(spool, (), ReplaySummary(), lane=RECORDS)
 
 
 def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
-           attempted: Collection[str] = ()) -> set[str]:
+           attempted: Collection[str] = (), lane: str | None = None) -> set[str]:
     seen: set[str] = set()
     left: list[tuple[Path, str]] = []
     for delay in (0, *delays):
         if delay:
             time.sleep(delay)
         left = []  # the last pass decides what is still queued
-        for path in _pending(spool):
+        for path in _pending(spool, lane):
             if path.name in attempted:
                 continue
             seen.add(path.name)
+            if lane == VERIFY:
+                _settle_records(spool)
             try:
                 outcome = process_file(path)
             except Exception as e:  # noqa: BLE001 (one entry must not stop the others)
@@ -931,15 +966,15 @@ def _drain(spool: Path, delays: tuple[float, ...], summary: ReplaySummary,
     return seen
 
 
-def replay(spool: Path) -> None:
-    """Background processor: drain with retries, unless another processor already holds the spool."""
+def replay(spool: Path, lane: str = RECORDS) -> None:
+    """Background processor of one lane: drain with retries, unless another processor already holds that lane."""
     while True:
-        with _lock(spool, blocking=False) as got:
+        with _lock(spool, blocking=False, lane=lane) as got:
             if not got:
                 return
-            seen = _drain(spool, RETRY_DELAYS, ReplaySummary())
+            seen = _drain(spool, RETRY_DELAYS, ReplaySummary(), lane=lane)
         # an entry written while the lock was held got no processor of its own
-        if not any(p.name not in seen for p in spool.glob("*.json")):
+        if not any(p.name not in seen for p in _pending(spool, lane)):
             return
 
 
@@ -947,7 +982,7 @@ def replay_now(spool: Path) -> ReplaySummary:
     """`benchbook hook replay`: try each pending or dead report once in the foreground."""
     dead = spool / "dead"
     summary = ReplaySummary()
-    with _lock(spool, blocking=True):
+    with _all_lanes(spool, blocking=True):
         _adopt(spool, summary)
         if dead.is_dir():
             for p in dead.glob("*.json"):
@@ -956,7 +991,7 @@ def replay_now(spool: Path) -> ReplaySummary:
         attempted = _drain(spool, (), summary)
     # A hook that enqueued after the snapshot may have seen our lock and skipped starting a processor.
     while any(p.name not in attempted for p in spool.glob("*.json")):
-        with _lock(spool, blocking=True):
+        with _all_lanes(spool, blocking=True):
             attempted.update(_drain(spool, (), summary, attempted))
     log(f"replay {spool}: {summary}")  # doctor reads which spool a clean replay settled
     return summary
@@ -1017,7 +1052,7 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
         info = _read_info(old / WRITER_INFO)
         if info is not None and (info["target"] != target or info["writer"] == me):
             continue
-        with _lock(old, blocking=False) as got:
+        with _all_lanes(old, blocking=False) as got:
             if not got:
                 summary.errors.append(f"{old.name}: its processor is running; entries queued there under an earlier "
                                       "token were not looked at (run replay again)")
@@ -1081,6 +1116,6 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
 if __name__ == "__main__":
     path = Path(sys.argv[1])
     if path.is_dir():
-        replay(path)
+        replay(path, sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in LANES else RECORDS)
     else:
         print(process_file(path))
