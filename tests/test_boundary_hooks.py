@@ -271,6 +271,45 @@ FROM generate_series(1, 2000) AS i""", {"p": code})
     assert len(text) <= 6000 and "## Open out-of-scope findings (" in text
 
 
+def test_a_rerun_that_decided_nothing_is_in_every_brief_with_why(db_url: str, code: str, env: Path,
+                                                                  capsys: pytest.CaptureFixture[str],
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary pilot: a piece whose re-run passed but whose commit changed a test was in no section of the
+    brief, so a new session's lead could not know it waited for a person. It is listed after the verified pieces with
+    the reason, in session start, pre-compact and brief --here; so is a re-run that failed. A verified piece is not."""
+    from benchbook import Ledger, checks
+    from tests.test_code_brief import SCRIPT
+    from tests.test_mutations import FIXED, NO_ASSERT
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    lead = Ledger.open(project=code, agent="lead", role="orchestrator", database_url=db_url)
+    shas = {"weak": piece(repo, "weak", {**FIXED, "tests/test_impl.py": NO_ASSERT}),
+            "good": piece(repo, "good", FIXED), "bad": piece(repo, "bad", {**FIXED, "value.txt": "no\n"})}
+    ids = {}
+    for name, sha in shas.items():
+        _, rec = checks.verify(lead, name, sha, repo=repo, reported_by="impl")
+        ids[name] = short("claim", rec.claim_id)
+    weak = (f"- weak at {shas['weak'][:12]} ({ids['weak']}, re-run just now: passed, needs review (tests weakened: "
+            "tests/test_impl.py))")
+    bad = f"- bad at {shas['bad'][:12]} ({ids['bad']}, re-run just now: failed (value))"
+
+    text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
+    sections = text.split("\n## ")
+    assert sections[1].startswith("Last verified commit per piece (1 of 1)\n- good at ")
+    lines = sections[2].splitlines()
+    assert lines[0] == "Re-run, not decided (2 of 2)" and sorted(lines[1:]) == sorted([weak, bad])
+    assert ids["good"] not in sections[2] and sections[3].startswith("Reported done, not re-run (0 of 0)")
+    out = run("pre-compact", fixture("pre_compact.json", repo), capsys, monkeypatch)
+    assert ids["weak"] in out and ids["bad"] in out
+
+    git(repo, "checkout", "-q", "weak")
+    cli_env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "XDG_STATE_HOME": str(env / "state")}
+    p = subprocess.run([SCRIPT, "--agent", "reader", "brief", "--here"], capture_output=True, text=True, cwd=repo,
+                       timeout=120, env=cli_env)
+    assert p.returncode == 0, p.stderr
+    assert weak in p.stdout.splitlines() and "## Re-run, not decided (" in p.stdout
+
+
 # ------------------------------------------------------------------------------------------- pre-compact
 
 def test_pre_compact_gives_one_paragraph_of_ids(recorded: dict[str, Any], env: Path,

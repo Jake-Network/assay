@@ -667,13 +667,19 @@ It shows, in this order:
 1. **Last verified commit per piece**: the newest `verified` completion of each piece in scope, with how it was
    checked (`checked: re-run`, `checked: person`, ...; the oracle of its last decision named by pack.toml
    `[brief.labels]`).
-2. **Reported done, not re-run**: completions still `proposed` with no supporting and no refuting evidence, newest
+2. **Re-run, not decided** (only when there is one): the newest completion of each piece that a re-run supported or
+   refuted and nobody decided, unless a later completion of the piece is verified; most recently re-run first. Each
+   line says why: `passed, needs review (tests weakened: <files>)`, `(fewer tests in <check>)` or `([checks]
+   changed)` (a person decides, see [the guard](#added-tests-and-weakened-tests)), `failed (<checks>)`, `runs disagree
+   (inconclusive)`, or `passed, not decided` (the run did not count, such as a worker's own run). Without it a
+   piece whose re-run passed and went to a person was in no section.
+3. **Reported done, not re-run**: completions still `proposed` with no supporting and no refuting evidence, newest
    first, each `checked: none`. A report is not a check; this section keeps the two apart.
-3. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
+4. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
    signature, first attempt and number of failed attempts; most recently failed first.
-4. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
+5. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
    tag or by `file:` prefix; most reported first.
-5. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
+6. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
 
 The footer names `benchbook get <id>` for one record's details (at most 400 tokens).
 

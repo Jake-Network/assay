@@ -8,6 +8,9 @@
    matched by tag or, for a `file:<prefix>` tag, by path prefix; most reported first.
 3. Occupied paths: live piece intents (v_inflight) with their tags and spec.paths (pieces.py).
 4. The last verified commit of each piece in scope, most recent first.
+5. Completions a re-run looked at and nobody decided (shown only when there is one): the re-run passed but the commit
+   weakened tests or changed [checks] (a person decides), it failed (refutes), or runs disagree (inconclusive).
+6. Completions reported and never re-run.
 
 Scope: a tag matches records carrying it exactly (`mod:media`, `piece:x`); `file:src/app/media/` matches by prefix,
 both the `file:` tags of findings and the paths pieces occupy. A piece is in scope when one of its tasks (benchbook
@@ -40,7 +43,8 @@ if TYPE_CHECKING:
 FOOTER = ("\nDetails: benchbook get <id> (one record, at most 400 tokens). Name your approach when you run a check "
           "(benchbook check run <check> --approach NAME, or BENCHBOOK_APPROACH): a failure seen before is named in the "
           "run's output.\n")
-LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8, "reported": 8}  # pack.toml [brief] overrides
+# pack.toml [brief] overrides
+LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8, "rerun": 8, "reported": 8}
 GIT_TIMEOUT = 2.0  # seconds per git call of the validity check (T10)
 NOT_IN_CHECKOUT = "commit not in this checkout"
 NOT_MERGED = "not merged into this branch"
@@ -129,6 +133,30 @@ WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'proposed' A
   AND s.n_refute = 0 AND {_COMPLETION_SCOPE}
 ORDER BY s.created_at DESC, s.id
 LIMIT %(n)s"""
+# Completions a re-run looked at that nobody decided, the newest per piece: supporting or refuting evidence, still
+# proposed or inconclusive, and no verified completion of the piece reported since.
+RERUN = f"""
+WITH {PIECES}, open AS (
+  SELECT DISTINCT ON (c.payload ->> 'piece') s.id, s.status, c.payload ->> 'piece' AS piece,
+         c.payload ->> 'commit' AS commit, c.created_at,
+         (SELECT max(l.created_at) FROM benchbook.links l WHERE l.project_id = s.project_id AND l.dst_id = s.id
+            AND l.relation IN ('supports', 'refutes')) AS last_at
+  FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
+  WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status IN ('proposed', 'inconclusive')
+    AND (s.n_support > 0 OR s.n_refute > 0) AND c.payload ? 'piece' AND {_COMPLETION_SCOPE}
+    AND NOT EXISTS (
+      SELECT 1 FROM benchbook.v_claim_status v JOIN benchbook.claims vc ON vc.project_id = v.project_id AND vc.id = v.id
+      WHERE v.project_id = s.project_id AND v.kind = 'completion' AND v.status = 'verified'
+        AND vc.payload ->> 'piece' = c.payload ->> 'piece' AND vc.created_at >= c.created_at)
+  ORDER BY c.payload ->> 'piece', c.created_at DESC, s.id
+)
+SELECT *, count(*) OVER () AS total FROM open ORDER BY last_at DESC NULLS LAST, created_at DESC, id LIMIT %(n)s"""
+# The finished attempts of the shown re-run completions (ledger._attempts): what the reason on each line says.
+RERUN_ATTEMPTS = """
+SELECT config ->> 'piece' AS piece, code_ref AS commit, metrics FROM benchbook.experiments_valid
+WHERE project_id = %s AND run_status = 'ok' AND config ->> 'piece' = ANY(%s) AND code_ref = ANY(%s)
+  AND metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb
+ORDER BY created_at, id"""
 # The paths a piece occupies (its newest task's spec.paths): what the validity check compares (T10).
 PIECE_PATHS = """
 SELECT DISTINCT ON (t.spec ->> 'piece') t.spec ->> 'piece' AS piece, t.spec -> 'paths' AS paths
@@ -233,6 +261,38 @@ def test_files(sig: str | None) -> list[str]:
     return out
 
 
+def _names(xs: Any, n: int = 3) -> str:
+    names = [clip(x, 80) for x in xs if isinstance(x, str)] if isinstance(xs, list) else []
+    return ", ".join(names[:n]) + (f" (+{len(names) - n})" if len(names) > n else "")
+
+
+def rerun_reason(status: str, attempts: list[dict[str, Any]]) -> str:
+    """Why a completion a re-run looked at is not decided, from its attempts' metrics (oldest first), as check verify's
+    decision reads them (checks._decide): a guarded test weakened, fewer tests, [checks] changed, runs that disagree,
+    a failed check, or a pass that decided nothing (a worker's run, not every declared check)."""
+    from ...ledger import attempt_summary
+
+    last = attempts[-1] if attempts else {}
+    passed = bool(attempts) and attempt_summary(UUID(int=0), "", last)["passed"]
+    weakened = sorted({f for m in attempts for f in m.get("guard_weakened_files") or [] if isinstance(f, str)})
+    fewer = sorted({c for m in attempts for c in m.get("fewer_tests_checks") or [] if isinstance(c, str)})
+    why = ([f"tests weakened: {_names(weakened)}"] if weakened else []) + (
+        [f"fewer tests in {_names(fewer)}"] if fewer else [])
+    if not why and any(m.get("guard_weakened") is True for m in attempts):
+        why.append("tests weakened")
+    if any(m.get("checks_changed") is True for m in attempts):
+        why.append("[checks] changed")
+    if why:
+        return f"{'passed, ' if passed else ''}needs review ({'; '.join(why)})"
+    if status == "inconclusive":
+        return "runs disagree (inconclusive)"
+    if attempts and not passed:
+        ran = last.get("checks")
+        failed = [k for k, v in ran.items() if v != "ok"] if isinstance(ran, dict) else []
+        return f"failed ({_names(failed)})" if failed else "failed"
+    return "passed, not decided (a lead's re-run of every declared check decides)"
+
+
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *, now: datetime | None = None,
                   log: bool = True, partition: str | None = None, tags: Sequence[str] | None = None,
                   repo: Path | None = None, max_chars: int | None = None) -> str:
@@ -261,6 +321,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         occupied = conn.execute(OCCUPIED, params).fetchall()
         verified = conn.execute(VERIFIED, params).fetchall()
         reported = conn.execute(REPORTED, params).fetchall()
+        rerun = conn.execute(RERUN, params).fetchall()
+        attempts: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        if shown := rerun[: limits["rerun"]]:
+            for r in conn.execute(RERUN_ATTEMPTS, (p.id, [x["piece"] for x in shown], [x["commit"] for x in shown])):
+                attempts.setdefault((r["piece"], r["commit"]), []).append(r["metrics"] or {})
         piece_paths: dict[str, list[str]] = {}
         if repo is not None and verified:
             for r in conn.execute(PIECE_PATHS, (p.id, [v["piece"] for v in verified[: limits["verified"]]])):
@@ -318,6 +383,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
                 f"verified {age(now, r['decided_at'])}, checked: {checked(r['last_oracle'], labels)}){mark(r)}")
 
+    def rerun_line(r: dict[str, Any]) -> str:
+        when = f"re-run {age(now, r['last_at'])}" if r["last_at"] else "re-run"
+        return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
+                f"{when}: {rerun_reason(r['status'], attempts.get((r['piece'], r['commit']), []))})")
+
     def reported_line(r: dict[str, Any]) -> str:
         return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
                 f"reported {age(now, r['created_at'])}, checked: {checked(None, labels)})")
@@ -331,6 +401,8 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     sections = [
         section("Last verified commit per piece ({shown} of {total})", verified, verified_line, "verified",
                 "benchbook search --kind claim --status verified"),
+        *([section("Re-run, not decided ({shown} of {total})", rerun, rerun_line, "rerun",
+                   "benchbook search --kind claim --status proposed")] if rerun else []),
         section("Reported done, not re-run ({shown} of {total})", reported, reported_line, "reported",
                 "benchbook search --kind claim --status proposed"),
         section("Discarded approaches, do not repeat ({shown} of {total})", discarded, discarded_line, "discarded",

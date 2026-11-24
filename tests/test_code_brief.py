@@ -565,3 +565,26 @@ FROM generate_series(1, 10000) AS i""", {"p": code})
             out = compile_brief(lg, None, budget, log=False, tags=tags, repo=repo, max_chars=6000)
             assert len(out) <= 6000 and out.endswith(FOOTER) and out.startswith("# benchbook brief")
             assert "## Last verified commit per piece" in out and "## Reported done, not re-run (" in out
+
+
+def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, repo: Path) -> None:
+    """30 pieces whose re-run decided nothing: the section shows the newest 8 and counts all 30 (pack.toml [brief]),
+    and the budget and the 6,000-character limit trim it like any other section."""
+    lg = agent(db_url, code, "impl-a")
+    run = attempt(agent(db_url, code, "verifier", "harness"), "p", status="ok")
+    for i in range(30):
+        c = lg.propose_claim("completion", f"piece-{i:02} is complete", payload={"piece": f"piece-{i:02}",
+                             "commit": f"{i:040x}"}, tags=[f"piece:piece-{i:02}"])
+        with lg._conn() as conn:
+            conn.execute("INSERT INTO benchbook.links (project_id, src_type, src_id, relation, dst_type, dst_id,"
+                         " author) VALUES (%s, 'experiment', %s, 'supports', 'claim', %s, 'verifier')",
+                         (code, run.experiment_id, c.id))
+    out = compile_brief(lg, None, 2000, log=False)
+    [section] = [s for s in out.split("\n## ") if s.startswith("Re-run, not decided")]
+    lines = section.splitlines()
+    assert lines[0] == "Re-run, not decided (8 of 30)" and len([x for x in lines if x.startswith("- ")]) == 8
+    assert lines[1].startswith("- piece-") and "passed, not decided" in lines[1]  # order: by time (clock steps here)
+    for budget, chars in ((300, None), (20000, 1200)):
+        small = compile_brief(lg, None, budget, log=False, repo=repo, max_chars=chars)
+        assert estimate_tokens(small) <= budget * 105 // 100 and (chars is None or len(small) <= chars)
+        assert small.endswith(FOOTER)

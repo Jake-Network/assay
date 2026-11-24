@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- The brief (`--here`, session start, pre-compact) has a section "Re-run, not decided" after the verified pieces:
+  the newest completion per piece that a re-run supported or refuted and nobody decided, with why (`passed, needs
+  review (tests weakened: <files>)`, `fewer tests in <check>`, `[checks] changed`, `failed (<checks>)`, `runs
+  disagree`). In the boundary pilot a piece whose re-run passed and went to a person was in no section, so a new
+  session's lead could not know it waited; a refuted completion showed only as a discarded approach. The section is
+  left out when empty; pack.toml `[brief] rerun` limits it (8).
 - Adding a name to an import in a guarded Python test file (`get_path)` → `get_path,` + `run_length)`, or
   `from x import a` → `from x import a, b`) no longer counts as weakening the tests: the file is "appended" when
   every deleted line is inside an import and the file still imports everything it did. In the boundary pilot's arm
