@@ -510,7 +510,7 @@ def test_a_background_agent_report_is_re_run_from_subagent_stop(code: str, env: 
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
     sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
-    monkeypatch.setattr(hooks, "start_processor", lambda spool: None)
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
     compaction = fixture("subagent_stop_compaction.json", repo)
     compaction["last_assistant_message"] = f"<summary>piece: media-upload\nDONE {sha}</summary>"
     assert not run("agent-result", compaction, capsys, monkeypatch)
@@ -553,7 +553,7 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
     data = fixture("post_tool_use_agent.json", repo)
     data["tool_response"]["content"][0]["text"] = f"private report text\npiece: media-upload\nDONE {sha[:9]}"
     assert not run("agent-result", fixture("post_tool_use_agent_async.json", repo), capsys, monkeypatch)
-    monkeypatch.setattr(hooks, "start_processor", lambda spool: None)
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
     for _ in range(2):
         out = run("agent-result", data, capsys, monkeypatch)
         assert "re-running the checks of media-upload" in context(out, "PostToolUse")
@@ -594,7 +594,7 @@ def _report_and_replay(repo: Path, sha: str, capsys: pytest.CaptureFixture[str],
 
     data = fixture("post_tool_use_agent.json", repo)
     data["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
-    monkeypatch.setattr(hooks, "start_processor", lambda spool: None)
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
     run("agent-result", data, capsys, monkeypatch)
     assert hooks.replay_now(hooks._spool_dir()).recorded == 1
     return session_notes.deliver(data["session_id"])
