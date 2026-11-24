@@ -59,7 +59,23 @@ call by default) can report its commit with a final `DONE <sha>`
 line, a `commit: <sha>` or `커밋: <sha>` line, or a single unambiguous full SHA. Benchbook takes the piece
 from the commit's `Benchbook-Piece:` trailer, the report's `piece:` line, or a unique local branch pointing to
 that commit, in that order. The processor runs the same declared checks in a clean worktree and sends the
-result back to the parent session. A completion that needs human review includes that information in the note.
+result back to the parent session: to the lead, after its next tool result, never to a subagent whose tool call
+happens to come first. A completion that needs human review includes that information in the note.
+
+### In a swarm
+
+- Before launching each worker, the lead runs `benchbook piece start <branch> --paths ...` for it. That occupies the
+  paths and turns the completion gate on for the branch; a branch with no live piece is not gated (Path occupancy,
+  below). Tell each worker its branch, and to end its report with `DONE <full sha>`.
+- Each `DONE` queues one re-run. Re-runs run one at a time per database and writer, in their own lane of the hook
+  spool: a worker's `check run` or Bash-hook attempt is recorded within about a second even while re-runs are
+  queued (it used to wait behind all of them: 168 s with eight queued). The verdicts arrive one per re-run: with
+  eight pieces reporting at once and a check suite of about 11 s, the first came after 23 s and the last after 183 s,
+  or 11 s and 92 s with `[verify] parallel_baseline` (`scripts/measure_rerun_queue.py`). With 30 pieces at once
+  the last would take about 30 re-runs; pieces rarely finish together, but a lead should not wait for every verdict
+  before merging the first ones.
+- Merge a piece after its verdict line (`re-run passed`, `tests not weakened`, `checked: re-run`), not after its
+  report.
 
 In the integration step, for each piece an implementer reported done:
 
@@ -411,6 +427,7 @@ against its user; the team mode (a committed config, CI as the verifier) is the 
 copy = [".env"]                 # copied from the repository root to the same place in the worktree
 prepare = "uv sync --frozen"    # run in the worktree before the first check
 prepare_timeout = 600           # seconds (default 600)
+parallel_baseline = false       # true: the merge-base's JUnit run for test counts goes beside the commit's (below)
 ```
 
 `copy` takes regular files inside the repository that the commit does not track; a path outside it, a symlink, a
@@ -418,6 +435,15 @@ missing file or a tracked path fails the preparation. The attempt records the na
 `prepare` ran (`metrics.prepared`), never their content. When the preparation fails, no check runs: the attempt is
 an environment failure (`run_status = "error"`, `metrics.environment = true`), with no link to the completion and
 no discarded approach. `[verify]` comes from where the checks come from: the merge-base's config.toml, or the pin.
+
+`parallel_baseline = true` starts the merge-base run that counts JUnit testcases ([Added tests and weakened
+tests](#added-tests-and-weakened-tests)) in its own worktree at the same time as the commit's checks, instead of
+after them. The verdicts are the same (the mutation table runs both ways); a verify of a piece that changed guarded
+files takes about the time of one run of the checks instead of two when the machine has the cores for both
+(`scripts/measure_rerun_queue.py`: 22.8 s to 11.5 s for a suite that waits more than it computes). Leave it off when
+two copies of the checks would share something: a fixed port, a database, a lock file, a directory outside the
+worktree. The early run's result is used only when the commit's run counted exactly the same checks; an interrupted
+verify stops it with its own.
 
 ### Environment failures
 
@@ -458,8 +484,8 @@ A piece usually adds tests. `check verify` splits the guarded files a commit cha
 `guard_weakened` is true for the last four. The all_pass rule, `check verify`'s decision and the PR summary block
 on `guard_weakened` and `checks_changed`, not on `guard_touched`, which keeps its meaning (any guarded file
 changed). An attempt recorded before `guard_weakened` existed is read by `guard_touched`, as before. The testcase
-counts come from a fresh merge-base run of the JUnit checks in the same environment as the candidate. This
-comparison runs when a guarded file changed. The PR summary's "tests changed" column says "added" and "weakened" apart.
+counts come from a fresh merge-base run of the JUnit checks in the same environment as the candidate (after the
+candidate's, or beside it with `[verify] parallel_baseline`). This comparison runs when a guarded file changed. The PR summary's "tests changed" column says "added" and "weakened" apart.
 
 ## The numbers
 

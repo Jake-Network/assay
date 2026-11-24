@@ -647,6 +647,15 @@ by hand, not a live session). Four are fixed; the fourth is not.
   next and blur arm F's verify time and weakening verdicts; and cheaper ways exist that change no verdict (run the
   commit's and the merge-base's worktrees in parallel, or first measure the `__pycache__` share). The pilot's H4
   report states that F's verify time includes the merge-base run.
+  **Measured (2026-11-24, `scripts/measure_rerun_queue.py`, model-free).** A synthetic repository (90 tests, one
+  JUnit check, tests/** guarded), eight pieces that each add a test file reporting at once, two runs each, WSL2:
+  the merge-base run is 47% to 50% of a verify (0.53 s of 1.12 s when the tests only import; 11.4 s of 22.8 s at
+  120 ms per test). A fresh worktree's missing `__pycache__` costs 0.08 s of a 0.49 s run (16%) and nothing
+  measurable at 120 ms per test, so it is not where the time goes. The last of eight verdicts came after 183 s (9 s
+  without the per-test time), and a worker's `check run` queued 14 s in was recorded 168 s after it ran (5.4 s), as
+  it waited behind every re-run. Done: the spool's two lanes (the attempt is recorded 0.3 s after it ran; verdicts
+  unchanged) and `[verify] parallel_baseline` (verify 11.5 s, last verdict 92 s). Not done: several re-runs at
+  once; see "Swarm fan-in".
 
 ## Spec §8 verdict for the code pack (2026-11-23)
 
@@ -677,5 +686,26 @@ by hand, not a live session). Four are fixed; the fourth is not.
   deliveries). PostToolUseFailure of other tools is not wired.
 - **No shell fast path.** With no note waiting, `benchbook hook notes` takes p50 35 ms, p95 45 ms (50 runs, Linux
   filesystem, WSL2), under the 100 ms that would have called for one in `bin/benchbook-hook`.
+- **The spool's lanes.** Re-runs go to their own lane with its own processor and lock (`.verify.lock`); reports
+  and attempts keep `.lock`. Before each re-run the verify lane drains the records lane once under its lock, so
+  everything queued before a request is recorded before it runs, as with one processor; an attempt queued while a
+  re-run runs may now be in the ledger before that re-run reads the implementers' passes (T03), where before it was
+  recorded after. That is the same as a re-run that started a moment later, and a later pass of the same commit is
+  the same evidence. Retries, receipts and dead letters are per entry and unchanged; `hook replay` and token
+  adoption take both locks, verify lane first, the order the verify lane takes them in.
+- **`[verify] parallel_baseline` is opt-in.** The merge-base run is half of a verify that changed tests, and
+  running it beside the commit's changes no verdict when the two copies share nothing (the mutation table and the
+  test-count tests run both ways). A repository whose checks use a fixed port, a database or a shared directory
+  would get failures from the overlap, which would read as the commit's, so the default stays sequential. The early
+  run is used only when the commit's run counted exactly the same JUnit checks; its thread's commands can be
+  stopped from the main thread (`runner.stop_commands`), so an interrupted verify does not wait for it, and `git
+  worktree` add, remove and prune are serialized within the process.
+- **Several re-runs at once: not done.** With lanes and the parallel baseline, eight pieces reporting together get
+  their last verdict after 92 s and the first after 11 s, and attempts are no longer held up. Pieces finish at
+  different times in practice, and concurrent re-runs bring the shared-resource question to every repository, so
+  this waits for a swarm run that shows the queue as the bottleneck.
+- **Completion gate stays opt-in (B3, pending evidence).** docs/code.md now says the lead runs `piece start` per
+  worker. Whether an implementer without one sent a false completion to a merge is read from the boundary pilot's
+  arm F and the B1 live check, after the paid measurements; the gate's default is not changed without that.
 - **Stop hook: not yet.** Whether a lead ends its turn with a verdict still waiting is to be seen in the live check
   (after the paid measurements end) and arm F's streams; a Stop hook that blocks once is added only if it happens.
