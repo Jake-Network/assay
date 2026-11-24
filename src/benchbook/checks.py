@@ -722,6 +722,9 @@ class EarlyBaseline:
     def __init__(self, repo: Path, b: Base, specs: list[CheckSpec], env: dict[str, str] | None) -> None:
         self.names = [s.name for s in specs]
         self._box: dict[str, Any] = {}
+        # Set when the run (and its worktree's removal) is over. Waiting on it, not on Thread.join or is_alive: before
+        # Python 3.12 a signal that interrupts join can leave is_alive() False while the thread still runs.
+        self._done = threading.Event()
         self._thread = threading.Thread(target=self._run, args=(repo, b, specs, env), daemon=True,
                                         name="benchbook-merge-base")
         self._thread.start()
@@ -731,13 +734,15 @@ class EarlyBaseline:
             self._box["value"] = baseline(repo, b, specs, env)
         except BaseException as e:  # noqa: BLE001 - handed to the caller
             self._box["error"] = e
+        finally:
+            self._done.set()
 
     def result(self) -> tuple[dict[str, BaseRun], BaseException | None]:
         """The run's result; an interruption while waiting for it (verify traps SIGTERM and SIGHUP while the run
         lives) stops the run and comes back as the run's interruption, as a sequential baseline's would."""
         try:
-            while self._thread.is_alive():
-                self._thread.join(0.1)
+            while not self._done.wait(0.1):
+                pass
         except (Interrupted, KeyboardInterrupt) as e:
             with _signals_held():
                 self.stop()
@@ -749,9 +754,9 @@ class EarlyBaseline:
     def stop(self) -> None:
         """End the run if it is still going (its check's process group is killed) and wait for its cleanup."""
         ident = self._thread.ident
-        if ident is not None and self._thread.is_alive():
+        if ident is not None and not self._done.is_set():
             stop_commands(ident)
-            self._thread.join()
+            self._done.wait()
             forget_stopped(ident)
 
 
