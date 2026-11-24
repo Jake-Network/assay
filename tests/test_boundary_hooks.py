@@ -593,9 +593,9 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
     data["tool_response"]["content"][0]["text"] = f"private report text\npiece: media-upload\nDONE {sha[:9]}"
     assert not run("agent-result", fixture("post_tool_use_agent_async.json", repo), capsys, monkeypatch)
     monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
-    for _ in range(2):
-        out = run("agent-result", data, capsys, monkeypatch)
-        assert "re-running the checks of media-upload" in context(out, "PostToolUse")
+    out = run("agent-result", data, capsys, monkeypatch)
+    assert "re-running the checks of media-upload" in context(out, "PostToolUse")
+    assert not run("agent-result", data, capsys, monkeypatch)  # the line once; the request again (a new report)
     spool = hooks._spool_dir()
     assert len(list(spool.glob("*.json"))) == 2
     assert all("private report text" not in path.read_text() for path in spool.glob("*.json"))
@@ -621,6 +621,40 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
             assert expected in result and short("claim", claim["id"]) in result
         else:
             assert not out
+
+
+@pytest.mark.parametrize("stop_first", [True, False], ids=["subagent-stop-first", "post-tool-use-first"])
+def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: bool, code: str, env: Path,
+                                                                    capsys: pytest.CaptureFixture[str],
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary pilot (2.1.331): one report came as SubagentStop and as PostToolUse:Agent, and the lead got
+    "re-running the checks" twice. Either order gives the line once; SubagentStop first queues the re-run once."""
+    from benchbook import hooks
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    post = fixture("post_tool_use_agent.json", repo)
+    post["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["session_id"] = post["session_id"]
+    stop["last_assistant_message"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    given = []
+    for data in ([stop, post] if stop_first else [post, stop]):
+        if out := run("agent-result", data, capsys, monkeypatch):
+            given.append(context(out, "PostToolUse"))
+    notification = fixture("user_prompt_submit_task_notification.json", repo)
+    notification["session_id"] = post["session_id"]
+    if out := run("notes", notification, capsys, monkeypatch):
+        given.append(context(out, "UserPromptSubmit"))
+    line = f"benchbook: re-running the checks of media-upload at {sha[:7]} in the background"
+    assert "\n".join(given).count(line) == 1, given
+    requests = list(hooks._spool_dir().glob("*.json"))
+    assert len(requests) == (1 if stop_first else 2)  # PostToolUse first cannot tell SubagentStop's report is its own
+    assert hooks.replay_now(hooks._spool_dir()).recorded == len(requests)
+    verdict = context(run("notes", notification, capsys, monkeypatch), "UserPromptSubmit")
+    assert verdict.count(f"benchbook: media-upload {sha[:7]}: re-run passed") == 1 and line not in verdict
+    assert not run("notes", notification, capsys, monkeypatch)
 
 
 # ------------------------------------------------------------------------------------------- who decides a re-run

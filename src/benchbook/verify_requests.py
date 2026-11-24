@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -80,25 +81,42 @@ def enqueue(data: dict[str, Any]) -> str:
     reporter = hooks._agent_type(data) or "unknown"
     if len(reporter) > 100 or not reporter.isprintable():
         return ""
-    spool = hooks._spool_dir()
-    spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-    request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
-               "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
-    hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True, "data": request})
-    hooks._log_notices()
-    hooks.start_processor(spool, hooks.VERIFY)
     line = f"benchbook: re-running the checks of {piece} at {commit[:7]} in the background"
-    if data.get("hook_event_name") == "SubagentStop":
-        # SubagentStop gives the lead no context: leave the line for the next hook that does (the task-notification's
-        # UserPromptSubmit follows right after).
-        notes = session_notes.notes_dir(session)
-        if notes is not None:
-            notes.mkdir(parents=True, exist_ok=True, mode=0o700)
-            name = "queued-" + hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest() + ".txt"
-            if not (notes / name).exists() and not (notes / session_notes.DELIVERED / name).exists():
-                session_notes.write_note(notes / name, line)
-        return ""
-    return line
+    notes = session_notes.notes_dir(session)
+    assert notes is not None  # checked above
+    notes.mkdir(parents=True, exist_ok=True, mode=0o700)
+    name = "queued-" + hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest() + ".txt"
+    queued, said = notes / name, notes / session_notes.DELIVERED / name
+    stop = data.get("hook_event_name") == "SubagentStop"
+    request_it, answer = True, ""
+    # One report reaches the hook twice when the agent ran in the foreground: SubagentStop, then PostToolUse:Agent
+    # (the boundary pilot, 2.1.331). The lead gets the line once: the queued note, or the PostToolUse answer, which
+    # takes the note still waiting and leaves the line in delivered/ so a later SubagentStop queues none. A pending
+    # note also means SubagentStop already requested this re-run: PostToolUse does not request it again.
+    with hooks._lock(notes, blocking=True):
+        if stop:
+            # SubagentStop gives the lead no context: leave the line for the next hook that does (the
+            # task-notification's UserPromptSubmit follows right after).
+            if not queued.exists() and not said.exists():
+                session_notes.write_note(queued, line)
+        elif queued.exists():
+            said.parent.mkdir(exist_ok=True)
+            os.replace(queued, said)
+            request_it, answer = False, line
+        elif not said.exists():
+            said.parent.mkdir(exist_ok=True)
+            session_notes.write_note(said, line)
+            answer = line
+    if request_it:
+        spool = hooks._spool_dir()
+        spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+        request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
+                   "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
+        hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True,
+                                   "data": request})
+        hooks._log_notices()
+        hooks.start_processor(spool, hooks.VERIFY)
+    return answer
 
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:

@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- A report that reaches the hooks as both SubagentStop and PostToolUse:Agent (a foreground agent, Claude Code
+  2.1.331) tells the lead "re-running the checks of …" once instead of twice, and when SubagentStop came first the
+  re-run is queued once. PostToolUse takes the line SubagentStop left waiting; a line already given is not repeated.
 - The brief (`--here`, session start, pre-compact) has a section "Re-run, not decided" after the verified pieces:
   the newest completion per piece that a re-run supported or refuted and nobody decided, with why (`passed, needs
   review (tests weakened: <files>)`, `fewer tests in <check>`, `[checks] changed`, `failed (<checks>)`, `runs
