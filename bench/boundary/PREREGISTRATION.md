@@ -191,4 +191,6 @@ any rerun before paying for it.
   lead before the lead's integration decision for that piece, and the `status` of the lead's Agent results
   (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is expected to give `completed`, which no live session has shown yet).
   Besides documentation, the checkout that runs arm F differs from 937f5ea in `tests/test_bench_boundary.py`, which
-  the runner does not run.
+  the runner does not run. Arm F's instructions do not run `piece start` and the runner does not set
+  `BENCHBOOK_PIECE`, so in 937f5ea (PR #4 issue 1) the TaskCompleted gate does not hold arm F's to-dos; the re-run
+  of a reported commit is not affected. The report says so beside H2.
