@@ -289,15 +289,18 @@ def test_a_rerun_that_decided_nothing_is_in_every_brief_with_why(db_url: str, co
     for name, sha in shas.items():
         _, rec = checks.verify(lead, name, sha, repo=repo, reported_by="impl")
         ids[name] = short("claim", rec.claim_id)
-    weak = (f"- weak at {shas['weak'][:12]} ({ids['weak']}, re-run just now: passed, needs review (tests weakened: "
+    weak = (f"- weak at {shas['weak'][:12]} ({ids['weak']}, re-run AGE: passed, needs review (tests weakened: "
             "tests/test_impl.py))")
-    bad = f"- bad at {shas['bad'][:12]} ({ids['bad']}, re-run just now: failed (value))"
+    bad = f"- bad at {shas['bad'][:12]} ({ids['bad']}, re-run AGE: failed (value))"
+
+    def aged(lines: list[str]) -> list[str]:  # the age moves with this machine's clock steps (54.6 s)
+        return sorted(re.sub(r", re-run [^:]+:", ", re-run AGE:", line) for line in lines)
 
     text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
     sections = text.split("\n## ")
     assert sections[1].startswith("Last verified commit per piece (1 of 1)\n- good at ")
     lines = sections[2].splitlines()
-    assert lines[0] == "Re-run, not decided (2 of 2)" and sorted(lines[1:]) == sorted([weak, bad])
+    assert lines[0] == "Re-run, not decided (2 of 2)" and aged(lines[1:]) == sorted([weak, bad])
     assert ids["good"] not in sections[2] and sections[3].startswith("Reported done, not re-run (0 of 0)")
     out = run("pre-compact", fixture("pre_compact.json", repo), capsys, monkeypatch)
     assert ids["weak"] in out and ids["bad"] in out
@@ -307,7 +310,7 @@ def test_a_rerun_that_decided_nothing_is_in_every_brief_with_why(db_url: str, co
     p = subprocess.run([SCRIPT, "--agent", "reader", "brief", "--here"], capture_output=True, text=True, cwd=repo,
                        timeout=120, env=cli_env)
     assert p.returncode == 0, p.stderr
-    assert weak in p.stdout.splitlines() and "## Re-run, not decided (" in p.stdout
+    assert weak in aged(p.stdout.splitlines()) and "## Re-run, not decided (" in p.stdout
 
 
 # ------------------------------------------------------------------------------------------- pre-compact
