@@ -356,6 +356,17 @@ def test_notes_after_any_tool_answer_as_post_tool_use(env: Path, capsys: pytest.
     assert run("notes", _tool_result("s-lead", env), capsys, monkeypatch) == ""
 
 
+@pytest.mark.parametrize("ran", [["PostToolUse"], {"x": 1}, 7, None])
+def test_a_malformed_event_name_still_delivers_the_notes(ran: object, env: Path, capsys: pytest.CaptureFixture[str],
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hook_event_name that is not a string must not fail the answer after the notes moved to delivered/: they
+    would be lost. The answer falls back to the hook's registered event."""
+    _pending(env, "s-odd", "benchbook: auth def5678: re-run passed")
+    data = {**_tool_result("s-odd", env), "hook_event_name": ran}
+    assert context(run("notes", data, capsys, monkeypatch), "UserPromptSubmit") == (
+        "benchbook: auth def5678: re-run passed")
+
+
 def test_a_subagents_tool_result_leaves_the_leads_notes(env: Path, capsys: pytest.CaptureFixture[str],
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     """Claude Code gives a subagent's hooks the lead's session_id and the subagent's agent_id. A worker's Bash or
@@ -470,8 +481,9 @@ def test_context_answer_per_harness() -> None:
     for ran in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
         answer = json.loads(harnesses.context_answer("claude-code", "notes", "n", ran))
         assert answer["hookSpecificOutput"]["hookEventName"] == ran
-    other = json.loads(harnesses.context_answer("claude-code", "notes", "n", "Stop"))
-    assert other["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    for odd in ("Stop", ["PostToolUse"], {"a": 1}):
+        other = json.loads(harnesses.context_answer("claude-code", "notes", "n", odd))
+        assert other["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     codex = json.loads(harnesses.context_answer("codex", "notes", "n", "UserPromptSubmit"))
     assert codex["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert harnesses.context_answer("claude-code", "pre-compact", "keep c:1") == "keep c:1\n"

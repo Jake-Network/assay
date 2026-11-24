@@ -71,6 +71,7 @@ def main(event: str, harness: str | None = None) -> None:
     harness = harness or "claude-code"
     text = ""
     data: dict[str, Any] = {}
+    ran: str | None = None
     try:
         data = read_input()
         if harness != "claude-code":
@@ -78,6 +79,8 @@ def main(event: str, harness: str | None = None) -> None:
 
             data = boundary_input(harness, data)
         lead = session_notes.for_lead(data)
+        # Read before any note moves: an answer that cannot be built after the move would lose the notes.
+        ran = data.get("hook_event_name") if isinstance(data.get("hook_event_name"), str) else None
         if event == "notes":
             text = session_notes.deliver(data.get("session_id")) if lead else ""
         elif event == "session-start":
@@ -105,7 +108,7 @@ def main(event: str, harness: str | None = None) -> None:
         return  # Claude Code's empty answer is no output; harnesses.py is not imported for it
     from .harnesses import context_answer
 
-    sys.stdout.write(context_answer(harness, event, text, data.get("hook_event_name")))
+    sys.stdout.write(context_answer(harness, event, text, ran))
     sys.stdout.flush()
 
 

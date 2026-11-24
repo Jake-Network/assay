@@ -84,8 +84,9 @@ def context_answer(harness: str, event: str, text: str, hook_event: object = Non
     if event in PLAIN_EVENTS.get(harness, ()):
         return text if text.endswith("\n") else text + "\n"
     if (name := CONTEXT_EVENTS.get(harness, {}).get(event)) is not None:
-        if harness == CLAUDE_CODE and event == "notes" and hook_event in CLAUDE_CODE_NOTES_EVENTS:
-            name = str(hook_event)
+        if harness == CLAUDE_CODE and event == "notes" and isinstance(hook_event, str) \
+                and hook_event in CLAUDE_CODE_NOTES_EVENTS:
+            name = hook_event
         return json.dumps({"hookSpecificOutput": {"hookEventName": name, "additionalContext": text}},
                           ensure_ascii=False) + "\n"
     if event in ("session-start", "notes") and harness == "cursor":
