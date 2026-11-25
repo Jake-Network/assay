@@ -5,8 +5,9 @@ re-run. README.md explains the product, DECISIONS.md why things are the way they
 
 ## Checks
 
-- Run the tests for the files you touched: `uv run pytest -q tests/test_<area>.py`. The full suite takes over 20 minutes
-  (each test gets a throwaway Postgres); run it once at the end of a piece of work, not after every edit.
+- Run the tests for the files you touched: `uv run pytest -q tests/test_<area>.py`. The full suite takes over 20
+  minutes; run it once at the end of a piece of work, not after every edit. One throwaway Postgres serves the whole
+  session and each test gets a fresh project in it, so rows other tests wrote are still in the database.
 - Before a commit: `uv run ruff check src tests bench examples scripts`, `uv run mypy src/benchbook`,
   `uv run pytest -q tests/test_docs.py`.
 - A timing- or order-sensitive test that fails once in a full run: re-run it alone before calling it a regression.
@@ -14,8 +15,8 @@ re-run. README.md explains the product, DECISIONS.md why things are the way they
 ## Changes
 
 - One commit per item. Stage explicit paths, never `git add -A` or `git add .`.
-- A behavior change gets one line in CHANGELOG.md under `## Unreleased`; a changed rule or default also gets an entry
-  in DECISIONS.md.
+- A behavior change gets one line in CHANGELOG.md under the topmost `## Unreleased: <topic>` heading; a changed rule
+  or default also gets an entry in DECISIONS.md.
 - Keep pull requests small and stack them (base = the previous branch) rather than growing one large PR.
 - Before pushing a non-trivial change, run `/code-review high` on it.
 
@@ -32,8 +33,9 @@ re-run. README.md explains the product, DECISIONS.md why things are the way they
   pre-registrations. Never edit them or recompute their numbers.
 - `bench/*/PREREGISTRATION.md` bodies are frozen. Changes for a later run go in a dated Amendment, written only after
   the owner has decided to run it.
-- Calls that cost money need the owner's approval in the current session: `claude -p`, `python -m bench.run --execute`,
-  `python -m bench.boundary.run --execute`, `scripts/qa_boundary_hooks.sh`.
+- Calls that cost money (API or GPU time) need the owner's approval in the current session: `claude -p`,
+  `scripts/qa_boundary_hooks.sh`, and every `--execute` under `bench/` (`bench.run`, `bench.boundary.run`,
+  `bench.code.run`, `bench.autoresearch.launch`, `bench.autoresearch.post_replicate`).
 - Before a new feature is hardened or reviewed at length, check it works for its purpose with the smallest paid pilot
   (one task, one run per arm, a few USD). Earlier pilots of USD 1-3 found more than several review rounds did.
 - Before a paid sweep: pin the Claude Code version (`DISABLE_AUTOUPDATER=1`, and record `claude --version` in the
