@@ -90,8 +90,8 @@ why the manual worker file is separate.
 3. It launches K `benchbook-worker` subagents with a two-sentence prompt: their agent name and "take a task".
 4. Workers: `benchbook_next_task` -> `benchbook_brief` -> for each evaluation one Bash command,
    `benchbook --agent worker-<n> exp run --config '<json>' --seed <n> -- <command>`, which checks the ledger, runs
-   the command and records the result -> claims with evidence -> `benchbook_complete_task`; final message <= 3
-   sentences + ids. Without a shell they call `benchbook_check_tried` before and `benchbook_record_experiment`
+   the command and records the result -> claims with evidence -> `benchbook_complete_task`; final message a short
+   summary + ids. Without a shell they call `benchbook_check_tried` before and `benchbook_record_experiment`
    after each evaluation instead (the MCP tools stay). One command instead of three tool calls saves a turn per
    attempt; see [the SDK page](sdk.md#check-run-and-record-in-one-command) for its output and exit codes.
 5. The lead reads `benchbook_status` and `benchbook_brief` (and `benchbook_sql`), decides claims, plans the next round.

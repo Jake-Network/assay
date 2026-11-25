@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- Worker instructions (MCP server instructions, the worker subagents, AGENTS.md) ask for a short final summary with
+  record ids instead of at most 3 sentences; the 1000-character limit on a task summary is unchanged. The Claude Code
+  plugins are 0.2.2 (`benchbook`) and 0.2.1 (`benchbook-mcp`) for it.
 - `brief --here` and the boundary hooks also cover the pieces merged into HEAD (a completion at a commit in HEAD's
   history): their findings and dead ends, tagged with the piece, were outside an integration branch's scope. In the
   second boundary pilot this hid the lead's own `benchbook discard` and a worker's finding from the next session.
@@ -19,7 +22,7 @@
   for that commit's re-run verdict. A clean verdict lets the merge run and is handed to the lead with it; a failed
   or needs-review verdict, or none within 30 s, holds the merge once with the reason, and merging again goes
   through. A PreToolUse hook with `if: "Bash(git merge *)"` runs it, so other Bash calls pay nothing. In the
-  boundary pilot arm F's lead merged all four pieces before their verdicts. The plugin is 0.2.2: update it.
+  boundary pilot arm F's lead merged all four pieces before their verdicts. The plugin is 0.2.3: update it.
 - A report that reaches the hooks as both SubagentStop and PostToolUse:Agent (a foreground agent, Claude Code
   2.1.331) tells the lead "re-running the checks of …" once instead of twice, and when SubagentStop came first the
   re-run is queued once. PostToolUse takes the line SubagentStop left waiting; a line already given is not repeated.

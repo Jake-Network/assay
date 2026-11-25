@@ -21,7 +21,7 @@ claude plugin install benchbook@benchbook benchbook-mcp@benchbook   # hooks; MCP
 4. In Claude Code: `/benchbook-mcp:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
 
 Expected: tasks appear on the Tasks page and get claimed by `worker-1..4`; experiments and the best-so-far curve
-update live; each worker's final message is <= 3 sentences plus ids; after round 1 the lead reads
+update live; each worker's final message is a short summary plus ids; after round 1 the lead reads
 `benchbook_status`/`benchbook_brief` rather than quoting worker messages; the final report lists best, verified claims,
 experiment count, duplicates blocked and the viewer URL.
 
