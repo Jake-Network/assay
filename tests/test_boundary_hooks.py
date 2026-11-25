@@ -655,6 +655,16 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
     requests = list(hooks._spool_dir().glob("*.json"))
     assert len(requests) == (1 if stop_first else 2)  # PostToolUse first cannot tell SubagentStop's report is its own
     assert hooks.replay_now(hooks._spool_dir()).recorded == len(requests)
+    if stop_first:  # the lead merges before reading the verdict: the merge gate hands it over
+        from benchbook import merge_gate
+
+        gate = merge_gate.decide({"session_id": post["session_id"], "cwd": str(repo), "tool_name": "Bash",
+                                  "tool_input": {"command": "git merge --no-ff media-upload"}}, wait=1)
+        assert gate is not None
+        assert gate["hookSpecificOutput"]["additionalContext"].startswith(f"benchbook: media-upload {sha[:7]}: re-run "
+                                                                          "passed")
+        assert not run("notes", notification, capsys, monkeypatch)
+        return
     verdict = context(run("notes", notification, capsys, monkeypatch), "UserPromptSubmit")
     assert verdict.count(f"benchbook: media-upload {sha[:7]}: re-run passed") == 1 and line not in verdict
     assert not run("notes", notification, capsys, monkeypatch)

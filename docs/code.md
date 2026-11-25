@@ -75,7 +75,9 @@ happens to come first. A completion that needs human review includes that inform
   the last would take about 30 re-runs; pieces rarely finish together, but a lead should not wait for every verdict
   before merging the first ones.
 - Merge a piece after its verdict line (`re-run passed`, `tests not weakened`, `checked: re-run`), not after its
-  report.
+  report. With the Claude Code plugin a lead's `git merge` of a reported commit waits up to 30 s for the verdict:
+  a clean one lets the merge run and comes with it, anything else holds the merge once with the verdict as the
+  reason (docs/claude-code.md, "the merge gate").
 
 In the integration step, for each piece an implementer reported done:
 

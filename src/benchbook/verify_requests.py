@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from . import boundary_hooks, config, hooks, session_notes
+from . import boundary_hooks, config, hooks, merge_gate, session_notes
 from .check_run import PIECE
 from .pr import TRAILER
 
@@ -93,7 +93,13 @@ def enqueue(data: dict[str, Any]) -> str:
     # (the boundary pilot, 2.1.331). The lead gets the line once: the queued note, or the PostToolUse answer, which
     # takes the note still waiting and leaves the line in delivered/ so a later SubagentStop queues none. A pending
     # note also means SubagentStop already requested this re-run: PostToolUse does not request it again.
+    key = hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest()
+    report_sha = hashlib.sha256(report.encode()).hexdigest()
+    report_key = hashlib.sha256(json.dumps([key, session, reporter, report_sha]).encode()).hexdigest()
     with hooks._lock(notes, blocking=True):
+        # The merge gate (merge_gate.py) waits for one of these: process() names the verdict note after the commit,
+        # or after the report for an environment failure.
+        merge_gate.mark(notes, commit, piece, [f"verify-{key}.txt", f"verify-{report_key}.txt"])
         if stop:
             # SubagentStop gives the lead no context: leave the line for the next hook that does (the
             # task-notification's UserPromptSubmit follows right after).
@@ -111,7 +117,7 @@ def enqueue(data: dict[str, Any]) -> str:
         spool = hooks._spool_dir()
         spool.mkdir(parents=True, exist_ok=True, mode=0o700)
         request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
-                   "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
+                   "repo": str(where.repo), "report_sha256": report_sha}
         hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True,
                                    "data": request})
         hooks._log_notices()

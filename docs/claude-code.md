@@ -53,7 +53,7 @@ The hook plugin (`integrations/claude-code/`, `benchbook@benchbook`) contains:
 | file | what |
 |---|---|
 | `bin/benchbook-hook` | the shim every hook runs: `benchbook hook EVENT` from PATH (`assay hook` when only that is there); without either it notes one line in `${CLAUDE_PLUGIN_DATA}/missing-cli`, which `benchbook doctor` reports, and exits 0 |
-| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PreToolUse(Bash)` with `if: "Bash(git merge *)"` -> `benchbook hook bash-start` (the merge gate); `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
 
 Every command in hooks.json is `"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT`, so the plugin calls only a file of
 its own (the directory's submission checklist asks for that).
@@ -143,6 +143,16 @@ In a project with `[checks]` in `.benchbook/config.toml` (the code pack, docs/co
 implementers' check runs in the ledger and hold a piece's task open until its HEAD passes. The plugin installs them;
 the manual copy (`manual/settings.hooks.json`) has the same entries. Neither needs the agent to type a benchbook
 command.
+
+### `benchbook hook bash-start` (PreToolUse on Bash, `git merge` only): the merge gate
+
+The manifest runs it only for `Bash(git merge *)` (the hook's `if`, so other Bash calls pay no start-up). When the
+lead (not a subagent) merges a ref whose commit a report queued a re-run for in this session, it waits up to 30 s
+for that re-run's verdict note. A clean verdict (`re-run passed`, `tests not weakened`) lets the merge run and is
+given to the lead as the call's `additionalContext`; any other verdict, or none within 30 s, denies the call once
+with the verdict or the wait as the reason. Merging the same commit again goes through. The pending marks are
+`pending/<sha>.json` in the session's notes directory (`verify_requests.enqueue` writes them). In the boundary
+pilot every merge of arm F's lead came before its verdict.
 
 ### `benchbook hook bash-result` (PostToolUse and PostToolUseFailure on Bash)
 

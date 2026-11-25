@@ -2,6 +2,11 @@
 
 ## Unreleased: code pack
 
+- The merge gate: with the Claude Code plugin, a lead's `git merge` of a commit a worker reported waits up to 30 s
+  for that commit's re-run verdict. A clean verdict lets the merge run and is handed to the lead with it; a failed
+  or needs-review verdict, or none within 30 s, holds the merge once with the reason, and merging again goes
+  through. A PreToolUse hook with `if: "Bash(git merge *)"` runs it, so other Bash calls pay nothing. In the
+  boundary pilot arm F's lead merged all four pieces before their verdicts. The plugin is 0.2.2: update it.
 - A report that reaches the hooks as both SubagentStop and PostToolUse:Agent (a foreground agent, Claude Code
   2.1.331) tells the lead "re-running the checks of …" once instead of twice, and when SubagentStop came first the
   re-run is queued once. PostToolUse takes the line SubagentStop left waiting; a line already given is not repeated.

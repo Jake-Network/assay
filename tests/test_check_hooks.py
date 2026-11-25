@@ -370,7 +370,10 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
 
     for f in files:
         h = plain(json.loads(f.read_text())["hooks"])
-        assert "PreToolUse" not in h
+        # PreToolUse runs for git merge only (the merge gate): a hook on every Bash call would cost its start-up
+        [gate] = h["PreToolUse"]
+        assert gate["matcher"] == "Bash" and [(x["command"], x["if"]) for x in gate["hooks"]] == [
+            ("benchbook hook bash-start", "Bash(git merge *)")]
         bash = [e for e in h["PostToolUse"] if e.get("matcher") == "Bash"]
         assert [x["command"] for e in bash for x in e["hooks"]] == ["benchbook hook bash-result"], f
         assert [x["command"] for e in h["PostToolUseFailure"] for x in e["hooks"]] == ["benchbook hook bash-result"]
@@ -385,7 +388,7 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
 # The plugin's files as of its version. Claude Code keeps an installed version's cached files, so a change under
 # integrations/claude-code/ reaches users only with a new version in plugin.json: change a file, and this fails until
 # the version is bumped and the pair updated (docs/claude-code.md, "Bump version").
-PLUGIN_RELEASE = ("0.2.1", "2c7879e8db4f3b0a21436680523696b4a6d9efbbe1f5981c33d27de9f154d785")
+PLUGIN_RELEASE = ("0.2.2", "2a42ac21e6ff1f1c9f3e6745a839c6cbcb668acee78c22a020887913f5ed6fc6")
 
 
 def test_the_plugin_version_moves_with_its_files() -> None:
