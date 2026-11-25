@@ -136,18 +136,19 @@ def test_an_unreadable_own_usage_is_a_missing_receipt() -> None:
         run.read_call(events, "s")
 
 
-def own_usage_call(tmp_path: Path, calls: list[tuple[float, int, dict[str, tuple[float, int]]]], *,
+def own_usage_call(tmp_path: Path, calls: list[tuple[float, int, dict[str, tuple[float, int]] | None]], *,
                    cap: float = 3.0) -> run.Batch:
     """A batch whose calls return these receipts: (total_cost_usd, modelUsage tokens, own usage per model)."""
     receipts = iter(calls)
 
     def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
         cost, tokens, own = next(receipts)
-        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
-                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
-                   "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0, "costUSD": cost}},
-                   run.OWN_USAGE: {name: {"inputTokens": n, "outputTokens": 0, "costUSD": usd}
-                                   for name, (usd, n) in own.items()}}]
+        result = {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                  "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0, "costUSD": cost}}}
+        if own is not None:
+            result[run.OWN_USAGE] = {name: {"inputTokens": n, "outputTokens": 0, "costUSD": usd}
+                                     for name, (usd, n) in own.items()}
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}}, result]
         (target / "lead.stream.jsonl").write_text(
             "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
         (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
@@ -155,6 +156,21 @@ def own_usage_call(tmp_path: Path, calls: list[tuple[float, int, dict[str, tuple
     args = argparse.Namespace(probe_budget_usd=cap, max_budget_usd=cap, total_budget_usd=10.0, model="m",
                               claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
     return run.Batch(args, tmp_path, execute)
+
+
+def test_receipt_without_own_usage_preserves_totals_after_a_reset(tmp_path: Path) -> None:
+    batch = own_usage_call(tmp_path, [(0.06, 1000, {"m": (0.06, 1000)}), (0.05, 500, {"m": (0.05, 500)}),
+                                      (0.07, 800, None), (0.10, 1200, {"m": (0.03, 400)})])
+    for number in range(1, 5):
+        batch.capture("A", tmp_path, {}, tmp_path / str(number), "work", "s-1", resume=number > 1, probe=False)
+
+    third = json.loads((tmp_path / "3" / "metrics.json").read_text(encoding="utf-8"))
+    assert third["cost_usd"] == pytest.approx(0.02) and third["tokens"] == 300
+    assert third["session_cost_usd"] == pytest.approx(0.13) and third["session_tokens"] == 1800
+    assert (third["reported_session_cost_usd"], third["reported_session_tokens"]) == (0.07, 800)
+    fourth = json.loads((tmp_path / "4" / "metrics.json").read_text(encoding="utf-8"))
+    assert fourth["session_cost_usd"] == pytest.approx(0.16) and fourth["session_tokens"] == 2200
+    assert json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))["counted_usd"] == pytest.approx(0.16)
 
 
 @pytest.mark.parametrize("second", [
