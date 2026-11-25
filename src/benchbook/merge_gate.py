@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -33,9 +34,10 @@ def pending_dir(notes: Path) -> Path:
     return notes / PENDING
 
 
-def mark(notes: Path, commit: str, piece: str, verdicts: list[str]) -> None:
+def mark(notes: Path, commit: str, piece: str, verdicts: list[str], reporter: str | None = None) -> None:
     """Record that commit's re-run was requested in this session (merged with an earlier mark: SubagentStop and
-    PostToolUse can each request it). Called under the notes lock."""
+    PostToolUse can each request it), and who reported it (the hold message names it for --reported-by). Called
+    under the notes lock."""
     path = pending_dir(notes) / f"{commit}.json"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -43,7 +45,8 @@ def mark(notes: Path, commit: str, piece: str, verdicts: list[str]) -> None:
     except (OSError, ValueError):
         old = {}
     names = list(dict.fromkeys([*(old.get("verdicts") or []), *verdicts]))
-    rec = {"piece": piece, "commit": commit, "verdicts": names, "since": old.get("since") or time.time()}
+    rec = {"piece": piece, "commit": commit, "verdicts": names, "since": old.get("since") or time.time(),
+           "reporter": reporter or old.get("reporter")}
     session_notes.write_note(path, json.dumps(rec))
 
 
@@ -162,19 +165,48 @@ def decide(data: dict[str, Any], wait: float = WAIT) -> dict[str, Any] | None:
             since = int(time.time() - float(rec.get("since") or time.time()))
             return _deny(f"benchbook: held this merge once: the re-run of {piece} at {commit[:7] if commit else ref} "
                          f"has not reported ({since} s since its report, {wait:g} s waited here). Merge after its "
-                         "verdict line; merging again goes through without waiting.")
+                         f"verdict line, or re-run it yourself, which decides: {_verify(piece, commit, rec)}. "
+                         "Merging again goes through without waiting.")
         line, waiting = found
         _take(notes, names)
         path.unlink(missing_ok=True)
         if not clean(line):
-            return _deny(f"{line}\nbenchbook: held this merge once because the re-run did not pass cleanly; a person "
-                         "decides (benchbook decide <claim> verified|refuted --oracle human --as human), or merge "
+            return _deny(f"{line}\nbenchbook: held this merge once: {next_step(line, piece, commit, rec)} Or merge "
                          "again to go ahead anyway.")
         if waiting:
             given.append(line)
     if given:
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "\n".join(given)}}
     return None
+
+
+_CLAIM = re.compile(r"\((c:[0-9a-f]+)")
+_FAILED_RUN = re.compile(r"failed run (e:[0-9a-f]+)")
+
+
+def _verify(piece: str, commit: str | None, rec: dict[str, Any]) -> str:
+    reporter = rec.get("reporter")
+    by = f" --reported-by {shlex.quote(reporter)}" if isinstance(reporter, str) and reporter else ""
+    return f"`benchbook --agent lead check verify {shlex.quote(piece)} {commit or '<sha>'}{by}`"
+
+
+def next_step(line: str, piece: str, commit: str | None, rec: dict[str, Any]) -> str:
+    """What the lead can do about a verdict that is not clean, with the commands to run. In the third boundary
+    pilot the message offered only a person's decision; the lead ran check verify without --reported-by, which
+    recorded a pass and decided nothing."""
+    claim = m[1] if (m := _CLAIM.search(line)) else "<claim>"
+    person = f"a person decides (benchbook decide {claim} verified|refuted --oracle human --as human)"
+    if "needs review" in line or "tests weakened" in line:
+        return f"a test or [checks] changed, so a re-run cannot verify it; {person}."
+    if (failed := _FAILED_RUN.search(line)) is not None:
+        return (f"the runs disagree. If the failure is not the piece's (a flaky test, the machine), invalidate the "
+                f"failed run and re-run it yourself, which decides: `benchbook --agent lead decide {failed[1]} "
+                f"invalidated --oracle human --rationale \"...\"`, then {_verify(piece, commit, rec)}. Otherwise "
+                f"{person}.")
+    if "re-run failed" in line:
+        return (f"the re-run failed, and again on a retry: the implementer fixes it and reports a new commit, or "
+                f"{person}.")
+    return f"re-run it yourself, which decides: {_verify(piece, commit, rec)}; or {person}."
 
 
 def _deny(reason: str) -> dict[str, Any]:

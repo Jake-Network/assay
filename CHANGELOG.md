@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- A merge the gate holds now says what the lead can run: `check verify ... --reported-by <worker>`, which re-runs
+  and decides, and, for runs that disagree, the `decide ... invalidated` of the failed run first. Before it named only a
+  person's decision.
 - The automatic re-run of a reported commit retries a failed run once. A retry that passes records both runs, leaves
   no discarded approach and decides inconclusive (the runs disagree), so a lead can invalidate the failed run and
   verify; one that fails too is recorded as one failed run, as before. In the third boundary pilot two re-runs failed

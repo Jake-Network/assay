@@ -27,7 +27,7 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     assert notes is not None
     notes.mkdir(parents=True)
     key = hashlib.sha256(json.dumps(["p", "media", sha]).encode()).hexdigest()
-    merge_gate.mark(notes, sha, "media", [f"verify-{key}.txt"])
+    merge_gate.mark(notes, sha, "media", [f"verify-{key}.txt"], "general-purpose")
     return {"repo": repo, "sha": sha, "notes": notes, "verdict": notes / f"verify-{key}.txt"}
 
 
@@ -73,6 +73,31 @@ def test_a_verdict_that_needs_review_holds_the_merge_once(setup: dict[str, Any])
     assert call(setup, "git merge media") is None
 
 
+FLAKY = ("benchbook: media abc1234: re-run failed (unit:tests/test_net.py::test_timeout:Timeout), then passed on a "
+         "retry (2 checks, 1.0s), tests not weakened; attempts disagree, checked: none (c:5f3bebad; failed run "
+         "e:73d83ab7)")
+FAILED = ("benchbook: media abc1234: re-run failed (2 checks, 1.0s), tests not weakened, checked: none (c:5f3bebad)")
+
+
+@pytest.mark.parametrize(("line", "wanted", "unwanted"), [
+    # the third boundary pilot's case: a flaky failure outside the piece; the lead can settle it itself
+    (FLAKY, ["benchbook --agent lead decide e:73d83ab7 invalidated --oracle human",
+             "benchbook --agent lead check verify media {sha} --reported-by general-purpose",
+             "benchbook decide c:5f3bebad verified|refuted"], []),
+    (FAILED, ["again on a retry", "reports a new commit", "benchbook decide c:5f3bebad"], ["check verify"]),
+    (WEAK, ["a re-run cannot verify it", "benchbook decide c:1"], ["check verify"]),
+])
+def test_a_held_merge_names_what_the_lead_can_run(setup: dict[str, Any], line: str, wanted: list[str],
+                                                  unwanted: list[str]) -> None:
+    setup["verdict"].write_text(line + "\n")
+    answer = call(setup, "git merge media")
+    assert answer is not None
+    reason = answer["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith(line) and "merge again to go ahead" in reason.lower()
+    assert all(w.format(sha=setup["sha"]) in reason for w in wanted), reason
+    assert not any(u in reason for u in unwanted), reason
+
+
 def test_a_verdict_arriving_while_the_merge_waits(setup: dict[str, Any]) -> None:
     timer = threading.Timer(0.5, lambda: setup["verdict"].write_text(PASSED + "\n"))
     timer.start()
@@ -87,6 +112,7 @@ def test_no_verdict_in_time_holds_once_then_lets_it_through(setup: dict[str, Any
     assert answer is not None
     reason = answer["hookSpecificOutput"]["permissionDecisionReason"]
     assert answer["hookSpecificOutput"]["permissionDecision"] == "deny" and "has not reported" in reason
+    assert f"benchbook --agent lead check verify media {setup['sha']} --reported-by general-purpose" in reason
     started = time.monotonic()
     assert call(setup, "git merge media", wait=5) is None and time.monotonic() - started < 1
 

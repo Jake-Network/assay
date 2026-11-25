@@ -151,8 +151,20 @@ lead (not a subagent) merges a ref whose commit a report queued a re-run for in 
 for that re-run's verdict note. A clean verdict (`re-run passed`, `tests not weakened`) lets the merge run and is
 given to the lead as the call's `additionalContext`; any other verdict, or none within 30 s, denies the call once
 with the verdict or the wait as the reason. Merging the same commit again goes through. The pending marks are
-`pending/<sha>.json` in the session's notes directory (`verify_requests.enqueue` writes them). In the boundary
-pilot every merge of arm F's lead came before its verdict.
+`pending/<sha>.json` in the session's notes directory (`verify_requests.enqueue` writes them, with the reporting
+agent's type). In the boundary pilot every merge of arm F's lead came before its verdict.
+
+The reason ends with what the lead can run, by verdict:
+
+| verdict | the hold message |
+|---|---|
+| none within 30 s | wait for the line, or `benchbook --agent lead check verify <piece> <sha> --reported-by <reporter>`, which re-runs and decides |
+| `re-run failed (...), then passed on a retry` (docs/code.md) | if the failure is not the piece's, `benchbook --agent lead decide e:<failed run> invalidated --oracle human --rationale "..."` and then that `check verify`; otherwise a person decides |
+| `re-run failed` (again on its retry) | the implementer fixes it and reports a new commit, or a person decides |
+| `needs review` (a test or `[checks]` changed) | a person decides (`benchbook decide <claim> verified\|refuted --oracle human --as human`) |
+
+In the third boundary pilot the message offered only a person's decision; the lead ran `check verify` without
+`--reported-by`, which recorded a pass against no claim and decided nothing.
 
 ### `benchbook hook bash-result` (PostToolUse and PostToolUseFailure on Bash)
 

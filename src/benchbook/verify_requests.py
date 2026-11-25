@@ -99,7 +99,7 @@ def enqueue(data: dict[str, Any]) -> str:
     with hooks._lock(notes, blocking=True):
         # The merge gate (merge_gate.py) waits for one of these: process() names the verdict note after the commit,
         # or after the report for an environment failure.
-        merge_gate.mark(notes, commit, piece, [f"verify-{key}.txt", f"verify-{report_key}.txt"])
+        merge_gate.mark(notes, commit, piece, [f"verify-{key}.txt", f"verify-{report_key}.txt"], reporter)
         if stop:
             # SubagentStop gives the lead no context: leave the line for the next hook that does (the
             # task-notification's UserPromptSubmit follows right after).
