@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -88,35 +89,45 @@ def enqueue(data: dict[str, Any]) -> str:
     name = "queued-" + hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest() + ".txt"
     queued, said = notes / name, notes / session_notes.DELIVERED / name
     stop = data.get("hook_event_name") == "SubagentStop"
-    request_it, answer = True, ""
-    # One report reaches the hook twice when the agent ran in the foreground: SubagentStop, then PostToolUse:Agent
-    # (the boundary pilot, 2.1.331). The lead gets the line once: the queued note, or the PostToolUse answer, which
-    # takes the note still waiting and leaves the line in delivered/ so a later SubagentStop queues none. A pending
-    # note also means SubagentStop already requested this re-run: PostToolUse does not request it again.
-    with hooks._lock(notes, blocking=True):
-        if stop:
-            # SubagentStop gives the lead no context: leave the line for the next hook that does (the
-            # task-notification's UserPromptSubmit follows right after).
-            if not queued.exists() and not said.exists():
-                session_notes.write_note(queued, line)
-        elif queued.exists():
-            said.parent.mkdir(exist_ok=True)
-            os.replace(queued, said)
-            request_it, answer = False, line
-        elif not said.exists():
-            said.parent.mkdir(exist_ok=True)
-            session_notes.write_note(said, line)
-            answer = line
-    if request_it:
-        spool = hooks._spool_dir()
-        spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-        request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
-                   "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
-        hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True,
-                                   "data": request})
-        hooks._log_notices()
-        hooks.start_processor(spool, hooks.VERIFY)
-    return answer
+    spool = None
+    # Keep one display notice per commit, but only suppress a foreground request if SubagentStop queued this
+    # report for this writer. Another report of the same commit may need a fresh run after an environment failure.
+    report_hash = hashlib.sha256(report.encode()).hexdigest()
+    try:
+        with hooks._lock(notes, blocking=True):
+            target_spool = hooks._spool_dir()
+            proof_key = hashlib.sha256(json.dumps([name, target_spool.name, reporter, report.strip()]).encode())
+            proof = notes / f"queued-{proof_key.hexdigest()}.request"
+            if stop or not proof.is_file() or not target_spool.is_dir():
+                target_spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+                request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
+                           "repo": str(where.repo), "report_sha256": report_hash}
+                hooks._write_spool(target_spool, {"event": "verify-request", "project": where.project, "accepted": True,
+                                                 "data": request})
+            spool = target_spool
+
+            if stop:
+                session_notes.write_note(proof, "queued")
+                if not queued.exists() and not said.exists():
+                    session_notes.write_note(queued, line)
+                return ""
+
+            proof.unlink(missing_ok=True)
+            if queued.exists():
+                said.parent.mkdir(exist_ok=True)
+                with suppress(FileNotFoundError):  # another lead hook may have delivered it
+                    os.replace(queued, said)
+                    return line
+                return ""
+            if not said.exists():
+                said.parent.mkdir(exist_ok=True)
+                session_notes.write_note(said, line)
+                return line
+            return ""
+    finally:
+        if spool is not None:  # a note write can fail after the request has already been queued
+            hooks._log_notices()
+            hooks.start_processor(spool, hooks.VERIFY)
 
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:

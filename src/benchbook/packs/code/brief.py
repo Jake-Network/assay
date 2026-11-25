@@ -272,22 +272,25 @@ def rerun_reason(status: str, attempts: list[dict[str, Any]]) -> str:
     a failed check, or a pass that decided nothing (a worker's run, not every declared check)."""
     from ...ledger import attempt_summary
 
-    last = attempts[-1] if attempts else {}
-    passed = bool(attempts) and attempt_summary(UUID(int=0), "", last)["passed"]
-    weakened = sorted({f for m in attempts for f in m.get("guard_weakened_files") or [] if isinstance(f, str)})
+    summaries = [attempt_summary(UUID(int=0), "", m) for m in attempts]
+    passed = bool(summaries) and summaries[-1]["passed"]
+    guarded = [a for a in summaries if a["guard_weakened"] is True]
+    weakened = sorted({f for a in guarded for f in a["weakened_files"]})
     fewer = sorted({c for m in attempts for c in m.get("fewer_tests_checks") or [] if isinstance(c, str)})
     why = ([f"tests weakened: {_names(weakened)}"] if weakened else []) + (
         [f"fewer tests in {_names(fewer)}"] if fewer else [])
-    if not why and any(m.get("guard_weakened") is True for m in attempts):
+    if not why and guarded:
         why.append("tests weakened")
-    if any(m.get("checks_changed") is True for m in attempts):
+    if any(a["checks_changed"] is True for a in summaries):
         why.append("[checks] changed")
     if why:
         return f"{'passed, ' if passed else ''}needs review ({'; '.join(why)})"
+    if not summaries:
+        return "no matching check attempt"
     if status == "inconclusive":
         return "runs disagree (inconclusive)"
-    if attempts and not passed:
-        ran = last.get("checks")
+    if not passed:
+        ran = attempts[-1].get("checks")
         failed = [k for k, v in ran.items() if v != "ok"] if isinstance(ran, dict) else []
         return f"failed ({_names(failed)})" if failed else "failed"
     return "passed, not decided (a lead's re-run of every declared check decides)"

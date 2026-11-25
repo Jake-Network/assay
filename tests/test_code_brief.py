@@ -18,7 +18,7 @@ from benchbook.errors import ValidationFailed
 from benchbook.failures import DISCARDED_DOMAIN, discarded_hash
 from benchbook.ids import short
 from benchbook.packs import load_pack
-from benchbook.packs.code.brief import FOOTER
+from benchbook.packs.code.brief import FOOTER, rerun_reason
 from benchbook.tokens import estimate_tokens
 from tests.conftest import make_project
 from tests.writer import token_ledger
@@ -567,6 +567,17 @@ FROM generate_series(1, 10000) AS i""", {"p": code})
             assert "## Last verified commit per piece" in out and "## Reported done, not re-run (" in out
 
 
+@pytest.mark.parametrize("guard", [True, False], ids=["legacy-guard", "explicit-modern-guard"])
+def test_rerun_reason_reads_older_guard_metrics(guard: bool) -> None:
+    metrics = {"checks_total": 1, "checks_passed": 1, "guard_touched": True, "guard_files": ["tests/test_api.py"]}
+    if guard:
+        assert rerun_reason("proposed", [metrics]) == "passed, needs review (tests weakened: tests/test_api.py)"
+    else:
+        metrics["guard_weakened"] = False
+        assert rerun_reason("proposed", [metrics]).startswith("passed, not decided")
+
+
+
 def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, repo: Path) -> None:
     """30 pieces whose re-run decided nothing: the section shows the newest 8 and counts all 30 (pack.toml [brief]),
     and the budget and the 6,000-character limit trim it like any other section."""
@@ -583,7 +594,7 @@ def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, re
     [section] = [s for s in out.split("\n## ") if s.startswith("Re-run, not decided")]
     lines = section.splitlines()
     assert lines[0] == "Re-run, not decided (8 of 30)" and len([x for x in lines if x.startswith("- ")]) == 8
-    assert lines[1].startswith("- piece-") and "passed, not decided" in lines[1]  # order: by time (clock steps here)
+    assert lines[1].startswith("- piece-") and "no matching check attempt" in lines[1]
     for budget, chars in ((300, None), (20000, 1200)):
         small = compile_brief(lg, None, budget, log=False, repo=repo, max_chars=chars)
         assert estimate_tokens(small) <= budget * 105 // 100 and (chars is None or len(small) <= chars)
