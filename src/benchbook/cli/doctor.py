@@ -265,7 +265,7 @@ def hook_health(root: Path) -> HookHealth:
     replay of its spool, and the reports still waiting in that spool (dead/, or queued and not drained). hook.log
     is shared by every database: a line about another database's spool does not count, and a replay of another
     spool settles nothing here."""
-    from ..hooks.subagent import _spool_dir, _state_dir
+    from ..hooks.spooler import _spool_dir, _state_dir
 
     log = _state_dir() / "hook.log"
     spool = _spool_dir()
@@ -338,7 +338,7 @@ def check_harness_input() -> Check | None:
     when no such harness observed anything."""
     from ..hooks.checks import OBSERVED
     from ..hooks.harnesses import CLAUDE_CODE, FIXTURE_VERSIONS
-    from ..hooks.subagent import _spool_dir
+    from ..hooks.spooler import _spool_dir
 
     path = _spool_dir() / OBSERVED
     rows = [r for r in _observed_since(path, time.time() - RECENT_SECONDS)

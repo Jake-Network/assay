@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 import benchbook
-from benchbook.hooks import subagent as hooks
+from benchbook.hooks import spooler
 
 BIN = str(Path(sys.executable).parent)
 
@@ -122,7 +122,7 @@ def test_hook_failures_and_dead_reports(env: dict[str, Any], monkeypatch: pytest
     for k in ("XDG_STATE_HOME", "BENCHBOOK_DATABASE_URL"):
         monkeypatch.setenv(k, env["env"][k])
     monkeypatch.delenv("BENCHBOOK_DATA_DIR", raising=False)
-    state = hooks._state_dir()
+    state = spooler._state_dir()
     state.mkdir(parents=True)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     other = env["repo"].parent / "elsewhere"
@@ -137,7 +137,7 @@ def test_hook_failures_and_dead_reports(env: dict[str, Any], monkeypatch: pytest
     with (state / "hook.log").open("a") as f:
         f.write(f"{now} replay: processed 1 (captured 1, cited 0, skipped 0); dead 0; still queued 0\n")
     assert doctor(env)[0] == 0
-    dead = hooks._spool_dir() / "dead"
+    dead = spooler._spool_dir() / "dead"
     dead.mkdir(parents=True)
     (dead / "a.json").write_text("{}")
     code, out, _ = doctor(env)
@@ -237,12 +237,12 @@ def test_hook_failures_are_read_per_database(env: dict[str, Any], tmp_path: Path
     monkeypatch.setenv("XDG_STATE_HOME", env["env"]["XDG_STATE_HOME"])
     monkeypatch.delenv("BENCHBOOK_DATA_DIR", raising=False)
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", env["env"]["BENCHBOOK_DATABASE_URL"])
-    spool_a = hooks._spool_dir()
+    spool_a = spooler._spool_dir()
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://u@127.0.0.1:1/b")
-    spool_b = hooks._spool_dir()
+    spool_b = spooler._spool_dir()
     spool_b.mkdir(parents=True)
-    hooks.replay_now(spool_b)  # clean: nothing queued in B
-    log = hooks._state_dir() / "hook.log"
+    spooler.replay_now(spool_b)  # clean: nothing queued in B
+    log = spooler._state_dir() / "hook.log"
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     text = log.read_text()
     log.write_text(f"{now} hook processing failed for {spool_a}/r.json (queued to retry): Traceback\n" + text)
@@ -252,7 +252,7 @@ def test_hook_failures_are_read_per_database(env: dict[str, Any], tmp_path: Path
     # a failure in B's spool does not count for A, and a clean replay of A settles A's
     spool_a.mkdir(parents=True)
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", env["env"]["BENCHBOOK_DATABASE_URL"])
-    hooks.replay_now(spool_a)
+    spooler.replay_now(spool_a)
     with log.open("a") as f:
         f.write(f"{now} hook entry x.json moved to {spool_b}/dead: BenchbookError: unknown project\n")
     assert doctor(env)[0] == 0

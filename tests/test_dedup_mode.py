@@ -19,7 +19,7 @@ from benchbook.core import ledger as ledger_module
 from benchbook.db import conn as dbconn
 from benchbook.db import migrate as dbmigrate
 from benchbook.errors import BenchbookError
-from benchbook.hooks import subagent as hooks
+from benchbook.hooks import citations
 from benchbook.mcp_server import build
 from tests.conftest import make_project
 from tests.test_mcp import call
@@ -284,21 +284,21 @@ def test_notice_reaches_cli_json_output(db_url: str, notify_project: str, tmp_pa
     assert again["ok"] is True and again["id"].startswith("e:") and again["id"] != first["id"]
     assert again["duplicate_of"] == first["id"] and first["id"] in again["notice"]
     # the capture hook reads this response as a new record written by this agent
-    assert hooks._receipt(out.strip(), "e", False) == again["id"]
+    assert citations._receipt(out.strip(), "e", False) == again["id"]
 
     monkeypatch.setitem(cli.STATE, "json", False)
     code, out, err = _cli(capsys, "--agent", "verifier", *record)
     assert code == 0 and first["id"] in err and err.startswith("notice: ")
-    third = hooks._receipt(out.strip(), "e", False)  # stdout keeps the one-line receipt shape
+    third = citations._receipt(out.strip(), "e", False)  # stdout keeps the one-line receipt shape
     assert third is not None and third not in (first["id"], again["id"])
 
 
 def test_hook_receipt_tells_a_recorded_repeat_from_a_refusal() -> None:
     new, old = "e:aaaaaaaa", "e:bbbbbbbb"
-    assert hooks._receipt(json.dumps({"id": new, "duplicate_of": old, "notice": "x"}), "e", True) == new
-    assert hooks._receipt(json.dumps({"id": None, "duplicate_of": old}), "e", True) is None  # refused
-    assert hooks._receipt(json.dumps({"ok": False, "duplicate_of": old}), "e", False) is None  # refused (CLI)
-    assert hooks._receipt(json.dumps({"id": "c:aaaaaaaa", "duplicate_of": "c:aaaaaaaa"}), "c", True) is None
+    assert citations._receipt(json.dumps({"id": new, "duplicate_of": old, "notice": "x"}), "e", True) == new
+    assert citations._receipt(json.dumps({"id": None, "duplicate_of": old}), "e", True) is None  # refused
+    assert citations._receipt(json.dumps({"ok": False, "duplicate_of": old}), "e", False) is None  # refused (CLI)
+    assert citations._receipt(json.dumps({"id": "c:aaaaaaaa", "duplicate_of": "c:aaaaaaaa"}), "c", True) is None
 
 
 # migration ----------------------------------------------------------------------------------------

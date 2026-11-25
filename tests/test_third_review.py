@@ -23,7 +23,7 @@ from benchbook.checks import verify as checks
 from benchbook.code import pieces
 from benchbook.core import identity
 from benchbook.errors import BenchbookError, LeaseLost
-from benchbook.hooks import subagent as hooks
+from benchbook.hooks import spooler
 from benchbook.hooks.checks import match
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok
 from tests.test_second_review import JUNIT_CONFIG, PY, TWO_CHECKS, _capture_entry
@@ -142,23 +142,23 @@ def test_replay_with_a_rotated_token_adopts_the_same_agents_entries(db_url: str,
     monkeypatch.delenv("BENCHBOOK_AGENT", raising=False)
 
     monkeypatch.setenv("BENCHBOOK_TOKEN", old)
-    spool_old = hooks._spool_dir()
+    spool_old = spooler._spool_dir()
     spool_old.mkdir(parents=True)
-    hooks._write_spool(spool_old, _capture_entry(project, "first report, recorded under the old token"))
-    assert hooks.replay_now(spool_old).captured == 1  # the processor notes whose token this is
-    assert json.loads((spool_old / hooks.WRITER_INFO).read_text())["agents"] == {project: "agent-a"}
-    hooks._write_spool(spool_old, _capture_entry(project, "second report, queued while the ledger was down"))
+    spooler._write_spool(spool_old, _capture_entry(project, "first report, recorded under the old token"))
+    assert spooler.replay_now(spool_old).captured == 1  # the processor notes whose token this is
+    assert json.loads((spool_old / spooler.WRITER_INFO).read_text())["agents"] == {project: "agent-a"}
+    spooler._write_spool(spool_old, _capture_entry(project, "second report, queued while the ledger was down"))
 
     new = identity.add_agent(project, "agent-a", rotate=True, database_url=db_url).token
     monkeypatch.setenv("BENCHBOOK_TOKEN", btok)  # another agent adopts nothing
-    spool_b = hooks._spool_dir()
+    spool_b = spooler._spool_dir()
     spool_b.mkdir(parents=True)
-    assert hooks.replay_now(spool_b).adopted == 0 and len(list(spool_old.glob("*.json"))) == 1
+    assert spooler.replay_now(spool_b).adopted == 0 and len(list(spool_old.glob("*.json"))) == 1
 
     monkeypatch.setenv("BENCHBOOK_TOKEN", new)
-    spool_new = hooks._spool_dir()
+    spool_new = spooler._spool_dir()
     spool_new.mkdir(parents=True)
-    summary = hooks.replay_now(spool_new)
+    summary = spooler.replay_now(spool_new)
     assert (summary.adopted, summary.captured, summary.queued) == (1, 1, 0)
     assert not list(spool_old.glob("*.json"))
     rows = owner_rows(db_url, "SELECT author FROM benchbook.claims WHERE project_id = %s", (project,))
@@ -172,17 +172,17 @@ def test_entries_no_processor_confirmed_stay_where_they_are(db_url: str, tmp_pat
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", as_writer(db_url))
     monkeypatch.setenv("BENCHBOOK_TOKEN", old)
-    spool_old = hooks._spool_dir()
+    spool_old = spooler._spool_dir()
     spool_old.mkdir(parents=True)
-    hooks._write_spool(spool_old, _capture_entry(project, "queued, never processed"))
+    spooler._write_spool(spool_old, _capture_entry(project, "queued, never processed"))
     # someone else's note on the target but naming no agent in this project
-    (spool_old / hooks.WRITER_INFO).write_text(json.dumps({"target": hooks._target_key(),
-                                                           "writer": hooks.writer_identity(), "agents": {}}))
+    (spool_old / spooler.WRITER_INFO).write_text(json.dumps({"target": spooler._target_key(),
+                                                           "writer": spooler.writer_identity(), "agents": {}}))
     new = identity.add_agent(project, "agent-a", rotate=True, database_url=db_url).token
     monkeypatch.setenv("BENCHBOOK_TOKEN", new)
-    spool_new = hooks._spool_dir()
+    spool_new = spooler._spool_dir()
     spool_new.mkdir(parents=True)
-    summary = hooks.replay_now(spool_new)
+    summary = spooler.replay_now(spool_new)
     assert summary.adopted == 0 and len(list(spool_old.glob("*.json"))) == 1
     assert summary.held == 1 and not summary.ok
     assert any("no processor ever confirmed" in e for e in summary.errors)

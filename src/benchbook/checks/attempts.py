@@ -135,7 +135,7 @@ def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: U
     # Without a name the attempt is the harness's (the hook's), or under BENCHBOOK_TOKEN the token's agent.
     lg = Ledger.open(project=project, agent=agent or default_agent("hook"), role=None if agent else "harness")
     if lg.token is not None:
-        from ..hooks.subagent import remember_writer
+        from ..hooks.spooler import remember_writer
 
         remember_writer(lg.project_id, lg.agent)
     if "completion" not in lg.pack.claim_kinds:

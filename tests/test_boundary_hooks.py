@@ -550,23 +550,23 @@ def test_a_background_agent_report_is_re_run_from_subagent_stop(code: str, env: 
                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     """Claude Code 2.1.330 launches every Agent call in the background (T08): the report comes with SubagentStop,
     which gives the lead no context. The queued line and the result wait as notes for the next hook that does."""
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import spooler
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
     sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
-    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    monkeypatch.setattr(spooler, "start_processor", lambda *args: None)
     compaction = fixture("subagent_stop_compaction.json", repo)
     compaction["last_assistant_message"] = f"<summary>piece: media-upload\nDONE {sha}</summary>"
     assert not run("agent-result", compaction, capsys, monkeypatch)
-    assert not list(hooks._spool_dir().glob("*.json"))
+    assert not list(spooler._spool_dir().glob("*.json"))
     stop = fixture("subagent_stop_background.json", repo)
     stop["last_assistant_message"] = f"Implemented.\nDONE {sha[:9]}"
     for _ in range(2):
         assert not run("agent-result", stop, capsys, monkeypatch)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     [request] = [json.loads(p.read_text()) for p in spool.glob("*.json")][:1]
     assert request["event"] == "verify-request" and request["data"]["agent_type"] == "general-purpose"
-    assert hooks.replay_now(spool).recorded == 2
+    assert spooler.replay_now(spool).recorded == 2
     notification = fixture("user_prompt_submit_task_notification.json", repo)
     notification["session_id"] = stop["session_id"]
     given = context(run("notes", notification, capsys, monkeypatch), "UserPromptSubmit")
@@ -585,7 +585,7 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
                                                 capsys: pytest.CaptureFixture[str],
                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     from benchbook.hooks import checks as check_hooks
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import spooler
 
     cfg = CONFIG.replace('project = "ignored"', f'project = "{code}"')
     if case == "environment":
@@ -598,14 +598,14 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
     data = fixture("post_tool_use_agent.json", repo)
     data["tool_response"]["content"][0]["text"] = f"private report text\npiece: media-upload\nDONE {sha[:9]}"
     assert not run("agent-result", fixture("post_tool_use_agent_async.json", repo), capsys, monkeypatch)
-    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    monkeypatch.setattr(spooler, "start_processor", lambda *args: None)
     out = run("agent-result", data, capsys, monkeypatch)
     assert "re-running the checks of media-upload" in context(out, "PostToolUse")
     assert not run("agent-result", data, capsys, monkeypatch)  # the line once; the request again (a new report)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     assert len(list(spool.glob("*.json"))) == 2
     assert all("private report text" not in path.read_text() for path in spool.glob("*.json"))
-    assert hooks.replay_now(spool).recorded == 2
+    assert spooler.replay_now(spool).recorded == 2
     lg = agent(db_url, code, "lead")
     [attempt] = lg.sql_internal("SELECT id FROM benchbook.experiments WHERE project_id=%s AND code_ref=%s",
                                 (code, sha))
@@ -635,11 +635,11 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
     """The boundary pilot (2.1.331): one report came as SubagentStop and as PostToolUse:Agent, and the lead got
     "re-running the checks" twice. Either order gives the line once; SubagentStop first queues the re-run once."""
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import spooler
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
     sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
-    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    monkeypatch.setattr(spooler, "start_processor", lambda *args: None)
     post = fixture("post_tool_use_agent.json", repo)
     post["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
     stop = fixture("subagent_stop_background.json", repo)
@@ -655,9 +655,9 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
         given.append(context(out, "UserPromptSubmit"))
     line = f"benchbook: re-running the checks of media-upload at {sha[:7]} in the background"
     assert "\n".join(given).count(line) == 1, given
-    requests = list(hooks._spool_dir().glob("*.json"))
+    requests = list(spooler._spool_dir().glob("*.json"))
     assert len(requests) == (1 if stop_first else 2)  # PostToolUse first cannot tell SubagentStop's report is its own
-    assert hooks.replay_now(hooks._spool_dir()).recorded == len(requests)
+    assert spooler.replay_now(spooler._spool_dir()).recorded == len(requests)
     if stop_first:  # the lead merges before reading the verdict: the merge gate hands it over
         from benchbook.hooks import merge_gate
 
@@ -677,8 +677,7 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
 def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                               failed_note: bool) -> None:
     from benchbook.checks.verify_requests import enqueue
-    from benchbook.hooks import session_notes
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import session_notes, spooler
 
     monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -690,14 +689,14 @@ def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, mo
     stop = fixture("subagent_stop_background.json", repo)
     stop["session_id"] = post["session_id"]
     stop["last_assistant_message"] = report
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     launches: list[tuple[Path, str]] = []
-    monkeypatch.setattr(hooks, "start_processor", lambda path, lane: launches.append((path, lane)))
+    monkeypatch.setattr(spooler, "start_processor", lambda path, lane: launches.append((path, lane)))
 
     def fail(*args: Any) -> None:
         raise OSError("injected write failure")
 
-    target, method = (session_notes, "write_note") if failed_note else (hooks, "_write_spool")
+    target, method = (session_notes, "write_note") if failed_note else (spooler, "_write_spool")
     with monkeypatch.context() as patch:
         patch.setattr(target, method, fail)
         with pytest.raises(OSError, match="injected write failure"):
@@ -705,22 +704,21 @@ def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, mo
 
     assert session_notes.deliver(post["session_id"]) == ""
     assert len(list(spool.glob("*.json"))) == int(failed_note)
-    assert launches == ([(spool, hooks.VERIFY)] if failed_note else [])
+    assert launches == ([(spool, spooler.VERIFY)] if failed_note else [])
     assert f"re-running the checks of media-upload at {sha[:7]}" in enqueue(post)
     assert len(list(spool.glob("*.json"))) == int(failed_note) + 1
-    assert launches[-1] == (spool, hooks.VERIFY)
+    assert launches[-1] == (spool, spooler.VERIFY)
 
 
 @pytest.mark.parametrize("change", ["text", "reporter"])
 def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
     from benchbook.checks.verify_requests import enqueue
-    from benchbook.hooks import session_notes
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import session_notes, spooler
 
     monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    monkeypatch.setattr(spooler, "start_processor", lambda *args: None)
     repo = make_repo(tmp_path / "repo")
     sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
     first = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
@@ -740,7 +738,7 @@ def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
     assert f"re-running the checks of media-upload at {sha[:7]}" in enqueue(different)
     assert not enqueue(same)  # its SubagentStop already queued it even though the notice is delivered
     assert not session_notes.deliver(same["session_id"])
-    assert len(list(hooks._spool_dir().glob("*.json"))) == 2
+    assert len(list(spooler._spool_dir().glob("*.json"))) == 2
 
 
 # ------------------------------------------------------------------------------------------- who decides a re-run
@@ -749,14 +747,13 @@ def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
 def _report_and_replay(repo: Path, sha: str, capsys: pytest.CaptureFixture[str],
                        monkeypatch: pytest.MonkeyPatch) -> str:
     """An implementer's foreground report of sha, its re-run in the spool processor, and the line it leaves."""
-    from benchbook.hooks import session_notes
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import session_notes, spooler
 
     data = fixture("post_tool_use_agent.json", repo)
     data["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
-    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    monkeypatch.setattr(spooler, "start_processor", lambda *args: None)
     run("agent-result", data, capsys, monkeypatch)
-    assert hooks.replay_now(hooks._spool_dir()).recorded == 1
+    assert spooler.replay_now(spooler._spool_dir()).recorded == 1
     return session_notes.deliver(data["session_id"])
 
 

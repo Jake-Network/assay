@@ -282,7 +282,8 @@ def _read_input() -> dict[str, Any]:
 
 
 def _log(msg: str) -> None:
-    from .subagent import _log_notices, log
+    from .spooler import log
+    from .subagent import _log_notices
 
     log(msg)
     _log_notices()
@@ -346,7 +347,7 @@ def bash_result(harness: str = "claude-code") -> int:
 
 def _record(call: ShellCall, found: Match) -> None:
     from ..checks.run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
-    from .subagent import _spool_dir
+    from .spooler import _spool_dir
 
     project = found.project
     res = call.outcome()
@@ -403,7 +404,7 @@ def _base_branches(cfg: config.LocalConfig) -> set[str]:
 def _queued_passes(project: str, piece: str, sha: str, junit_checks: set[str]) -> set[str]:
     """Checks with a passing clean run still waiting in the spool (check run returns before its processor has
     written the attempt)."""
-    from .subagent import ATTEMPT_EVENTS, _spool_dir
+    from .spooler import ATTEMPT_EVENTS, _spool_dir
 
     out: set[str] = set()
     for p in _spool_dir().glob("*.json"):

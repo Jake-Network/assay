@@ -15,7 +15,7 @@ import pytest
 
 from benchbook import Ledger, config
 from benchbook.checks import run as check_run
-from benchbook.hooks import subagent as hooks
+from benchbook.hooks import spooler
 from tests.conftest import make_project
 
 PY = shlex.quote(sys.executable)
@@ -243,7 +243,7 @@ def test_a_failed_database_write_keeps_the_exit_code_and_the_result(repo: Path, 
     # what `benchbook hook replay` does once the database is back (the entry keeps its project)
     copy = tmp_path / "entry.json"
     copy.write_text(path.read_text())
-    assert hooks.process_file(copy).startswith("ok:recorded:e:")
+    assert spooler.process_file(copy).startswith("ok:recorded:e:")
     [exp] = attempts(lg)
     assert exp["metrics"]["checks"] == {"fails": "fail"} and exp["config"]["piece"] == "media"
 

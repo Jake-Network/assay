@@ -161,7 +161,7 @@ def parse_status(out: str) -> GitState:
 
 def spool_attempt(event: str, project: str, data: dict[str, Any]) -> Path:
     """Queue one attempt for the ledger and make sure a processor drains the spool. Returns the spool directory."""
-    from ..hooks.subagent import _spool_dir, _write_spool, start_processor
+    from ..hooks.spooler import _spool_dir, _write_spool, start_processor
 
     spool = _spool_dir()
     spool.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

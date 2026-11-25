@@ -13,7 +13,7 @@ from uuid import UUID
 from .. import config
 from ..code.pr import TRAILER
 from ..hooks import boundary as boundary_hooks
-from ..hooks import merge_gate, session_notes
+from ..hooks import citations, merge_gate, session_notes, spooler
 from ..hooks import subagent as hooks
 from .run import PIECE
 
@@ -75,7 +75,7 @@ def enqueue(data: dict[str, Any]) -> str:
             isinstance(response, dict) and response.get("status") == "async_launched"):
         return ""
     session = data.get("session_id", "")
-    report = hooks.extract_text(data)
+    report = citations.extract_text(data)
     if reported_ref(report) is None or session_notes.notes_dir(session) is None:
         return ""
     where = boundary_hooks.where(data)
@@ -98,16 +98,16 @@ def enqueue(data: dict[str, Any]) -> str:
     # report for this writer. Another report of the same commit may need a fresh run after an environment failure.
     report_hash = hashlib.sha256(report.encode()).hexdigest()
     try:
-        with hooks._lock(notes, blocking=True):
-            target_spool = hooks._spool_dir()
+        with spooler._lock(notes, blocking=True):
+            target_spool = spooler._spool_dir()
             proof_key = hashlib.sha256(json.dumps([name, target_spool.name, reporter, report.strip()]).encode())
             proof = notes / f"queued-{proof_key.hexdigest()}.request"
             if stop or not proof.is_file() or not target_spool.is_dir():
                 target_spool.mkdir(parents=True, exist_ok=True, mode=0o700)
                 request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
                            "repo": str(where.repo), "report_sha256": report_hash}
-                hooks._write_spool(target_spool, {"event": "verify-request", "project": where.project, "accepted": True,
-                                                 "data": request})
+                spooler._write_spool(target_spool, {"event": "verify-request", "project": where.project,
+                                                    "accepted": True, "data": request})
                 spool = target_spool
                 # A report-specific environment verdict belongs to this accepted request only.
                 report_key = hashlib.sha256(json.dumps([key, session, reporter, report_hash]).encode()).hexdigest()
@@ -136,7 +136,7 @@ def enqueue(data: dict[str, Any]) -> str:
     finally:
         if spool is not None:  # a note write can fail after the request has already been queued
             hooks._log_notices()
-            hooks.start_processor(spool, hooks.VERIFY)
+            spooler.start_processor(spool, spooler.VERIFY)
 
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
@@ -197,7 +197,7 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     # Authenticate even for a cached result: a token may have been revoked since it queued this request.
     lg = Ledger.open(project=project, agent=config.default_agent(checks.default_rerunner()), role="orchestrator")
     if lg.token is not None:
-        hooks.remember_writer(project, lg.agent)
+        spooler.remember_writer(project, lg.agent)
     if lg.pack.name != "code":
         return "skipped:requires code pack"
     key = hashlib.sha256(json.dumps([project, piece, commit]).encode()).hexdigest()
@@ -232,10 +232,10 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
         if run.environment is not None:
             note_key = report_key
             result = transient
-        hooks._write_info(result, {"line": line})
+        spooler._write_info(result, {"line": line})
     notes.mkdir(parents=True, exist_ok=True, mode=0o700)
     name = f"verify-{note_key}.txt"
-    with hooks._lock(notes, blocking=True):
+    with spooler._lock(notes, blocking=True):
         if not (notes / name).exists() and not (notes / session_notes.DELIVERED / name).exists():
             session_notes.write_note(notes / name, line)
     return "recorded:verification"

@@ -28,6 +28,7 @@ from benchbook.cli import doctor
 from benchbook.core import ledger as ledger_mod
 from benchbook.core.blobs import LEGACY_BLOB_PREFIX, artifact_blob, blob_digest, is_blob_uri
 from benchbook.db import conn as dbconn
+from benchbook.hooks import citations, spooler
 from benchbook.hooks import subagent as hooks
 from benchbook.integrations.autoresearch import ops
 from benchbook.integrations.autoresearch.checkout import Checkout
@@ -269,11 +270,11 @@ def test_data_dir_follows_xdg_data_home_for_both_names(home: Path, tmp_path: Pat
 
 def test_state_dir_keeps_the_pre_rename_folder(home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     new, old = home / ".local" / "state" / "benchbook", home / ".local" / "state" / "assay"
-    assert config.state_dir() == new == hooks._state_dir() == dbconn.state_dir()
+    assert config.state_dir() == new == spooler._state_dir() == dbconn.state_dir()
     assert doctor._legacy_state_dir() is None
     (old / "spool").mkdir(parents=True)
-    assert config.state_dir() == old == hooks._state_dir() and not new.exists()
-    hooks.log("a line after the upgrade")
+    assert config.state_dir() == old == spooler._state_dir() and not new.exists()
+    spooler.log("a line after the upgrade")
     assert "a line after the upgrade" in (old / "hook.log").read_text() and not new.exists()
     note = doctor._legacy_state_dir()
     assert note is not None and note.ok and f"mv {old} {new}" in note.detail
@@ -477,9 +478,9 @@ def transcript(path: Path, block: dict[str, Any], result: str) -> Path:
 def test_citations_in_pre_rename_transcripts_still_count(tmp_path: Path, worker: Ledger) -> None:
     """A worker that recorded its result through the old tool or command names cited its own record: no auto-captured
     note on top of it."""
-    assert hooks._write_tool({"name": "mcp__plugin_assay_assay__assay_propose_claim",
+    assert citations._write_tool({"name": "mcp__plugin_assay_assay__assay_propose_claim",
                               "input": {"agent": "w"}}) == ("c", "w", True)
-    assert hooks._write_tool({"name": "Bash", "input": {
+    assert citations._write_tool({"name": "Bash", "input": {
         "command": "ASSAY_AGENT=w uv run python -m assay claim add note 'x'"}}) == ("c", "w", False)
     config.write_config(tmp_path, worker.project_id)
     for n, block in enumerate((
@@ -505,8 +506,8 @@ def test_reports_queued_before_the_upgrade_are_replayed(tmp_path: Path, db_url: 
     (spool / "queued.json").write_text(json.dumps({
         "event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
         "data": worker_stop(tmp_path, "Queued before the upgrade.", agent_type="assay:assay-worker")}))
-    assert hooks._spool_dir() == spool
-    summary = hooks.replay_now(hooks._spool_dir())
+    assert spooler._spool_dir() == spool
+    summary = spooler.replay_now(spooler._spool_dir())
     assert (summary.captured, summary.dead, summary.queued) == (1, 0, 0) and not list(spool.glob("*.json"))
     assert captured(worker) == ["Queued before the upgrade."]
     assert not (tmp_path / "state" / "benchbook").exists()

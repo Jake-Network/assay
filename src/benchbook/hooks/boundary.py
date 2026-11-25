@@ -50,7 +50,7 @@ abandoned = False
 
 
 def _log(msg: str) -> None:
-    from .subagent import log
+    from .spooler import log
 
     log(msg)
 

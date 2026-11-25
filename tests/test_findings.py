@@ -23,8 +23,10 @@ from benchbook.code.findings import FINDING_DOMAIN, finding_hash, parse
 from benchbook.config import write_config
 from benchbook.core.brief import compile_brief
 from benchbook.errors import BenchbookError
+from benchbook.hooks import spooler
 from benchbook.hooks import subagent as hooks
-from benchbook.hooks.subagent import extract_text, process
+from benchbook.hooks.citations import extract_text
+from benchbook.hooks.subagent import process
 
 from .conftest import make_project
 from .writer import as_writer, issue
@@ -303,15 +305,15 @@ def test_the_handback_carries_the_findings_once(tmp_path: Path, code_project: st
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, code_project, "Out of scope")
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     back = _event("handback.json", repo)
     stop = {**_event("subagent_stop_en.json", repo), "session_id": back["session_id"], "agent_id": back["agent_id"]}
     for data in (stop, back):  # the closing SubagentStop is queued first and must not add its own section
-        hooks._write_spool(spool, {"event": "subagent-stop", "project": code_project, "data": data,
+        spooler._write_spool(spool, {"event": "subagent-stop", "project": code_project, "data": data,
                                    "accepted": True, "out_of_scope_heading": "Out of scope"})
         time.sleep(0.05)
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert (s.captured, s.skipped, s.ok) == (1, 1, True)
     [row] = _findings(lead)
     assert row["tags"] == ["out-of-scope", "file:src/app/modules/export/csv.py"]
@@ -325,17 +327,17 @@ def test_the_heading_is_kept_with_the_queued_report(ko_repo: Path, code_project:
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_event("subagent_stop_ko.json", ko_repo))))
     hooks.main("subagent-stop")
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     [entry] = spool.glob("*.json")
     assert json.loads(entry.read_text(encoding="utf-8"))["out_of_scope_heading"] == "범위 밖"
     _repo(ko_repo, code_project, None)  # the heading is removed before the replay: the run's setting still holds
-    assert hooks.replay_now(spool).captured == 1
+    assert spooler.replay_now(spool).captured == 1
     assert len(_findings(lead)) == 3
     # a report queued without the heading (an earlier build, or the heading unset) records no finding
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": code_project, "accepted": True,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": code_project, "accepted": True,
                                "data": _event("subagent_stop_repeat.json", ko_repo)})
-    assert hooks.replay_now(spool).captured == 1 and len(_findings(lead)) == 3
-    assert "out-of-scope findings: 3 (3 new)" in (hooks._state_dir() / "hook.log").read_text(encoding="utf-8")
+    assert spooler.replay_now(spool).captured == 1 and len(_findings(lead)) == 3
+    assert "out-of-scope findings: 3 (3 new)" in (spooler._state_dir() / "hook.log").read_text(encoding="utf-8")
 
 
 def test_under_a_token_the_hook_writes_as_its_agent(ko_repo: Path, code_project: str, lead: Ledger, db_url: str,

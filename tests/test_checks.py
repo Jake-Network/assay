@@ -823,8 +823,7 @@ def test_guard_compares_junit_counts_in_the_current_environment(
 def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
         tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
     from benchbook.checks import verify_requests
-    from benchbook.hooks import session_notes
-    from benchbook.hooks import subagent as hooks
+    from benchbook.hooks import session_notes, spooler
 
     flag = tmp_path / "service-up"
     prepare = json.dumps(f"test -f {shlex.quote(str(flag))}")
@@ -845,7 +844,7 @@ def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
     assert session_notes.deliver("session") == ""
     receipt = uuid.uuid4()
     report = {**data, "report_sha256": "b" * 64}
-    write_info = hooks._write_info
+    write_info = spooler._write_info
 
     with monkeypatch.context() as fault:
         def fail_result(path: Path, *args: Any, **kwargs: Any) -> None:
@@ -853,7 +852,7 @@ def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
                 raise OSError("cannot write result")
             write_info(path, *args, **kwargs)
 
-        fault.setattr(hooks, "_write_info", fail_result)
+        fault.setattr(spooler, "_write_info", fail_result)
         with pytest.raises(OSError, match="cannot write result"):
             verify_requests.process(report, project, receipt, spool)
     flag.unlink()

@@ -1,11 +1,11 @@
 """`python -m benchbook.hooks SPOOL [LANE]`: the spool processor a hook starts in the background
-(subagent.start_processor). A directory drains that lane of the spool; a file is processed on its own."""
+(spooler.start_processor). A directory drains that lane of the spool; a file is processed on its own."""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-from .subagent import LANES, RECORDS, process_file, replay
+from .spooler import LANES, RECORDS, process_file, replay
 
 path = Path(sys.argv[1])
 if path.is_dir():
