@@ -26,10 +26,10 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from .core.dedup import normalize_statement
+from ..core.dedup import normalize_statement
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
+    from ..core.ledger import Ledger
 
 # Tags (docs/code.md "Out-of-scope findings"): the brief and the PR summary select findings by these.
 FINDING_TAG = "out-of-scope"
@@ -300,7 +300,7 @@ def record_noted(lg: Ledger, text: str, files: list[str], piece: str | None = No
     """A finding the lead (or any agent) writes down itself: `benchbook finding add`. Recorded as a one-item report
     under NOTED_HEADING, so it has the same key, tags and dedup as one a worker's report named, with the note as its
     source."""
-    from .errors import ValidationFailed
+    from ..errors import ValidationFailed
 
     sentence = " ".join(text.split())
     if not sentence or normalize_finding(sentence) in NOTHING:

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 if TYPE_CHECKING:
-    from .pieces import Started
+    from .code.pieces import Started
 
 piece_app = typer.Typer(no_args_is_help=True, help="Pieces of coding work and the paths they occupy.")
 SHOWN = 20
@@ -32,7 +32,7 @@ def start(
     """Occupy PATHS for PIECE. Refused (exit 2) when a live piece holds the same piece or paths that overlap; run it
     again to renew the lease. --check pins the piece's checks before anyone works on it."""
     from .cli import csv, emit, ledger
-    from .pieces import start as run_start
+    from .code.pieces import start as run_start
 
     lg = ledger()
     specs = None
@@ -67,7 +67,7 @@ def done(
     """Release PIECE's paths: its holder marks it done (or failed); a lead releasing another agent's piece cancels
     it."""
     from .cli import emit, ledger
-    from .pieces import done as run_done
+    from .code.pieces import done as run_done
 
     t = run_done(ledger(), piece, failed, summary_text)
     emit({"ok": True, "piece": piece, "task": t.short_id, "status": t.status},
@@ -81,7 +81,7 @@ def list_(
 ) -> None:
     """Live pieces: who holds which paths, and for how long."""
     from .cli import csv, emit, ledger
-    from .pieces import held
+    from .code.pieces import held
 
     rows = held(ledger(read_only=True), csv(tags))
     lines: list[str] = []

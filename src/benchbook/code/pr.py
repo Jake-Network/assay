@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .errors import BenchbookError, InvalidTransition
+from ..errors import BenchbookError, InvalidTransition
 from .findings import FINDING_TAG
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
+    from ..core.ledger import Ledger
 
 TRAILER = "Benchbook-Piece"
 MARKER = "<!-- benchbook-summary -->"  # first line of the comment; how a later run finds it
@@ -63,7 +63,7 @@ def pieces(repo: Path, base: str, head: str) -> tuple[list[Piece], list[str]]:
     """The pieces the commits in base..head complete, oldest first, and the trailer values skipped as unusable. A
     piece's commit is the last commit of the range carrying its trailer (`git log --topo-order` lists no commit
     before its descendants, so the first one met is the last)."""
-    from .checks.verify import PIECE, resolve_commit, toplevel
+    from ..checks.verify import PIECE, resolve_commit, toplevel
 
     root = toplevel(repo)
     b, h = resolve_commit(root, base), resolve_commit(root, head)
@@ -131,7 +131,7 @@ def _claim_params(lg: Ledger, p: Piece) -> tuple[Any, ...]:
 
 
 def _reporter(row: dict[str, Any]) -> str:
-    from .core.ledger import reporter_of
+    from ..core.ledger import reporter_of
 
     return reporter_of(str(row["author"]), row["author_role"], (row["payload"] or {}).get("reported_by"))
 
@@ -141,7 +141,7 @@ def describe(lg: Ledger, found: Sequence[Piece]) -> list[PieceState]:
 
 
 def _describe(lg: Ledger, p: Piece) -> PieceState:
-    from .core.ledger import attempt_summary
+    from ..core.ledger import attempt_summary
 
     pid, tag = lg.project_id, f"piece:{p.piece}"
     rows = lg.sql_internal(_CLAIM, _claim_params(lg, p))
@@ -218,7 +218,7 @@ def _code(text: str, limit: int = 60) -> str:
 
 
 def _short(kind: str, id: UUID) -> str:
-    from .core.ids import short
+    from ..core.ids import short
 
     return short(kind, id)
 

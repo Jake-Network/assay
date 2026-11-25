@@ -330,7 +330,7 @@ def test_pre_compact_marks_a_piece_not_merged_into_this_branch(db_url: str, code
                                                                monkeypatch: pytest.MonkeyPatch) -> None:
     """PR #4 issue 2: the paragraph keeps the brief's lines, so a piece verified on its own branch and read from the
     base says so instead of "changed since (0 commits)"."""
-    from benchbook import pieces
+    from benchbook.code import pieces
     from tests.test_code_brief import _verify
 
     repo = code_repo(env / "repo", code)

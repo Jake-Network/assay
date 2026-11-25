@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from .. import boundary_hooks, config, hooks, merge_gate, session_notes
-from ..pr import TRAILER
+from ..code.pr import TRAILER
 from .run import PIECE
 
 if TYPE_CHECKING:

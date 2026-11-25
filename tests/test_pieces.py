@@ -19,7 +19,8 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import Ledger, pieces
+from benchbook import Ledger
+from benchbook.code import pieces
 from benchbook.errors import BenchbookError, Conflict, PermissionDenied, ValidationFailed
 from benchbook.packs import load_pack
 from tests.conftest import make_project

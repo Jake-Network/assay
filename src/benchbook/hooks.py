@@ -744,7 +744,7 @@ def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[s
                       source: dict[str, Any]) -> None:
     """The out-of-scope section of the report as finding claims (findings.py). The claims are written by whoever
     the hook writes as (the token's agent under a token); source names the subagent that reported them."""
-    from . import findings
+    from .code import findings
 
     if not findings.parse(text, heading):
         return  # no section, or nothing in it: no transcript read, no writes
@@ -899,7 +899,7 @@ def process_file(path: Path) -> str:
                 os.fsync(f.fileno())
         path.unlink(missing_ok=True)
         if result.startswith(("captured", "recorded")) and isinstance(project := spooled.get("project"), str):
-            from .code_status import refresh_cache
+            from .code.status import refresh_cache
 
             refresh_cache(path.parent.parent if path.parent.name == "dead" else path.parent, project)
     except Exception as e:  # noqa: BLE001

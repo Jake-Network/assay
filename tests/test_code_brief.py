@@ -11,10 +11,11 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, pieces
+from benchbook import Ledger
 from benchbook.checks import verify as checks
 from benchbook.checks.attempts import build
 from benchbook.checks.failures import DISCARDED_DOMAIN, discarded_hash
+from benchbook.code import pieces
 from benchbook.core.brief import compile_brief
 from benchbook.core.ids import short
 from benchbook.core.tokens import estimate_tokens
@@ -607,8 +608,8 @@ def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, re
 def _integration(tmp_path: Path, db_url: str, code: str) -> tuple[Path, Ledger, dict[str, str], str]:
     """The second boundary pilot's shape: pieces pa and pb verified on their branches, merged into the integration
     branch work, then a commit there that changes pa's file only; the brief as --here gives it on work."""
-    from benchbook import findings
     from benchbook.checks import failures
+    from benchbook.code import findings
     from benchbook.packs.code.brief import changed_scope
     from tests.conftest import CONFIG, make_repo, piece
 

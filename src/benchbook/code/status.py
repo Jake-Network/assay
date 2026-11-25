@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
+    from ..core.ledger import Ledger
 
 RECORDING_STOPPED = "benchbook: recording stopped: "
 
@@ -51,7 +51,7 @@ def counts(lg: Ledger) -> dict[str, int]:
 
 
 def status(lg: Ledger, root: Path) -> dict[str, Any]:
-    from .doctor import hook_health
+    from ..doctor import hook_health
 
     current = counts(lg)
     h = hook_health(root)
@@ -73,7 +73,7 @@ def render(s: dict[str, Any]) -> str:
 
 
 def recording_warning(root: Path) -> str:
-    from .doctor import hook_health
+    from ..doctor import hook_health
 
     h = hook_health(root)
     reasons = []
@@ -95,9 +95,9 @@ def _cache_path(spool: Path, project: str) -> Path:
 
 def read_cache(project: str | None = None) -> str:
     """Read the cache for the current project and spool without opening a ledger."""
-    from .config import load
-    from .errors import BenchbookError
-    from .hooks import _spool_dir
+    from ..config import load
+    from ..errors import BenchbookError
+    from ..hooks import _spool_dir
 
     try:
         project = project or load().project
@@ -111,8 +111,8 @@ def read_cache(project: str | None = None) -> str:
 
 def refresh_cache(spool: Path, project: str) -> None:
     """Best-effort after processing. A cache failure never makes a recorded entry retry."""
-    from . import config
-    from .core.ledger import Ledger
+    from .. import config
+    from ..core.ledger import Ledger
 
     try:
         lg = Ledger.open(project=project, agent=config.default_agent("hook"), role="harness")

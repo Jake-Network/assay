@@ -251,7 +251,7 @@ def status() -> None:
     """One-screen project summary."""
     lg = ledger(read_only=True)
     if lg.pack.name == "code":
-        from . import code_status
+        from .code import status as code_status
 
         s = code_status.status(lg, _repo_root())
         return emit(s, code_status.render(s))
@@ -273,7 +273,7 @@ def status() -> None:
 @app.command()
 def statusline() -> None:
     """Print the latest cached code-project counts for a harness status line."""
-    from .code_status import read_cache
+    from .code.status import read_cache
 
     line = read_cache(STATE["project"])
     if STATE["json"]:
@@ -303,7 +303,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
     b = lg.brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
                  tags=scope or None, repo=_repo_root() if here else None)
     if lg.pack.name == "code":
-        from .code_status import recording_warning
+        from .code.status import recording_warning
 
         if warning := recording_warning(_repo_root()):
             b = f"{warning}\n\n{b}"

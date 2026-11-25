@@ -29,10 +29,10 @@ def accept(
     """Accept a finding: link the follow-up issue as a source and decide the claim supported (orchestrator or
     human only)."""
     from .cli import emit, ledger
+    from .code.findings import FINDING_TAG
     from .core.ids import short
     from .core.ledger import ORACLES, TRANSITIONS
     from .errors import BenchbookError, ValidationFailed
-    from .findings import FINDING_TAG
 
     issue = issue.strip()
     why = rationale or f"accepted, follow-up {issue}"
@@ -72,8 +72,8 @@ def add(
     """Record an out-of-scope finding you found yourself (a lead's, or one a worker told you in a message), the same
     way a report's "Out of scope" section is recorded: the brief lists it under open findings."""
     from .cli import emit, ledger
+    from .code.findings import TEXT_MAX, record_noted
     from .errors import ValidationFailed
-    from .findings import TEXT_MAX, record_noted
 
     if not text.strip() or len(text) > TEXT_MAX:
         raise ValidationFailed([f"text: 1-{TEXT_MAX} characters"])

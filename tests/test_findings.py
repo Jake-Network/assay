@@ -17,11 +17,12 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, config, findings, hooks
+from benchbook import Ledger, config, hooks
+from benchbook.code import findings
+from benchbook.code.findings import FINDING_DOMAIN, finding_hash, parse
 from benchbook.config import write_config
 from benchbook.core.brief import compile_brief
 from benchbook.errors import BenchbookError
-from benchbook.findings import FINDING_DOMAIN, finding_hash, parse
 from benchbook.hooks import extract_text, process
 
 from .conftest import make_project
@@ -165,7 +166,7 @@ def test_report_config_imports_nothing_heavy(tmp_path: Path) -> None:
     code = ("import sys; from pathlib import Path; from benchbook import config; c = config.load(Path(sys.argv[1]));"
             "assert c.out_of_scope_heading == '범위 밖';"
             "print(sorted(m for m in sys.modules if m.split('.')[0] in ('psycopg', 'typer', 'jsonschema', 'pydantic')"
-            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.findings'))))")
+            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.code.findings'))))")
     p = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, check=True)
     assert p.stdout.strip() == "[]"
 

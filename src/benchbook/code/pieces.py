@@ -22,13 +22,13 @@ from typing import TYPE_CHECKING, Any
 
 import psycopg
 
-from .checks import globs
-from .core.ids import short
-from .errors import BenchbookError, LeaseLost, ValidationFailed
+from ..checks import globs
+from ..core.ids import short
+from ..errors import BenchbookError, LeaseLost, ValidationFailed
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
-    from .core.models import Task
+    from ..core.ledger import Ledger
+    from ..core.models import Task
 
 PIECE_TAG = "piece"
 # Long enough for one implementer session; a crashed one frees its paths after this. Renew with `piece start`.
@@ -163,7 +163,7 @@ def _recover_paths(previous: dict[str, Any] | None) -> list[str]:
 def done(lg: Ledger, piece: str, failed: bool = False, summary: str = "") -> Task:
     """Release PIECE. Its holder marks it done (or failed); a lead (orchestrator or human) may release another
     agent's piece, which cancels that intent. Raises when there is nothing to release."""
-    from .core.ledger import DECIDERS
+    from ..core.ledger import DECIDERS
 
     piece = check_name(piece)
     with lg._intent_transaction() as conn:

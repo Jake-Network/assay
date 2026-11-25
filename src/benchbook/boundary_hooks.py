@@ -173,7 +173,7 @@ def compile_brief(w: Where) -> str:
     tags: list[str] = []
     warning = ""
     if lg.pack.name == "code":
-        from .code_status import recording_warning
+        from .code.status import recording_warning
         from .packs.code.brief import changed_scope
 
         warning = recording_warning(w.repo or w.local.parent)
@@ -405,7 +405,7 @@ def pre_compact(data: dict[str, Any]) -> str:
         return ""
     if is_empty(brief):
         return ""
-    from .code_status import RECORDING_STOPPED
+    from .code.status import RECORDING_STOPPED
 
     if brief.startswith(RECORDING_STOPPED):
         warning = brief.splitlines()[0]
