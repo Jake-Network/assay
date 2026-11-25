@@ -4,11 +4,11 @@ implementer's own runs reach the ledger without a second command (spec §7, laye
 The check runs through the core runner with tee: its output reaches stdout byte for byte, as `cmd 2>&1` would print
 it, and the exit code is the command's. What the wrapper adds goes to stderr after the output: one receipt line.
 
-Recording never waits for the database. The result is written to the hook spool (hooks._write_spool, one file per
+Recording never waits for the database. The result is written to the hook spool (spooler._write_spool, one file per
 database target) and the spool's detached processor records it, as the result-capture hook does. A database that is
 down or slow therefore cannot delay the command, change its exit code or lose the result: the entry stays queued
 and `benchbook hook replay` records it later. The processor records the attempt in check verify's shape
-(attempts.record_spooled, through checks._record).
+(attempts.record_spooled, through verify._record).
 
 After a failure, and only then, the run is signed (signature.py) and one short, bounded lookup asks the ledger whether
 an earlier attempt of the same piece failed the same way (failures.quick_notice); the answer is one more stderr line,
