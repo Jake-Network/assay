@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- Worker instructions (MCP server instructions, the worker subagents, AGENTS.md) ask for a short final summary with
+  record ids instead of at most 3 sentences; the 1000-character limit on a task summary is unchanged. The Claude Code
+  plugins are 0.2.2 (`benchbook`) and 0.2.1 (`benchbook-mcp`) for it.
 - A report that reaches the hooks as both SubagentStop and PostToolUse:Agent (a foreground agent, Claude Code
   2.1.331) tells the lead "re-running the checks of …" once instead of twice, and when SubagentStop came first the
   re-run is queued once. PostToolUse takes the line SubagentStop left waiting; a line already given is not repeated.
