@@ -25,9 +25,13 @@ PENDING = "pending"
 WAIT = 30.0  # seconds a merge waits for its verdict; the manifest's timeout is above it
 POLL = 0.25
 CONTROL = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&", "\n"}
+# -S and --gpg-sign take optional keys in the same argument, so they never consume the next token.
 VALUE_OPTIONS = {"-m", "-F", "-s", "-X", "--message", "--file", "--strategy", "--strategy-option", "--into-name",
-                 "--cleanup", "--gpg-sign", "-S"}
+                 "--cleanup"}
 STOPPING = {"--abort", "--continue", "--quit", "--skip"}
+_CLEAN_VERDICT = re.compile(
+    r"benchbook: \S+ [0-9a-f]{7}: re-run passed \(\d+ checks, \d+\.\d+s\), tests not weakened, checked: .+"
+)
 
 
 def pending_dir(notes: Path) -> Path:
@@ -35,18 +39,23 @@ def pending_dir(notes: Path) -> Path:
 
 
 def mark(notes: Path, commit: str, piece: str, verdicts: list[str], reporter: str | None = None) -> None:
-    """Record that commit's re-run was requested in this session (merged with an earlier mark: SubagentStop and
-    PostToolUse can each request it), and who reported it (the hold message names it for --reported-by). Called
-    under the notes lock."""
+    """Record the latest report's verdict names; duplicate hook events keep its original wait and hold state.
+
+    Called under the notes lock. A report-specific environment failure belongs only to that report.
+    """
     path = pending_dir(notes) / f"{commit}.json"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         old = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
-    names = list(dict.fromkeys([*(old.get("verdicts") or []), *verdicts]))
-    rec = {"piece": piece, "commit": commit, "verdicts": names, "since": old.get("since") or time.time(),
-           "reporter": reporter or old.get("reporter")}
+    if isinstance(old, dict) and old.get("verdicts") == verdicts:
+        if reporter is None or old.get("reporter") == reporter:
+            return
+        rec = {**old, "reporter": reporter}
+    else:
+        rec = {"piece": piece, "commit": commit, "verdicts": verdicts, "since": time.time(),
+               "reporter": reporter}
     session_notes.write_note(path, json.dumps(rec))
 
 
@@ -126,7 +135,38 @@ def _take(notes: Path, name_list: list[str]) -> None:
 
 
 def clean(line: str) -> bool:
-    return "re-run passed" in line and "tests not weakened" in line and "needs review" not in line
+    return _CLEAN_VERDICT.fullmatch(line) is not None
+
+
+def _wait_for_verdict(
+    notes: Path, path: Path, deadline: float,
+) -> tuple[dict[str, Any], tuple[str, bool] | None] | None:
+    """Read the current report at every poll, consuming its marker under the same lock as a new report."""
+    from .hooks import _lock
+
+    while True:
+        with _lock(notes, blocking=True):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if not isinstance(rec, dict):
+                return None
+            if rec.get("held"):
+                path.unlink(missing_ok=True)
+                return None
+
+            names = [n for n in rec.get("verdicts") or [] if isinstance(n, str) and "/" not in n]
+            if found := _verdict(notes, names):
+                _take(notes, names)
+                path.unlink(missing_ok=True)
+                return rec, found
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                rec["held"] = True
+                session_notes.write_note(path, json.dumps(rec))
+                return rec, None
+        time.sleep(min(POLL, remaining))
 
 
 def decide(data: dict[str, Any], wait: float = WAIT) -> dict[str, Any] | None:
@@ -146,22 +186,11 @@ def decide(data: dict[str, Any], wait: float = WAIT) -> dict[str, Any] | None:
         path = pending_dir(notes) / f"{commit}.json" if commit else None
         if path is None or not path.is_file():
             continue
-        try:
-            rec = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        if (current := _wait_for_verdict(notes, path, deadline)) is None:
             continue
-        if rec.get("held"):  # held once already: the lead merges again on purpose
-            path.unlink(missing_ok=True)
-            continue
-        names = [n for n in rec.get("verdicts") or [] if isinstance(n, str) and "/" not in n]
+        rec, found = current
         piece = str(rec.get("piece") or ref)
-        found = _verdict(notes, names)
-        while found is None and time.monotonic() < deadline:
-            time.sleep(POLL)
-            found = _verdict(notes, names)
         if found is None:
-            rec["held"] = True
-            session_notes.write_note(path, json.dumps(rec))
             since = int(time.time() - float(rec.get("since") or time.time()))
             return _deny(f"benchbook: held this merge once: the re-run of {piece} at {commit[:7] if commit else ref} "
                          f"has not reported ({since} s since its report, {wait:g} s waited here; a failed run is "
@@ -169,8 +198,6 @@ def decide(data: dict[str, Any], wait: float = WAIT) -> dict[str, Any] | None:
                          f"{_verify(piece, commit, rec)} re-runs it and decides. Merging again goes through without "
                          "waiting.")
         line, waiting = found
-        _take(notes, names)
-        path.unlink(missing_ok=True)
         if not clean(line):
             return _deny(f"{line}\nbenchbook: held this merge once: {next_step(line, piece, commit, rec)} Or merge "
                          "again to go ahead anyway.")
@@ -220,7 +247,7 @@ def next_step(line: str, piece: str, commit: str | None, rec: dict[str, Any]) ->
         return (f"the implementer fixes it and reports a new commit. If the failure is not the piece's, invalidate "
                 f"the failed run and re-run it yourself: {_invalidate('<failed run>')}, then "
                 f"{_verify(piece, commit, rec)}. Or {person}.")
-    if "needs review" in line:
+    if "needs review" in line or "attempts disagree" in line:
         return f"{person}."
     return f"re-run it yourself, which decides: {_verify(piece, commit, rec)}; or {person}."
 

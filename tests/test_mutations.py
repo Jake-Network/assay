@@ -144,6 +144,24 @@ def test_mutation_of_imports(tmp_path: Path, vtmp: Path, lead: Ledger, files: di
         assert v.integrity.guard_weakened_files
 
 
+@pytest.mark.parametrize("updated", [
+    "from os.path import (basename, dirname)\nfrom posixpath import splitext as basename\n\n",
+    "from os.path import (basename, dirname)\nfrom os.path import splitext as len\n\n",
+    "from os.path import (dirname, basename)\n\n",
+    "if True:\n    from os.path import (basename, dirname)\n\n",
+], ids=["shadow-import", "shadow-builtin", "reorder", "move-to-other-scope"])
+def test_import_rewrite_preserves_the_original_test_bindings(tmp_path: Path, updated: str) -> None:
+    repo = make_repo(tmp_path / "repo")
+    path = "tests/test_bindings.py"
+    test = "def test_existing():\n    assert len(basename('a/b')) == 1\n"
+    (repo / path).write_text("from os.path import basename, dirname\n\n" + test)
+    git(repo, "add", path)
+    git(repo, "commit", "-qm", "original tests")
+    base = git(repo, "rev-parse", "HEAD")
+    sha = piece(repo, "changed-import", {path: updated + test})
+    assert checks.classify_guard(repo, base, sha, [path]) == ([], [], [path])
+
+
 PILOT = Path(__file__).parent / "fixtures" / "boundary_pilot"
 # The pilot's base files, cut down to the context lines of its diffs (the rest of boltons is not needed to apply them)
 PILOT_BASE = {

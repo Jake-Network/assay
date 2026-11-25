@@ -124,10 +124,9 @@ def own_spend(receipt: dict[str, Any], before: tuple[float, int, float, int] | N
     A receipt that reports the call's own usage (OWN_USAGE) is read from that, since a resumed session's totals cover
     the whole session only when Claude Code restored the earlier ones (on 2026-11-25 one resume did not). The own
     usage must fit the receipt one of two ways: the receipt's totals are the own usage (a first call, or a resume
-    that restored nothing) or the previous receipt's totals plus it (a resume that restored them). Without it the
-    receipt covers the whole session so far, and the call's own spend is the difference from the previous receipt.
-    The receipt's totals are kept as reported_session_*; session_* are the totals counted here (the same as the
-    receipt's without the own usage)."""
+    that restored nothing) or the previous receipt's totals plus it (a resume that restored them). When own usage
+    is absent, the call's spend is the difference from the previous receipt. reported_session_* preserve the
+    receipt's totals, and session_* accumulate the spend of each call across resets."""
     cost, tokens, said_cost, said_tokens = before or (0.0, 0, 0.0, 0)
     rest = {key: value for key, value in receipt.items() if key != "own"}
     reported = {"reported_session_cost_usd": receipt["cost_usd"], "reported_session_tokens": receipt["tokens"]}
@@ -138,13 +137,13 @@ def own_spend(receipt: dict[str, Any], before: tuple[float, int, float, int] | N
                    and receipt["tokens"] == t + own_tokens for c, t in bases):
             raise real.BenchRunError(f"a call's {OWN_USAGE} fits neither its receipt's totals nor the previous "
                                      "receipt's totals plus it")
-        return {**rest, **reported, "cost_usd": own_cost, "tokens": own_tokens,
-                "session_cost_usd": cost + own_cost, "session_tokens": tokens + own_tokens}
-    if receipt["cost_usd"] < said_cost - USD_TOLERANCE or receipt["tokens"] < said_tokens:
-        raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
-    return {**rest, **reported, "cost_usd": max(receipt["cost_usd"] - said_cost, 0.0),
-            "tokens": receipt["tokens"] - said_tokens,
-            "session_cost_usd": receipt["cost_usd"], "session_tokens": receipt["tokens"]}
+    else:
+        if receipt["cost_usd"] < said_cost - USD_TOLERANCE or receipt["tokens"] < said_tokens:
+            raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
+        own_cost = max(receipt["cost_usd"] - said_cost, 0.0)
+        own_tokens = receipt["tokens"] - said_tokens
+    return {**rest, **reported, "cost_usd": own_cost, "tokens": own_tokens,
+            "session_cost_usd": cost + own_cost, "session_tokens": tokens + own_tokens}
 
 
 def compile_env(arm: str, target: Path, args: argparse.Namespace) -> dict[str, str]:
@@ -187,7 +186,18 @@ class Trial:
     def invoke(self, name: str, prompt: str, session: str, *, resume: bool,
                probe: bool = False) -> list[tuple[int, dict[str, Any]]]:
         path = self.target / name
-        events = self.batch.capture(self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe)
+        new_call = not path.exists()
+        try:
+            events = self.batch.capture(
+                self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe,
+            )
+        except BaseException:
+            if new_call and (path / "command.json").is_file():
+                try:
+                    self.transcripts(session, path)
+                except OSError as exc:
+                    print(f"could not preserve transcripts for {name}: {exc}", file=sys.stderr)
+            raise
         self.transcripts(session, path)
         measured = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
         self.run_data["calls"].append({**measured, "kind": "probe" if probe else "work"})
