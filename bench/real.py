@@ -139,7 +139,7 @@ def prepare(mode: str, out: Path, args: Any) -> PreparedRun:
     # finds it without guessing.
     session_id = str(uuid4())
     cmd = [
-        "claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--forward-subagent-text",
+        claude_bin(args), "-p", prompt, "--output-format", "stream-json", "--verbose", "--forward-subagent-text",
         "--session-id", session_id, "--setting-sources", "", "--model", args.model, "--max-turns", str(args.max_turns),
         "--max-budget-usd", str(args.max_budget_usd), "--tools", "Agent,Bash,Read,Write,Glob",
         "--json-schema", json.dumps(REPORT_SCHEMA),
@@ -243,6 +243,50 @@ def session_mcp_servers(out: Path) -> dict[str, Any]:
     except OSError:
         pass
     return {"servers": names, "foreign": [n for n in names if n not in OWN_SERVERS], "tools": tools}
+
+
+CLAUDE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\s|$)")
+
+
+def version_arg(value: str) -> str:
+    """argparse type of --claude-version: X.Y.Z."""
+    import argparse
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        raise argparse.ArgumentTypeError("use the version number Claude Code prints, such as 2.1.330")
+    return value
+
+
+def claude_bin(args: Any) -> str:
+    """The CLI a driver runs: --claude-bin (such as ~/.local/share/claude/versions/2.1.330, which the auto-updater
+    leaves in place), or claude on PATH."""
+    return str(getattr(args, "claude_bin", None) or "claude")
+
+
+def pin_claude(args: Any) -> str:
+    """`claude --version` of the CLI a paid run will use, checked before its first paid call. With --claude-version
+    a different version stops the run (ValueError); without it, a warning. The installed CLI updates itself between
+    runs: 2.1.330 became 2.1.331 on 2026-11-24 during the H5 sweep, and DISABLE_AUTOUPDATER in a run's environment
+    does not hold back the claude on PATH that the next run starts. Keep the checked executable for all calls."""
+    requested = claude_bin(args)
+    executable = shutil.which(requested)
+    if executable is None:
+        raise ValueError(f"could not find an executable for {requested} --version")
+    try:
+        binary = str(Path(executable).resolve())
+        found = subprocess.run([binary, "--version"], capture_output=True, check=True, timeout=60,
+                               text=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"could not read {requested} --version: {exc}") from exc
+    expected = getattr(args, "claude_version", None)
+    match = CLAUDE_VERSION.match(found)
+    if expected is None:
+        print(f"warning: no --claude-version: running {binary} {found!r} unchecked", file=sys.stderr)
+    elif match is None or ".".join(match.groups()) != expected:
+        raise ValueError(f"--claude-version {expected}: {binary} --version says {found!r}; nothing was run "
+                         "(pin the CLI with --claude-bin ~/.local/share/claude/versions/<version>)")
+    args.claude_bin = binary
+    return found
 
 
 def claude_config_dir(env: Mapping[str, str]) -> Path:
@@ -431,6 +475,31 @@ def worker_reports(events: list[tuple[int, dict[str, Any]]]) -> tuple[int | None
                     body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
                     reports[ref] = max(reports.get(ref, 0), estimate_tokens(body))
     return (sum(reports.values()) if reports else None), len(reports)
+
+
+NO_MODEL_PARAM = "(none)"
+
+
+def model_counts(events: list[tuple[int, dict[str, Any]]]) -> tuple[dict[str, int], dict[str, int]]:
+    """(subagent API messages per model, the lead's Agent/Task calls per `model` argument, NO_MODEL_PARAM for a call
+    without one). A message streamed as several events (one per content block) counts once, by its id."""
+    messages: dict[str, set[str]] = {}
+    calls: dict[str, set[str]] = {}
+    for n, (_, event) in enumerate(events):
+        message = event.get("message")
+        if event.get("type") != "assistant" or not isinstance(message, dict):
+            continue
+        if event.get("parent_tool_use_id"):
+            if isinstance(model := message.get("model"), str) and model != SYNTHETIC_MODEL:
+                messages.setdefault(model, set()).add(str(message.get("id") or f"event-{n}"))
+            continue
+        content = message.get("content")
+        for block in content if isinstance(content, list) else ():
+            if (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                    and isinstance(block.get("id"), str)):
+                given = block.get("input", {}).get("model") if isinstance(block.get("input"), dict) else None
+                calls.setdefault(given if isinstance(given, str) else NO_MODEL_PARAM, set()).add(block["id"])
+    return ({k: len(v) for k, v in sorted(messages.items())}, {k: len(v) for k, v in sorted(calls.items())})
 
 
 def transcript_messages(out: Path) -> Iterator[tuple[bool, dict[str, Any]]] | None:
@@ -721,6 +790,8 @@ def parse(mode: str, out: Path, run: int, project_id: str | None, budget_usd: fl
     final_best = max((e["value"] for e in evals if e["value"] is not None), default=None)
     ctx, curve, curve_source = _observed_curve(events, evals, usage[1], final_best)
     report_tokens, delivered_reports = worker_reports(events)
+    subagent_models, agent_model_params = model_counts(events)
     return RunMetrics(mode, run, len(evals), duplicate_ratio(evals), lost, ctx, usage[1], final_best, curve,
                       cost_usd=cost, curve_source=curve_source, usage_check=usage_check(out, events),
-                      lead_report_tokens=report_tokens, delivered_worker_reports=delivered_reports)
+                      lead_report_tokens=report_tokens, delivered_worker_reports=delivered_reports,
+                      subagent_models=subagent_models, agent_model_params=agent_model_params)

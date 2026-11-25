@@ -1,7 +1,9 @@
 """Exercise the real harness offline using the evaluator and synthetic Claude stream records."""
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +24,7 @@ def args(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**{**defaults, **overrides})
 
 
+ROOT = Path(__file__).resolve().parent.parent
 CFG = {"init": "hex", "optimizer": "slsqp", "iters": 10, "perturb": 0.0}
 
 
@@ -174,3 +177,113 @@ def test_real_parser_checks_ledger_hook_and_final_report(tmp_path: Path, db_url:
     assert process("subagent-stop", {"last_assistant_message": body}, project=pid).startswith("captured:")
     result = real.parse("C", tmp_path, 1, pid, 1.0)
     assert result.lost_results == 1
+
+
+def _fake_claude(tmp_path: Path, version: str) -> Path:
+    """A claude that answers --version and fails any other call (a paid call would be one)."""
+    claude = tmp_path / "bin" / "claude"
+    claude.parent.mkdir(exist_ok=True)
+    claude.write_text(f"#!/bin/sh\n[ \"$1\" = --version ] || exit 99\nprintf '%s\\n' '{version} (Claude Code)'\n",
+                      encoding="utf-8")
+    claude.chmod(0o755)
+    return claude
+
+
+@pytest.mark.parametrize("driver", ["bench.run", "bench.code.run", "bench.boundary.run"])
+def test_a_different_claude_version_stops_every_driver_before_a_paid_call(tmp_path: Path, driver: str) -> None:
+    """2026-11-24: the installed CLI updated itself from 2.1.330 to 2.1.331 mid-sweep and nothing stopped the runs."""
+    claude = _fake_claude(tmp_path, "2.1.331")
+    out = tmp_path / "out"
+    common = ["--execute", "--claude-version", "2.1.330", "--claude-bin", str(claude), "--out", str(out)]
+    extra = {"bench.run": ["--configs", "A", "--runs", "1"], "bench.code.run": [],
+             "bench.boundary.run": ["--arms", "A", "--model", "m", "--max-budget-usd", "1", "--probe-budget-usd", "1",
+                                    "--total-budget-usd", "1", "--tasks", str(_boundary_tasks(tmp_path)),
+                                    "--registration", str(_registration(tmp_path))]}[driver]
+    p = subprocess.run([sys.executable, "-m", driver, *common, *extra], capture_output=True, text=True, timeout=120,
+                       cwd=ROOT)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "--claude-version 2.1.330" in p.stderr and "2.1.331" in p.stderr
+    assert not out.exists()
+
+
+def test_pin_claude_checks_the_number_and_warns_without_a_pin(tmp_path: Path,
+                                                              capsys: pytest.CaptureFixture[str]) -> None:
+    claude = _fake_claude(tmp_path, "2.1.330")
+    pinned = argparse.Namespace(claude_bin=str(claude), claude_version="2.1.330")
+    assert real.pin_claude(pinned) == "2.1.330 (Claude Code)" and capsys.readouterr().err == ""
+    assert real.pin_claude(argparse.Namespace(claude_bin=str(claude))) == "2.1.330 (Claude Code)"
+    assert "no --claude-version" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="--claude-version 2.1.331: "):
+        real.pin_claude(argparse.Namespace(claude_bin=str(claude), claude_version="2.1.331"))
+    with pytest.raises(argparse.ArgumentTypeError):
+        real.version_arg("2.1")
+    assert real.claude_bin(argparse.Namespace()) == "claude"
+
+
+@pytest.mark.parametrize("requested", [None, "./bin/claude"])
+def test_run_uses_the_pinned_executable_in_a_different_cwd_and_path(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requested: str | None) -> None:
+    monkeypatch.chdir(tmp_path)
+    claude = _fake_claude(tmp_path, "2.1.330")
+    monkeypatch.setenv("PATH", f"{claude.parent}{os.pathsep}{os.environ['PATH']}")
+    options = args(claude_bin=requested, claude_version="2.1.330")
+    assert real.pin_claude(options) == "2.1.330 (Claude Code)"
+
+    prepared = real.prepare("A", tmp_path / "trial", options)
+    shadow = _fake_claude(prepared.work, "2.1.331")
+    prepared.env["PATH"] = str(shadow.parent)
+    prepared.cmd[1:] = ["--version"]
+    real._capture(prepared, prepared.work.parent, 1)
+
+    assert prepared.cmd[0] == str(claude.resolve())
+    assert (prepared.work.parent / "lead.stream.jsonl").read_text() == "2.1.330 (Claude Code)\n"
+
+
+def _boundary_tasks(tmp_path: Path) -> Path:
+    from tests.test_bench_boundary import task_manifest
+
+    return task_manifest(tmp_path)
+
+
+def _registration(tmp_path: Path) -> Path:
+    from tests.test_bench_boundary import registration
+
+    return registration(tmp_path)
+
+
+def test_worker_models_are_counted_and_off_runs_listed_apart(tmp_path: Path) -> None:
+    """30-C-1: the lead passed model "haiku" to all 100 Agent calls, which won over CLAUDE_CODE_SUBAGENT_MODEL;
+    30-C-2 ran 28 of 90 workers. Both stay in the table and are listed under it."""
+    from bench.report import write_report
+
+    def assistant(content: list[dict[str, object]], *, parent: str | None = None, model: str = "claude-sonnet-5-5",
+                  mid: str = "m") -> tuple[int, dict[str, object]]:
+        return 0, {"type": "assistant", "parent_tool_use_id": parent,
+                   "message": {"id": mid, "model": model, "content": content}}
+
+    call = {"type": "tool_use", "name": "Agent", "id": "t1", "input": {"prompt": "p", "model": "haiku"}}
+    events = [assistant([call], mid="lead-1"), assistant([{"type": "text", "text": "a"}], mid="lead-1"),
+              assistant([{"type": "tool_use", "name": "Agent", "id": "t2", "input": {"prompt": "p"}}], mid="lead-2"),
+              assistant([{"type": "text", "text": "w"}], parent="t1", model="claude-haiku-5-5", mid="w1"),
+              assistant([{"type": "tool_use", "name": "Bash", "id": "b", "input": {}}], parent="t1",
+                        model="claude-haiku-5-5", mid="w1"),
+              assistant([{"type": "text", "text": "w"}], parent="t2", mid="w2"),
+              assistant([{"type": "text", "text": "API error"}], parent="t2", model="<synthetic>", mid="e1")]
+    assert real.model_counts(events) == ({"claude-haiku-5-5": 1, "claude-sonnet-5-5": 1}, {"(none)": 1, "haiku": 1})
+
+    def row(config: str, run: int, **extra: object) -> dict[str, object]:
+        return {"config": config, "run": run, "evaluations": 1, "duplicate_ratio": 0, "lost_results": 0,
+                "lead_context_max": 1, "tokens_total": 1, "final_best": None, "curve": [],
+                "subagent_models": {"claude-sonnet-5-5": 300}, "agent_model_params": {"(none)": 90, "sonnet": 3},
+                "delivered_worker_reports": 90, **extra}
+
+    runs = [row("A", 1), row("C", 1, subagent_models={"claude-haiku-5-5": 360}, agent_model_params={"haiku": 100}),
+            row("C", 2, delivered_worker_reports=28)]
+    cond = {"dry": False, "model": "sonnet", "workers": 30, "rounds": 3}
+    (tmp_path / "metrics.json").write_text(json.dumps({"conditions": cond, "runs": runs}))
+    text = write_report(tmp_path).read_text()
+    apart = text.split("## Runs to read apart\n\n", 1)[1].split("\n\n", 2)[1].splitlines()
+    assert apart == ["- C-1: subagent messages on another model than sonnet: claude-haiku-5-5 360 of 360; the lead's "
+                     "Agent calls passed model: haiku ×100",
+                     "- C-2: 28 delivered worker reports of 90 requested (workers × rounds)"]
+    assert "| C benchbook | 2 |" in text  # not excluded

@@ -533,6 +533,17 @@ Five gaps in the third round's fixes (`tests/test_fourth_review.py`).
   can weaken every test without deleting any, so any change to one is a weakening, as the mutation table expects.
 - **T04 guard_weakened is always written** (a boolean on every attempt, like guard_touched); the file lists and the
   test counts only when there is something to say.
+- **T04 names added to an import are lines added (2026-11-25, after the boundary pilot).** In arm F three of four
+  merged pieces passed their re-run and still went to a person, because each rewrote one line of an import to add
+  a name (`get_path)` as `get_path,` + `run_length)`, and `..., Bits` as `..., Bits, weighted_median`); that is
+  most of why F's lead knew 1 of 10 verified pieces. A modified Python test file whose deleted lines all sit inside
+  import statements, none on a line shared with another statement or a compound statement's header, and that still
+  imports every (module, level, name, alias) it imported before, now counts as appended. The handoff's textual
+  rule (drop whitespace and a trailing `,`, `)` or `\\`, then match an added line) was not taken: it also passes
+  `assert f(1)` rewritten as `assert f(1,` + `2)`, an argument added to a call under an assert, and needs another
+  rule for one-line imports. Parsing both versions closes that and covers `from x import a` → `from x import a, b`.
+  Other languages keep the old rule (a rewritten line is a weakening), and a file that does not parse at either
+  commit is weakened. The rows are in tests/test_mutations.py (`IMPORT_ROWS`, and the pilot's own diffs).
 - **T07 the lead skill and the MCP server move to benchbook-mcp.** Both teach or serve ledger tools, which the hook
   plugin must not load. The skill command becomes `/benchbook-mcp:benchbook-lead`, and the worker's tool names are
   written as `mcp__plugin_benchbook-mcp_benchbook__*` on the assumption that Claude Code keeps a hyphenated plugin
@@ -722,3 +733,55 @@ by hand, not a live session). Four are fixed; the fourth is not.
   fixed sentence count is a dated way to set length on current models; what keeps the lead's context small is that
   results live in the ledger, which every worker prompt says. The hard bound that stays is the 1000-character limit on
   a task summary (`complete_task`), enforced in code.
+## After the boundary pilot (2026-11-25)
+
+- **A merge waits for its verdict (the merge gate).** Arm F's lead merged all four pieces before their verdicts;
+  the docs already said to merge after the verdict line. Of the three options (docs only, a hook that holds the
+  merge, a `piece merge` command that waits) the hook was chosen: it acts where the merge happens and asks nothing
+  new of the lead. It waits up to 30 s (a re-run took 12-13 s) and holds a merge at most once per commit, so the
+  lead and a person stay able to merge; it runs only for `git merge` through the hook's `if`, so the 35 ms start-up
+  is not added to every Bash call. A merge the parser misses (`cd x && git merge` in another checkout) is not held.
+- **Stop hook: still not done.** No lead in the pilot ended its turn with a verdict waiting: each verdict came as
+  the next tool result of the same turn. The merge came first instead, which the gate covers.
+- **B3: the completion gate stays opt-in, documented.** Arm F merged four pieces with no false completion
+  (false_done 0/4), so there is no case for gating every branch; docs/code.md already tells the lead to run
+  `piece start` per worker.
+- **A lead records its own dead ends and findings, and is told how at session start.** The pilot's probes asked
+  for dead ends and findings that lived only in prompts and the lead's last message; benchbook recorded neither,
+  because it records dead ends from failed check runs and findings from worker reports. Reading the lead's own
+  messages for them (as `[report]` reads a worker's) was not done: free text would be recorded as findings by
+  mistake, and every one costs brief space. Instead two commands write them on purpose, and a code project's
+  session start gives a four-line guide even with an empty ledger, since arm F's lead loads no skill and a first
+  session gets no brief.
+
+## After the second boundary pilot (2026-11-25)
+
+- **"Changed since" compares files.** `check verify` records the files the commit changed since its merge-base
+  (`payload.files`, at most 200; more and only the directories are kept), and the brief compares those with HEAD
+  before the piece's declared paths and the directories. The declared paths came first before; files go first now
+  because they are what the re-run checked. With `[guard] base` pointing below the integration branch (as in the
+  benchmark) a later phase's piece also lists the earlier phases' files, which is coarser than its own changes but
+  still finer than directories.
+- **A checkout's brief covers the pieces merged into it.** The `--here` scope (the branch's directories and
+  `piece:<branch>`) missed records tagged with a merged piece and no file. The brief adds every piece with a
+  completion at a commit among HEAD's newest 5,000 (one `git rev-list`, then one query); by commit rather than by
+  branch name, since workers' branches are often deleted after the merge. Records of pieces merged long ago come
+  back into scope too; the section limits keep the newest first.
+
+## After the third boundary pilot (2026-11-25)
+
+- **The automatic re-run retries a failure once.** Two of the pilot's four re-runs failed on boltons' socket timing
+  tests, outside the pieces, and passed in every other run, the lead's six included. A failure the retry does not
+  repeat is still not a pass: the all_pass rule keeps "runs that disagree are a person's call", so the retry decides
+  inconclusive, and verified needs a lead to invalidate the failed run (the existing way to discard a broken run)
+  before its own re-run decides. What changes is that a failure seen once leaves no discarded approach, which the
+  brief would list as a dead end of the piece. Only the hook's re-run retries, since a failure there costs the lead
+  a held merge; `check verify` by hand reports what it saw. The cost is one more run of the checks for every real
+  failure.
+- **The failed run is recorded before its retry runs**, under an id derived from the request's receipt, and the
+  retry under the receipt itself, naming the failed run in its metrics. The first version recorded both after the
+  retry, the failed one without the receipt: a crash between the two writes left a refutation no later try would
+  find, an interrupted retry recorded the failed run as an ordinary failure with a dead end, and a later try that
+  finished from the stored retry lost which run had failed, so the merge gate gave the wrong advice (review of
+  0e64b10). Now every later try of the request finds where it stopped. A retry that fails on a different test leaves
+  no dead end: neither failure repeated.

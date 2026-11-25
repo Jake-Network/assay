@@ -58,6 +58,9 @@ def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
     assert "--resume" in compact["cmd"] and "--session-id" in restart["cmd"] and "--resume" in action["cmd"]
     assert compact["session"] != restart["session"] == action["session"]
     assert (out / "scripted" / "E-1" / "past-events" / "session-01" / "lead.jsonl").is_file()
+    calls = [d for d in (out / "scripted").glob("*-1/phase-*") if (d / "command.json").is_file()]
+    assert calls and all((d / "transcripts" / "lead.jsonl").is_file() and (d / "transcripts" / "subagents").is_dir()
+                         for d in calls)
     # The scripted receipts are cumulative per session, as Claude Code's are; each call counts only its own tokens.
     assert all(1650 < call["tokens"] < 1700 for trial in data["trials"] for call in trial["calls"])
 
@@ -89,6 +92,164 @@ def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path, session_cost: 
     assert second["cost_usd"] == pytest.approx(session_cost - 0.30) and second["tokens"] == 300
     assert (second["session_cost_usd"], second["session_tokens"]) == (session_cost, 1300)
     assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == session_cost
+
+
+@pytest.mark.parametrize("restored", [True, False])
+def test_a_resumed_call_reads_its_own_usage_whether_or_not_the_session_totals_were_restored(
+    tmp_path: Path, restored: bool,
+) -> None:
+    """Third boundary pilot: a resume reported only its own spend (0.0623 after 0.0602), which the difference rule
+    rejected as less than the previous receipt. The call's own usage is in model_usage_since_last_result."""
+    own = [(0.0602, 54000), (0.0623, 27113)]
+    totals = [own[0], (own[0][0] + own[1][0], own[0][1] + own[1][1]) if restored else own[1]]
+    calls = iter(zip(totals, own, strict=True))
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        (cost, tokens), (own_cost, own_tokens) = next(calls)
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                   "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0, "costUSD": cost}},
+                   run.OWN_USAGE: {"m": {"inputTokens": own_tokens, "outputTokens": 0, "costUSD": own_cost}}}]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=0.5, max_budget_usd=3.0, total_budget_usd=10.0, model="m",
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    batch = run.Batch(args, tmp_path, execute)
+    batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    batch.capture("A", tmp_path, {}, tmp_path / "second", "probe", "s-1", resume=True, probe=True)
+    second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
+    assert (second["cost_usd"], second["tokens"]) == (0.0623, 27113)
+    assert second["session_cost_usd"] == pytest.approx(0.1225) and second["session_tokens"] == 81113
+    assert (second["reported_session_cost_usd"], second["reported_session_tokens"]) == totals[1]
+    assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == pytest.approx(0.1225)
+
+
+def test_an_unreadable_own_usage_is_a_missing_receipt() -> None:
+    usage = {"input_tokens": 10, "output_tokens": 1}
+    events = [(1, {"type": "assistant", "session_id": "s", "message": {"usage": usage}}),
+              (2, {"type": "result", "subtype": "success", "is_error": False, "session_id": "s",
+                   "total_cost_usd": 0.1, "modelUsage": {"m": {"inputTokens": 5, "costUSD": 0.1}},
+                   run.OWN_USAGE: {"m": {"inputTokens": 5}}})]
+    with pytest.raises(real.BenchRunError, match="unreadable"):
+        run.read_call(events, "s")
+
+
+def own_usage_call(tmp_path: Path, calls: list[tuple[float, int, dict[str, tuple[float, int]] | None]], *,
+                   cap: float = 3.0) -> run.Batch:
+    """A batch whose calls return these receipts: (total_cost_usd, modelUsage tokens, own usage per model)."""
+    receipts = iter(calls)
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        cost, tokens, own = next(receipts)
+        result = {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                  "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0, "costUSD": cost}}}
+        if own is not None:
+            result[run.OWN_USAGE] = {name: {"inputTokens": n, "outputTokens": 0, "costUSD": usd}
+                                     for name, (usd, n) in own.items()}
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}}, result]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=cap, max_budget_usd=cap, total_budget_usd=10.0, model="m",
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    return run.Batch(args, tmp_path, execute)
+
+
+def test_receipt_without_own_usage_preserves_totals_after_a_reset(tmp_path: Path) -> None:
+    batch = own_usage_call(tmp_path, [(0.06, 1000, {"m": (0.06, 1000)}), (0.05, 500, {"m": (0.05, 500)}),
+                                      (0.07, 800, None), (0.10, 1200, {"m": (0.03, 400)})])
+    for number in range(1, 5):
+        batch.capture("A", tmp_path, {}, tmp_path / str(number), "work", "s-1", resume=number > 1, probe=False)
+
+    third = json.loads((tmp_path / "3" / "metrics.json").read_text(encoding="utf-8"))
+    assert third["cost_usd"] == pytest.approx(0.02) and third["tokens"] == 300
+    assert third["session_cost_usd"] == pytest.approx(0.13) and third["session_tokens"] == 1800
+    assert (third["reported_session_cost_usd"], third["reported_session_tokens"]) == (0.07, 800)
+    fourth = json.loads((tmp_path / "4" / "metrics.json").read_text(encoding="utf-8"))
+    assert fourth["session_cost_usd"] == pytest.approx(0.16) and fourth["session_tokens"] == 2200
+    assert json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))["counted_usd"] == pytest.approx(0.16)
+
+
+@pytest.mark.parametrize("second", [
+    (0.30, 1300, {"m": (0.05, 300)}),  # restored, but 0.30 is not 0.06 + 0.05
+    (0.30, 1300, {"m": (0.30, 300)}),  # costs fit the unrestored shape, tokens do not
+])
+def test_an_own_usage_that_fits_neither_receipt_shape_stops_the_trial(
+    tmp_path: Path, second: tuple[float, int, dict[str, tuple[float, int]]],
+) -> None:
+    batch = own_usage_call(tmp_path, [(0.06, 1000, {"m": (0.06, 1000)}), second])
+    batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    with pytest.raises(real.BenchRunError, match="fits neither"):
+        batch.capture("A", tmp_path, {}, tmp_path / "second", "probe", "s-1", resume=True, probe=True)
+
+
+def test_a_first_call_whose_own_usage_differs_from_its_receipt_stops_the_trial(tmp_path: Path) -> None:
+    batch = own_usage_call(tmp_path, [(2.9, 1000, {"m": (0.4, 1000)})])
+    with pytest.raises(real.BenchRunError, match="fits neither"):
+        batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+
+
+def test_an_own_usage_sums_every_model_and_counts_against_the_cap(tmp_path: Path) -> None:
+    """A lead on one model and subagents on another: both rows count, against the call's cap."""
+    batch = own_usage_call(tmp_path, [(0.5, 1000, {"lead": (0.2, 400), "sub": (0.3, 600)}),
+                                      (1.2, 2000, {"lead": (0.3, 500), "sub": (0.4, 500)})], cap=0.6)
+    batch.capture("F", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    first = json.loads((tmp_path / "first" / "metrics.json").read_text(encoding="utf-8"))
+    assert first["cost_usd"] == pytest.approx(0.5) and first["tokens"] == 1000
+    with pytest.raises(real.BenchRunError, match="second exceeded its cap"):
+        batch.capture("F", tmp_path, {}, tmp_path / "second", "work", "s-1", resume=True, probe=False)
+    second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
+    assert second["cost_usd"] == pytest.approx(0.7) and second["tokens"] == 1000
+    assert (second["reported_session_cost_usd"], second["reported_session_tokens"]) == (1.2, 2000)
+
+
+def test_every_call_copies_its_session_transcripts(tmp_path: Path) -> None:
+    """Arm F's verdicts reach the lead through PostToolUse hooks, which the stream does not show: each call keeps the
+    session's transcripts, the lead's and its subagents', in its own folder."""
+    config = tmp_path / "claude-config"
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        session = prepared.session_id
+        saved = config / "projects" / "-work" / session
+        if session != "s-missing":
+            (saved / "subagents").mkdir(parents=True, exist_ok=True)
+            (saved.parent / f"{session}.jsonl").write_text(f'{{"call": "{target.name}"}}\n', encoding="utf-8")
+            (saved / "subagents" / "agent-a1.jsonl").write_text("{}\n", encoding="utf-8")
+            (saved / "subagents" / "agent-a1.meta.json").write_text('{"agentType": "general-purpose"}',
+                                                                    encoding="utf-8")
+        if target.name == "phase-02-timeout":
+            raise real.BenchRunError("Claude timed out")
+        subtype = "error" if target.name == "phase-02-receipt" else "success"
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+                  {"type": "result", "subtype": subtype, "is_error": subtype == "error", "total_cost_usd": 0.01,
+                   "modelUsage": {"m": {"inputTokens": 11, "outputTokens": 0}}}]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": session}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=0.1, max_budget_usd=0.5, total_budget_usd=10.0, model="m", dry=False,
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    task = scripted.fixture(tmp_path)
+    trial = run.Trial(run.Batch(args, tmp_path, execute), task, "F", tmp_path / "F-1", tmp_path / "work",
+                      {"CLAUDE_CONFIG_DIR": str(config)})
+    trial.target.mkdir()
+    trial.invoke("phase-01", "work", "s-1", resume=False)
+    trial.invoke("phase-01-action", "act", "s-1", resume=True)
+    with pytest.raises(real.BenchRunError, match="Claude timed out"):
+        trial.invoke("phase-02-timeout", "work", "s-2", resume=False)
+    with pytest.raises(real.BenchRunError, match="Claude invocation ended with error"):
+        trial.invoke("phase-02-receipt", "work", "s-3", resume=False)
+    assert len(trial.run_data["calls"]) == 2
+    for name in ("phase-01", "phase-01-action", "phase-02-timeout", "phase-02-receipt"):
+        copied = trial.target / name / "transcripts"
+        assert json.loads((copied / "lead.jsonl").read_text()) == {"call": name}
+        assert {p.name for p in (copied / "subagents").iterdir()} == {"agent-a1.jsonl", "agent-a1.meta.json"}
+        assert json.loads((trial.target / name / "transcripts.json").read_text())["copy"] == "transcripts"
+    trial.invoke("phase-01-restart", "probe", "s-missing", resume=False)  # a session with no transcript
+    assert "error" in json.loads((trial.target / "phase-01-restart" / "transcripts.json").read_text())
 
 
 @pytest.mark.parametrize("completed_b", [True, False])

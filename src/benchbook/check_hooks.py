@@ -294,6 +294,25 @@ def _observe(spool: Path, line: dict[str, Any]) -> None:
         f.write(json.dumps(line, sort_keys=True, ensure_ascii=False) + "\n")
 
 
+def bash_start(harness: str = "claude-code") -> int:
+    """PreToolUse(Bash): the merge gate (merge_gate.py) for Claude Code; older manifests also send it for every
+    Bash call, which it answers with nothing unless the command is a held merge."""
+    config.hold_notices()
+    if harness != "claude-code":
+        return 0
+    try:
+        from .merge_gate import decide
+
+        answer = decide(_read_input())
+        if answer is not None:
+            sys.stdout.write(json.dumps(answer, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001 - a hook must not fail the tool call
+        import traceback
+
+        _log("bash-start failed: " + traceback.format_exc())
+    return 0
+
+
 def bash_result(harness: str = "claude-code") -> int:
     """harness: which harness runs the hook (`--harness` in its manifest); harnesses.py reads its input."""
     config.hold_notices()  # the harness runs this: nothing may reach stderr
@@ -477,5 +496,5 @@ def main(event: str, harness: str | None = None) -> int:
     if event == "bash-result":
         return bash_result(harness or "claude-code")
     if event == "bash-start":
-        return 0  # older Claude Code manifests still invoke this hook
+        return bash_start(harness or "claude-code")
     return task_completed()

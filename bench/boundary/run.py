@@ -29,6 +29,10 @@ from .tasks import Phase, Task, input_tasks, inspect
 REGISTRATION = Path(__file__).with_name("PREREGISTRATION.md")
 MIN_CLAUDE_VERSION = (2, 1, 277)
 USD_TOLERANCE = 1e-9
+# A call's own usage in a result event (Claude Code 2.1.332), whether or not a resume restored the session's totals.
+OWN_USAGE = "model_usage_since_last_result"
+# Summed costUSD rows against total_cost_usd: equal in every receipt of the pilots, up to float addition.
+OWN_USAGE_TOLERANCE = 1e-6
 WORK_SCOPE = ("Work only in the task checkout and use the arm's provided mechanism for prior context. "
               "Leave the benchmark's evaluator, run logs, and oracle receipts to the harness.")
 
@@ -39,9 +43,10 @@ class Batch:
     out: Path
     execute_call: Callable[[real.PreparedRun, Path, int], None]
     spent: float = 0.0
-    # The last receipt of each session: (total_cost_usd, tokens). A resumed call's receipt reports the session's whole
-    # spend (code.claude.com/docs/en/agent-sdk/cost-tracking), so a call's own is the difference from the previous one.
-    sessions: dict[str, tuple[float, int]] = field(default_factory=dict)
+    # Each session's totals after its last call: (cost, tokens) as counted here, then (total_cost_usd, tokens) as that
+    # call's receipt reported them. The two differ after a resume that did not restore the session's earlier totals;
+    # own_spend says which receipts it accepts.
+    sessions: dict[str, tuple[float, int, float, int]] = field(default_factory=dict)
 
     def capture(
         self, arm: str, work: Path, env: dict[str, str], target: Path, prompt: str, session: str, *,
@@ -53,6 +58,7 @@ class Batch:
         cmd = arms.command(arm, prompt, session, resume=resume, model=self.args.model, budget=cap,
                            max_turns=self.args.probe_turns if probe else self.args.max_turns,
                            claude_mem=self.args.claude_mem_plugin, schema=probes.SCHEMA if probe else None)
+        cmd[0] = real.claude_bin(self.args)
         target.mkdir()
         write_json(target / "command.json", {"cmd": cmd, "cwd": str(work), "session": session, "resume": resume})
         self.spent += cap  # reserve the full cap until a valid cost receipt is available
@@ -61,7 +67,8 @@ class Batch:
         self.execute_call(real.PreparedRun(work, cmd, env, None, None, session), target, self.args.wall_clock)
         events = real._read_stream(target)
         metrics = own_spend(read_call(events, session), self.sessions.get(session) if resume else None)
-        self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"])
+        self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"],
+                                  metrics["reported_session_cost_usd"], metrics["reported_session_tokens"])
         self.spent += metrics["cost_usd"] - cap
         self.record_spend()
         metrics["seconds"] = time.monotonic() - started
@@ -89,18 +96,54 @@ def read_call(events: list[tuple[int, dict[str, Any]]], session: str) -> dict[st
                 if lead and (usage := real._usage(msg.get("usage"))) is not None]
     if not real._number(costs) or costs < 0 or not counts or None in counts or not contexts:
         raise real.BenchRunError("Claude invocation lacks full cost, session usage, or lead context evidence")
-    return {"cost_usd": costs, "tokens": sum(sum(n) for n in counts if n is not None),
-            "lead_context_max": max(contexts)}
+    receipt = {"cost_usd": costs, "tokens": sum(sum(n) for n in counts if n is not None),
+               "lead_context_max": max(contexts)}
+    if OWN_USAGE in result:
+        own = usage_totals(result[OWN_USAGE])
+        if own is None:
+            raise real.BenchRunError(f"Claude invocation has an unreadable {OWN_USAGE}")
+        receipt["own"] = own
+    return receipt
 
 
-def own_spend(receipt: dict[str, Any], before: tuple[float, int] | None) -> dict[str, Any]:
-    """A call's own cost and tokens from its receipt, which for a resumed session covers the whole session so far
-    (before: the session's previous receipt). The session totals are kept beside them."""
-    cost, tokens = before or (0.0, 0)
-    if receipt["cost_usd"] < cost - USD_TOLERANCE or receipt["tokens"] < tokens:
-        raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
-    return {**receipt, "cost_usd": max(receipt["cost_usd"] - cost, 0.0), "tokens": receipt["tokens"] - tokens,
-            "session_cost_usd": receipt["cost_usd"], "session_tokens": receipt["tokens"]}
+def usage_totals(rows: Any) -> tuple[float, int] | None:
+    """Cost and tokens summed over a per-model usage map, or None when any row lacks them. An empty map is None too:
+    read_call also requires the lead's context, so the call made at least one API request."""
+    if not isinstance(rows, dict) or not rows:
+        return None
+    costs = [row.get("costUSD") if isinstance(row, dict) else None for row in rows.values()]
+    counts = [real._class_counts(row, real.MODEL_USAGE_KEYS) for row in rows.values()]
+    if not all(real._number(c) and c >= 0 for c in costs) or None in counts:
+        return None
+    return sum(costs), sum(sum(n) for n in counts if n is not None)
+
+
+def own_spend(receipt: dict[str, Any], before: tuple[float, int, float, int] | None) -> dict[str, Any]:
+    """A call's own cost and tokens, with the session totals beside them (before: Batch.sessions' entry).
+
+    A receipt that reports the call's own usage (OWN_USAGE) is read from that, since a resumed session's totals cover
+    the whole session only when Claude Code restored the earlier ones (on 2026-11-25 one resume did not). The own
+    usage must fit the receipt one of two ways: the receipt's totals are the own usage (a first call, or a resume
+    that restored nothing) or the previous receipt's totals plus it (a resume that restored them). When own usage
+    is absent, the call's spend is the difference from the previous receipt. reported_session_* preserve the
+    receipt's totals, and session_* accumulate the spend of each call across resets."""
+    cost, tokens, said_cost, said_tokens = before or (0.0, 0, 0.0, 0)
+    rest = {key: value for key, value in receipt.items() if key != "own"}
+    reported = {"reported_session_cost_usd": receipt["cost_usd"], "reported_session_tokens": receipt["tokens"]}
+    if (own := receipt.get("own")) is not None:
+        own_cost, own_tokens = own
+        bases = [(0.0, 0)] + ([(said_cost, said_tokens)] if before else [])
+        if not any(abs(receipt["cost_usd"] - (c + own_cost)) <= OWN_USAGE_TOLERANCE
+                   and receipt["tokens"] == t + own_tokens for c, t in bases):
+            raise real.BenchRunError(f"a call's {OWN_USAGE} fits neither its receipt's totals nor the previous "
+                                     "receipt's totals plus it")
+    else:
+        if receipt["cost_usd"] < said_cost - USD_TOLERANCE or receipt["tokens"] < said_tokens:
+            raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
+        own_cost = max(receipt["cost_usd"] - said_cost, 0.0)
+        own_tokens = receipt["tokens"] - said_tokens
+    return {**rest, **reported, "cost_usd": own_cost, "tokens": own_tokens,
+            "session_cost_usd": cost + own_cost, "session_tokens": tokens + own_tokens}
 
 
 def compile_env(arm: str, target: Path, args: argparse.Namespace) -> dict[str, str]:
@@ -143,7 +186,19 @@ class Trial:
     def invoke(self, name: str, prompt: str, session: str, *, resume: bool,
                probe: bool = False) -> list[tuple[int, dict[str, Any]]]:
         path = self.target / name
-        events = self.batch.capture(self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe)
+        new_call = not path.exists()
+        try:
+            events = self.batch.capture(
+                self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe,
+            )
+        except BaseException:
+            if new_call and (path / "command.json").is_file():
+                try:
+                    self.transcripts(session, path)
+                except OSError as exc:
+                    print(f"could not preserve transcripts for {name}: {exc}", file=sys.stderr)
+            raise
+        self.transcripts(session, path)
         measured = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
         self.run_data["calls"].append({**measured, "kind": "probe" if probe else "work"})
         return events
@@ -203,6 +258,19 @@ class Trial:
             resume = True
         write_json(self.target / "trial.json", self.run_data)
         return self.run_data
+
+    def transcripts(self, session: str, call: Path) -> None:
+        """Copy the session's transcripts (lead and subagents) into call/transcripts after every call of every arm.
+        The stream has the hooks' SessionStart output only, not what a PostToolUse hook added to the lead's context,
+        which is where arm F's re-run verdicts arrive (the pilot's amendment asks when the lead saw them). A resumed
+        session's copy holds the whole session so far. A dry run copies the scripted stream to the same place."""
+        if self.batch.args.dry:
+            (call / "transcripts" / "subagents").mkdir(parents=True)
+            shutil.copyfile(call / "lead.stream.jsonl", call / "transcripts" / "lead.jsonl")
+            found: dict[str, Any] = {"lead": "lead.stream.jsonl", "subagents": [], "copy": "transcripts"}
+        else:
+            found = real.collect_transcripts(real.claude_config_dir(self.env), session, call)
+        write_json(call / "transcripts.json", found)  # a transcript not found is recorded, not raised
 
     def archive(self, session: str, work_call: Path, i: int) -> None:
         dest = Path(self.env["BENCH_BOUNDARY_PAST_EVENTS"]) / f"session-{i:02d}"
@@ -272,6 +340,9 @@ def options() -> argparse.ArgumentParser:
     p.add_argument("--max-turns", type=int, default=80)
     p.add_argument("--probe-turns", type=int, default=8)
     p.add_argument("--compact-window", type=int, default=100_000)
+    p.add_argument("--claude-version", type=real.version_arg,
+                   help="stop before any paid call unless claude --version is this (X.Y.Z)")
+    p.add_argument("--claude-bin", help="the Claude Code binary to run (default: claude on PATH)")
     return p
 
 
@@ -310,10 +381,8 @@ def run(args: argparse.Namespace, chosen: list[str]) -> None:
             if manifest is None or not manifest.is_file() or shutil.which("claude-mem") is None:
                 raise ValueError("--execute with arm D needs --claude-mem-plugin and the claude-mem launcher")
             args.claude_mem_plugin = args.claude_mem_plugin.resolve()
-        version = subprocess.run(
-            ["claude", "--version"], capture_output=True, check=True, timeout=30, text=True,
-        ).stdout.strip()
-        match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\s|$)", version)
+        version = real.pin_claude(args)
+        match = real.CLAUDE_VERSION.match(version)
         if match is None or tuple(map(int, match.groups())) < MIN_CLAUDE_VERSION:
             required = ".".join(map(str, MIN_CLAUDE_VERSION))
             raise ValueError(f"--execute needs Claude Code {required} or newer for cumulative receipts "
