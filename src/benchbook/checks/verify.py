@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4, uuid5
 
 from .. import config as localcfg
+from ..core.runner import Interrupted, _trap_signals
 from ..errors import BenchbookError, InvalidTransition
 from . import failures, rerun
 from .baseline import EarlyBaseline, classify_environment, count_tests, passed_elsewhere
@@ -39,7 +40,6 @@ from .declarations import DEFAULT_GUARD_PATHS, PIECE, Base, pin_changed, pinned,
 from .gitrepo import changed_paths, path_prefixes, resolve_commit, toplevel
 from .guard import MAX_GUARD_FILES, Integrity, integrity
 from .rerun import STATUSES, CheckResult, Prepared, _signals_held, check_env, failure_signature
-from .runner import Interrupted, _trap_signals
 
 if TYPE_CHECKING:
     from ..core.ledger import Ledger

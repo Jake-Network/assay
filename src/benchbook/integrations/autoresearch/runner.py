@@ -1,13 +1,13 @@
 """The autoresearch side of the runner: the time budget, results.tsv and the val_bpb default (§8 ④⑤⑧).
 
-Running the command itself is core (`benchbook.checks.runner`); its names are re-exported here for the callers that
+Running the command itself is core (`benchbook.core.runner`); its names are re-exported here for the callers that
 import them from this module."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from ...checks import runner as core
-from ...checks.runner import (
+from ...core import runner as core
+from ...core.runner import (
     DEFAULT_PARSE_REGEX,
     Interrupted,
     RunResult,

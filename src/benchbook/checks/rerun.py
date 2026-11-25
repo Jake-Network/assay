@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from ..config import CheckSpec, VerifyPrep
+from ..core.runner import Interrupted, _trap_signals, run_command
 from . import signature
 from .gitrepo import _git
-from .runner import Interrupted, _trap_signals, run_command
 
 MAX_FAILED_SHOWN = 50  # failing test ids kept on a result for the table; the signature is made from all of them
 STATUSES = ("ok", "fail", "timeout", "not_run")

@@ -13,8 +13,8 @@ import pytest
 from benchbook import Ledger
 from benchbook.checks import rerun
 from benchbook.checks import verify as checks
-from benchbook.checks.runner import Interrupted
 from benchbook.config import VerifyPrep, parse_verify
+from benchbook.core.runner import Interrupted
 from benchbook.errors import BenchbookError
 from tests.conftest import PY, git, make_project, make_repo, piece
 

@@ -22,10 +22,10 @@ from typing import Any
 
 import pytest
 
-from benchbook.checks import runner
 from benchbook.checks import verify as checks
-from benchbook.checks.runner import run_command
 from benchbook.code import pieces, pr
+from benchbook.core import runner
+from benchbook.core.runner import run_command
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition, LeaseLost
 from benchbook.hooks import spooler
 from tests.test_check_hooks import fixture, hook, observed, start_piece

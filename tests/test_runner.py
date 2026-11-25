@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from benchbook.checks import runner
-from benchbook.checks.runner import Interrupted, RunResult, run_command
+from benchbook.core import runner
+from benchbook.core.runner import Interrupted, RunResult, run_command
 
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals and process groups")
 
@@ -171,7 +171,7 @@ sys.exit(7)
 
 DRIVER = """import json, sys
 from pathlib import Path
-from benchbook.checks.runner import run_command
+from benchbook.core.runner import run_command
 
 cmd, cwd = sys.argv[1], Path(sys.argv[2])
 sys.stdout.write("before|")  # left in the text layer on purpose: the runner must flush it first

@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import CheckSpec
+from ..core.runner import Interrupted, forget_stopped, stop_commands
 from . import rerun, signature
 from .declarations import Base
 from .guard import Integrity
 from .rerun import MAX_FAILED_SHOWN, CheckResult, Prepared, _signals_held
-from .runner import Interrupted, forget_stopped, stop_commands
 
 if TYPE_CHECKING:
     from ..core.ledger import Ledger

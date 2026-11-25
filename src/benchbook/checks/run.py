@@ -240,7 +240,7 @@ def run(name: str, piece: str | None = None, approach: str | None = None, *, pro
     except NotRun as e:
         print(f"benchbook: check {name} not run: {e}", file=sys.stderr)
         return NOT_RUN
-    from .runner import Interrupted, run_command
+    from ..core.runner import Interrupted, run_command
 
     tmp = Path(tempfile.mkdtemp(prefix="benchbook-check-run-"))
     junit = tmp / f"{p.name}.junit.xml"
