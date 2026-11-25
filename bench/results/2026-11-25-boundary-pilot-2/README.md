@@ -47,8 +47,8 @@ sha256).
 | discarded (phase 2) | the phase-1 action's failing check run (expected the camel-to-kebab dead end) | The lead had recorded the right dead end with `benchbook discard`, but the claim carries only `piece:boltons-p2-camel-to-kebab`, which is outside the `--here` scope of the integration branch (`piece:boundary-work` and `file:` prefixes); the brief showed only the discarded approach left by the lead's own check run against the harness's injected change. |
 | discarded, finding (phase 1) | unknown, unknown | The lead recorded neither in phase 1 (it did in phase 2). The registered finding is stated in the task prompt only, so no worker could report it. A worker did report a real one (a failing doctest, c:0dfb18d1), which the restart brief did not show for the same scope reason. |
 
-So three misses come from the validity marks, two from the brief's scope on the integration branch, and two (one of
-them overlapping) from what the lead chose to record.
+So three misses come from the validity marks, one from the brief's scope on the integration branch, and two from
+what the lead did not record in phase 1.
 
 ## Conditions that differ from the registration
 
