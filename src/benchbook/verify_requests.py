@@ -127,12 +127,15 @@ def enqueue(data: dict[str, Any]) -> str:
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
     """role: the re-running agent's; when nothing decided the claim, the line says why the rest of it does not."""
+    from .checks import RETRY
     from .ids import short
     from .ledger import DECIDERS
     from .lookup import checked
 
     if run.environment:
         result = "environment failure"
+    elif record.retried_from is not None or run.retry == RETRY:  # not "re-run passed", which clears a merge
+        result = f"re-run failed ({(record.retried_signature or 'a check')[:120]}), then passed on a retry"
     else:
         result = "re-run passed" if run.all_passed and run.complete else "re-run failed"
     guard = ("tests weakened or check declarations changed; needs review"
@@ -148,6 +151,8 @@ def _result_line(run: Verification, record: Recorded, oracle: str | None = None,
         elif not run.complete:
             verdict += " (not every declared check ran)"
     ref = short("claim", record.claim_id) if record.claim_id else short("experiment", record.experiment_id)
+    if record.retried_from is not None:
+        ref += f"; failed run {short('experiment', record.retried_from)}"
     return (f"benchbook: {run.piece} {run.commit[:7]}: {result} ({run.total} checks, "
             f"{run.duration_ms / 1000:.1f}s), {guard}, checked: {verdict} ({ref})")
 
@@ -196,7 +201,7 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     if line is None:
         run, record = checks.verify(lg, piece, commit, repo=Path(data["repo"]), reported_by=reporter,
                                     trace_ref={"source": "agent-result", "report_sha256": data["report_sha256"]},
-                                    receipt_id=receipt)
+                                    receipt_id=receipt, retry=True)
         oracle = None
         if record.claim_id is not None:
             rows = lg.sql_internal(

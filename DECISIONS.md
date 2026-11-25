@@ -761,3 +761,14 @@ by hand, not a live session). Four are fixed; the fourth is not.
   completion at a commit among HEAD's newest 5,000 (one `git rev-list`, then one query); by commit rather than by
   branch name, since workers' branches are often deleted after the merge. Records of pieces merged long ago come
   back into scope too; the section limits keep the newest first.
+
+## After the third boundary pilot (2026-11-25)
+
+- **The automatic re-run retries a failure once.** Two of the pilot's four re-runs failed on boltons' socket timing
+  tests, outside the pieces, and passed in every other run, the lead's six included. A failure the retry does not
+  repeat is still not a pass: the all_pass rule keeps "runs that disagree are a person's call", so the retry decides
+  inconclusive, and verified needs a lead to invalidate the failed run (the existing way to discard a broken run)
+  before its own re-run decides. What changes is that a failure seen once leaves no discarded approach, which the
+  brief would list as a dead end of the piece. Only the hook's re-run retries, since a failure there costs the lead
+  a held merge; `check verify` by hand reports what it saw. The cost is one more run of the checks for every real
+  failure.

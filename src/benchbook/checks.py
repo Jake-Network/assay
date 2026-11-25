@@ -184,6 +184,9 @@ class Verification:
     # The failure signature of an attempt already in the ledger (a retried request finishing from the stored run):
     # its results keep only the statuses, so the signature is the recorded one.
     recorded_signature: str | None = None
+    # verify(retry=True): RETRIED_PASSED on a failed run whose immediate retry passed, RETRY on that retry,
+    # RETRIED_FAILED on a failed run whose retry failed too (stored as metrics.retry)
+    retry: str | None = None
 
     def signature(self) -> str | None:
         return self.recorded_signature if self.recorded_signature is not None else failure_signature(self.results)
@@ -250,6 +253,7 @@ class Verification:
             **({"prepared": prep} if self.prepared is not None and (prep := self.prepared.metrics()) else {}),
             **({"environment": True} if self.environment is not None else {}),
             **({"baseline_signature": self.baseline_signature} if self.baseline_signature else {}),
+            **({"retry": self.retry} if self.retry else {}),
         }
 
     def notes(self) -> str:
@@ -268,6 +272,8 @@ class Verification:
             n += f"; interrupted ({self.interrupted}) after {done} of {self.total} checks"
         if self.environment:
             n += f"; environment: {self.environment}; not counted against the piece"
+        if self.retry:
+            n += f"; {self.retry}"
         return n
 
 
@@ -298,6 +304,9 @@ class Recorded:
     discarded_id: UUID | None = None  # the discarded-approach claim this failed attempt is evidence for
     discarded_new: bool = False
     discarded_error: str | None = None  # why that claim could not be written (the attempt is recorded)
+    # verify(retry=True), when the run failed and its retry passed: the failed attempt and its signature
+    retried_from: UUID | None = None
+    retried_signature: str | None = None
 
 
 # ---------------------------------------------------------------------------------------------------- git
@@ -344,6 +353,9 @@ def config_at(repo: Path, sha: str) -> tuple[dict[str, Any], str] | None:
 MAX_SCOPE_PATHS = 20
 # A completion's payload.files: more changed files than this and the brief compares its directory prefixes instead.
 MAX_FILES = 200
+RETRIED_PASSED = "failed, then passed on a retry"
+RETRY = "a retry after a failed run"
+RETRIED_FAILED = "failed again on a retry"
 
 
 def _parent(prefix: str) -> str:
@@ -961,12 +973,19 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
            only: Sequence[str] | None = None, reported_by: str | None = None,
            report_file: Path | None = None, trace_ref: dict[str, Any] | None = None,
            decide: bool = True, claim: str | None = None,
-           receipt_id: UUID | None = None) -> tuple[Verification, Recorded]:
+           receipt_id: UUID | None = None, retry: bool = False) -> tuple[Verification, Recorded]:
     """Steps 1 to 4 (the CLI prints step 5). `lg` acts as the verifier. Raises the interruption, after cleaning up
     and recording, when the run was interrupted. trace_ref is stored on the attempt as given (a CI run's URL, say);
     decide=False records without deciding, even with lead authority. claim: the completion claim the run is evidence
     for (what `pr pieces --claims` found); it must be about this piece at this commit, and its reporter is the
-    implementer (reported_by, when also given, must name the same agent)."""
+    implementer (reported_by, when also given, must name the same agent).
+
+    retry: when every declared check ran and one failed (no environment failure, no weakened test), run them all
+    once more in a fresh worktree. A retry that passes records both attempts, the failed one without a discarded
+    approach, and decides on the retry: the runs disagree (inconclusive), which a lead settles by invalidating a
+    run it finds broken. One that fails too is noted on the failed attempt and recorded no further. The hook's
+    automatic re-run retries (verify_requests.process); in the third boundary pilot two of its four re-runs failed
+    once on socket timing tests outside the pieces, which became refutations and discarded approaches."""
     if not PIECE.fullmatch(piece):
         raise BenchbookError("piece: 1-100 characters without spaces")
     if "completion" not in lg.pack.claim_kinds:
@@ -1047,6 +1066,24 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
                      paths=scope, files=files)
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
+    if (retry and interrupted is None and v.run_status == "ok" and v.complete and not v.all_passed
+            and not integ.guard_weakened and not integ.checks_changed):
+        t1 = time.monotonic()
+        again, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], env, b.prep, Prepared())
+        if interrupted is None and again and all(r.status == "ok" for r in again):
+            v.retry = RETRIED_PASSED
+            first = _record(lg, v, reported_by, report, trace_ref, found, discard=False)
+            v2 = Verification(piece, sha, b, integ, again, int((time.monotonic() - t1) * 1000), None,
+                              declared=list(b.checks), paths=scope, files=files, retry=RETRY)
+            rec = _record(lg, v2, reported_by, report, trace_ref, found or first.claim_id, receipt_id=receipt_id)
+            rec.retried_from, rec.retried_signature, rec.seen_before = first.experiment_id, sig, seen
+            rec.outcome = _decide(lg, v2, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
+            return v2, rec
+        if interrupted is None:
+            v.retry = RETRIED_FAILED
+        else:  # the first run is complete and recorded as it is; the interruption is raised after that
+            _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
+            raise interrupted
     if interrupted is not None:
         try:
             _record(lg, v, reported_by, report, trace_ref, found)
@@ -1099,7 +1136,8 @@ def _from_stored(row: dict[str, Any], piece: str, commit: str, b: Base, scope: l
                         approach=str(approach) if approach else None,
                         declared=list(m.get("checks_declared") or []), environment=environment,
                         baseline_signature=m.get("baseline_signature"), paths=scope,
-                        recorded_signature=m.get("failure_signature"))
+                        recorded_signature=m.get("failure_signature"),
+                        retry=m.get("retry") if isinstance(m.get("retry"), str) else None)
 
 
 def _signal_name(e: BaseException | None) -> str | None:
@@ -1110,7 +1148,7 @@ def _signal_name(e: BaseException | None) -> str | None:
 
 def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report | None,
             trace_ref: dict[str, Any] | None = None, given: UUID | None = None, *,
-            receipt_id: UUID | None = None) -> Recorded:
+            receipt_id: UUID | None = None, discard: bool = True) -> Recorded:
     """Step 4. The claim is the implementer's (proposed, never decided here); the attempt and the link are the
     verifier's, so the ledger shows two different agents. given: a claim already checked by given_claim."""
     claim: tuple[UUID, bool] | None = None
@@ -1131,7 +1169,8 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
         if v.run_status == "ok" and (not v.all_passed or v.complete):
             rec.relation = "supports" if v.all_passed else "refutes"
             lg.link(r.id, rec.relation, rec.claim_id)
-    _discard(lg, v, rec)
+    if discard:
+        _discard(lg, v, rec)
     return rec
 
 

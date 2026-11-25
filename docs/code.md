@@ -367,6 +367,25 @@ used `verifier@<host>`, and whichever ran first decided whether the other could 
 passed and still decided nothing, its line says why after `checked: none`, for example
 `checked: none (recorded by a worker agent; a lead decides)`.
 
+The automatic re-run also retries a failure once. When every declared check ran, one failed, nothing guarded was
+weakened and `[checks]` did not change, it runs them all again in a fresh worktree. If the retry passes, both
+attempts are recorded (`metrics.retry`: `failed, then passed on a retry` on the first, `a retry after a failed
+run` on the second), the failed one leaves no discarded approach, and the retry decides **inconclusive** (the runs
+disagree). Its line reads `re-run failed (<signature>), then passed on a retry ... attempts disagree (c:…; failed
+run e:…)`. A lead who finds the failure is not the piece's (a flaky test, the machine) invalidates the failed run and
+runs `check verify` itself, which then decides from the passing runs:
+
+```bash
+benchbook --agent lead decide e:<failed run> invalidated --oracle human --rationale "flaky socket test, not the piece"
+benchbook --agent lead check verify <piece> <sha> --reported-by <worker>
+```
+
+If the retry fails too, the first attempt is recorded as before (refutes, a discarded approach) with `metrics.retry`
+`failed again on a retry`, and the retry itself is not recorded. In the third boundary pilot two of four re-runs
+failed once on socket timing tests outside the pieces; each became a refutation and a dead end in the brief, and the
+lead's own passing `check verify` (without `--reported-by`) decided nothing. `check verify` run by hand does not
+retry.
+
 `--json` adds `decision` (`verified`, `inconclusive` or null), `decision_reason`, `needs_person`, `evidence`
 and `decisions`. The exit code still says only whether every check passed.
 

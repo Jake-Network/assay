@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- The automatic re-run of a reported commit retries a failed run once. A retry that passes records both runs, leaves
+  no discarded approach and decides inconclusive (the runs disagree), so a lead can invalidate the failed run and
+  verify; one that fails too is recorded as one failed run, as before. In the third boundary pilot two re-runs failed
+  once on flaky socket tests outside the pieces and left refutations and dead ends nobody could undo.
 - A verified line whose files are the same at HEAD now ends in `· applies at HEAD (its files unchanged)`, not in
   nothing: in the third boundary pilot a new session's lead read the unmarked line of an unchanged piece as "HEAD
   moved, so it no longer applies".
