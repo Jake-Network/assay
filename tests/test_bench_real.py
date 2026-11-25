@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -219,6 +220,25 @@ def test_pin_claude_checks_the_number_and_warns_without_a_pin(tmp_path: Path,
     assert real.claude_bin(argparse.Namespace()) == "claude"
 
 
+@pytest.mark.parametrize("requested", [None, "./bin/claude"])
+def test_run_uses_the_pinned_executable_in_a_different_cwd_and_path(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requested: str | None) -> None:
+    monkeypatch.chdir(tmp_path)
+    claude = _fake_claude(tmp_path, "2.1.330")
+    monkeypatch.setenv("PATH", f"{claude.parent}{os.pathsep}{os.environ['PATH']}")
+    options = args(claude_bin=requested, claude_version="2.1.330")
+    assert real.pin_claude(options) == "2.1.330 (Claude Code)"
+
+    prepared = real.prepare("A", tmp_path / "trial", options)
+    shadow = _fake_claude(prepared.work, "2.1.331")
+    prepared.env["PATH"] = str(shadow.parent)
+    prepared.cmd[1:] = ["--version"]
+    real._capture(prepared, prepared.work.parent, 1)
+
+    assert prepared.cmd[0] == str(claude.resolve())
+    assert (prepared.work.parent / "lead.stream.jsonl").read_text() == "2.1.330 (Claude Code)\n"
+
+
 def _boundary_tasks(tmp_path: Path) -> Path:
     from tests.test_bench_boundary import task_manifest
 
@@ -247,7 +267,8 @@ def test_worker_models_are_counted_and_off_runs_listed_apart(tmp_path: Path) -> 
               assistant([{"type": "text", "text": "w"}], parent="t1", model="claude-haiku-5-5", mid="w1"),
               assistant([{"type": "tool_use", "name": "Bash", "id": "b", "input": {}}], parent="t1",
                         model="claude-haiku-5-5", mid="w1"),
-              assistant([{"type": "text", "text": "w"}], parent="t2", mid="w2")]
+              assistant([{"type": "text", "text": "w"}], parent="t2", mid="w2"),
+              assistant([{"type": "text", "text": "API error"}], parent="t2", model="<synthetic>", mid="e1")]
     assert real.model_counts(events) == ({"claude-haiku-5-5": 1, "claude-sonnet-5-5": 1}, {"(none)": 1, "haiku": 1})
 
     def row(config: str, run: int, **extra: object) -> dict[str, object]:

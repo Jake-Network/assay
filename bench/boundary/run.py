@@ -186,7 +186,18 @@ class Trial:
     def invoke(self, name: str, prompt: str, session: str, *, resume: bool,
                probe: bool = False) -> list[tuple[int, dict[str, Any]]]:
         path = self.target / name
-        events = self.batch.capture(self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe)
+        new_call = not path.exists()
+        try:
+            events = self.batch.capture(
+                self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe,
+            )
+        except BaseException:
+            if new_call and (path / "command.json").is_file():
+                try:
+                    self.transcripts(session, path)
+                except OSError as exc:
+                    print(f"could not preserve transcripts for {name}: {exc}", file=sys.stderr)
+            raise
         self.transcripts(session, path)
         measured = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
         self.run_data["calls"].append({**measured, "kind": "probe" if probe else "work"})

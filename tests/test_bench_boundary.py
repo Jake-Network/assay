@@ -220,8 +220,11 @@ def test_every_call_copies_its_session_transcripts(tmp_path: Path) -> None:
             (saved / "subagents" / "agent-a1.jsonl").write_text("{}\n", encoding="utf-8")
             (saved / "subagents" / "agent-a1.meta.json").write_text('{"agentType": "general-purpose"}',
                                                                     encoding="utf-8")
+        if target.name == "phase-02-timeout":
+            raise real.BenchRunError("Claude timed out")
+        subtype = "error" if target.name == "phase-02-receipt" else "success"
         events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
-                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01,
+                  {"type": "result", "subtype": subtype, "is_error": subtype == "error", "total_cost_usd": 0.01,
                    "modelUsage": {"m": {"inputTokens": 11, "outputTokens": 0}}}]
         (target / "lead.stream.jsonl").write_text(
             "".join(json.dumps({**e, "session_id": session}) + "\n" for e in events), encoding="utf-8")
@@ -235,7 +238,12 @@ def test_every_call_copies_its_session_transcripts(tmp_path: Path) -> None:
     trial.target.mkdir()
     trial.invoke("phase-01", "work", "s-1", resume=False)
     trial.invoke("phase-01-action", "act", "s-1", resume=True)
-    for name in ("phase-01", "phase-01-action"):
+    with pytest.raises(real.BenchRunError, match="Claude timed out"):
+        trial.invoke("phase-02-timeout", "work", "s-2", resume=False)
+    with pytest.raises(real.BenchRunError, match="Claude invocation ended with error"):
+        trial.invoke("phase-02-receipt", "work", "s-3", resume=False)
+    assert len(trial.run_data["calls"]) == 2
+    for name in ("phase-01", "phase-01-action", "phase-02-timeout", "phase-02-receipt"):
         copied = trial.target / name / "transcripts"
         assert json.loads((copied / "lead.jsonl").read_text()) == {"call": name}
         assert {p.name for p in (copied / "subagents").iterdir()} == {"agent-a1.jsonl", "agent-a1.meta.json"}

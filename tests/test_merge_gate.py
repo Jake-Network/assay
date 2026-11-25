@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from benchbook import check_hooks, merge_gate, session_notes
+from benchbook import check_hooks, hooks, merge_gate, session_notes
 from tests.conftest import CONFIG, git, make_repo, piece
 
 SESSION = "lead-session"
@@ -46,6 +46,10 @@ WEAK = ("benchbook: media abc1234: re-run passed (2 checks, 1.0s), tests weakene
     ("git merge media", [(None, "media")]),
     ("git merge --no-ff -m 'Merge media' media && git branch -d media", [(None, "media")]),
     ("cd x; git -C repo merge -X theirs a b", [("repo", "a"), ("repo", "b")]),
+    ("git merge -S media", [(None, "media")]),
+    ("git merge -SDEADBEEF media", [(None, "media")]),
+    ("git merge --gpg-sign media", [(None, "media")]),
+    ("git merge --gpg-sign=DEADBEEF media", [(None, "media")]),
     ("git merge --abort", []),
     ("git log --merges", []),
     ("echo 'git merge media'", []),
@@ -71,6 +75,59 @@ def test_a_verdict_that_needs_review_holds_the_merge_once(setup: dict[str, Any])
     assert out["permissionDecision"] == "deny" and out["permissionDecisionReason"].startswith(WEAK)
     assert "merge again to go ahead" in out["permissionDecisionReason"]
     assert call(setup, "git merge media") is None
+
+
+def test_a_passing_but_disputed_verdict_holds_a_signed_merge(setup: dict[str, Any]) -> None:
+    disputed = PASSED.replace("not weakened,", "not weakened; attempts disagree,").replace("checked: re-run",
+                                                                                         "checked: none")
+    setup["verdict"].write_text(disputed + "\n")
+    answer = call(setup, "git merge -S media")
+    assert answer is not None
+    out = answer["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny" and out["permissionDecisionReason"].startswith(disputed)
+
+
+def test_a_new_report_displaces_an_older_environment_verdict(setup: dict[str, Any]) -> None:
+    notes, sha = setup["notes"], setup["sha"]
+    commit_verdict = setup["verdict"].name
+    old_names = [commit_verdict, "verify-old-report.txt"]
+    new_names = [commit_verdict, "verify-new-report.txt"]
+    delivered = notes / session_notes.DELIVERED
+    delivered.mkdir()
+    stale = PASSED.replace("re-run passed", "environment failure")
+    (delivered / old_names[1]).write_text(stale + "\n")
+    merge_gate.mark(notes, sha, "media", old_names)
+    merge_gate.mark(notes, sha, "media", new_names)
+
+    answer = call(setup, "git merge media", wait=0)
+
+    assert answer is not None
+    reason = answer["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "has not reported" in reason and stale not in reason
+    mark = merge_gate.pending_dir(notes) / f"{sha}.json"
+    assert json.loads(mark.read_text())["verdicts"] == new_names
+
+
+def test_a_report_replaced_while_waiting_uses_the_new_verdict(setup: dict[str, Any],
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    notes, sha = setup["notes"], setup["sha"]
+    commit_verdict = setup["verdict"].name
+    old_names = [commit_verdict, "verify-old-report.txt"]
+    new_names = [commit_verdict, "verify-new-report.txt"]
+    merge_gate.mark(notes, sha, "media", old_names)
+
+    def deliver_both(_: float) -> None:
+        with hooks._lock(notes, blocking=True):
+            merge_gate.mark(notes, sha, "media", new_names)
+            (notes / old_names[1]).write_text("old environment failure\n")
+            (notes / new_names[1]).write_text("new environment failure\n")
+
+    monkeypatch.setattr(merge_gate.time, "sleep", deliver_both)
+    answer = call(setup, "git merge media", wait=10)
+
+    assert answer is not None
+    assert answer["hookSpecificOutput"]["permissionDecisionReason"].startswith("new environment failure")
+    assert (notes / old_names[1]).exists()
 
 
 def test_a_verdict_arriving_while_the_merge_waits(setup: dict[str, Any]) -> None:
