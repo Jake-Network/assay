@@ -370,15 +370,18 @@ passed and still decided nothing, its line says why after `checked: none`, for e
 The automatic re-run also retries a failure once. When every declared check ran, one failed, nothing guarded was
 weakened and `[checks]` did not change, the failed run is recorded first (`metrics.retry`: `failed; retried`), with
 no discarded approach and under an id derived from the request's receipt, so a request interrupted during the retry
-only retries the next time. Then every declared check runs again in a fresh worktree, and the retry is recorded
-under the receipt with `metrics.retry_of` (the failed run) and `metrics.first_signature`:
+only retries the next time. Then every declared check runs again in a fresh worktree. If guarded files changed,
+the retry's own JUnit counts are compared with the merge-base. The retry is recorded under the receipt with
+`metrics.retry_of` (the failed run) and `metrics.first_signature`:
 
 | the retry | `metrics.retry` | line | decision, dead end |
 |---|---|---|---|
 | passes | `passed on a retry after a failed run` | `re-run failed (<signature>), then passed on a retry ... attempts disagree (c:…; failed run e:…)` | **inconclusive** (the runs disagree); none |
 | fails the same way | `failed again on a retry` | `re-run failed, and again on a retry ... (c:…; runs e:…, e:…)` | none decided; the retry leaves the discarded approach |
 | fails differently | `failed again on a retry, differently` | `... and again on a retry with a different failure ...` | none decided; no dead end, since neither failure repeated |
-| cannot run (its prepare step failed) | (the failed run's `failed; retried`) | `re-run failed` | as without a retry: the failed run leaves the dead end |
+| cannot run (its prepare step failed) | `retry could not run` | `re-run failed` | the original failure is the only check evidence and leaves the dead end. Processing the same receipt again returns that result |
+
+A passing retry that ran fewer tests requires a person's review.
 
 A lead who finds a failure is not the piece's (a flaky test, the machine) invalidates the failed run and runs
 `check verify` itself, which then decides from the passing runs:

@@ -953,22 +953,83 @@ def test_an_interrupted_retry_is_run_again_by_the_next_try(tmp_path: Path, vtmp:
     assert len(attempts_of(lead_lg, sha)) == 2  # the first run was not run again
 
 
-def test_a_retry_that_could_not_run_leaves_the_failure_as_it_was(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
-                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("initial", ["completed", "interrupted", "legacy"])
+def test_a_retry_that_could_not_run_leaves_the_failure_as_it_was(
+        tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch,
+        initial: str) -> None:
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    real, calls = checks.run_checks, []
+    receipt, real, calls = uuid.uuid4(), checks.run_checks, []
 
-    def no_retry(repo: Path, commit: str, specs: Any, *args: Any) -> Any:
+    def no_retry(repo: Path, commit: str, specs: Any, env: Any, prep: Any, prepared: checks.Prepared) -> Any:
         calls.append(1)
         if len(calls) == 2:  # the retry's prepare step failed: nothing ran
+            prepared.error = "preparation unavailable"
             return [checks.CheckResult(s.name, "not_run") for s in specs], None
-        return real(repo, commit, specs, *args)
+        return real(repo, commit, specs, env, prep, prepared)
 
     monkeypatch.setattr(checks, "run_checks", no_retry)
-    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=uuid.uuid4())
+    if initial == "interrupted":
+        def crash(*args: Any) -> None:
+            raise KeyboardInterrupt()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(checks, "_discard", crash)
+            with pytest.raises(KeyboardInterrupt):
+                checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+        assert not discarded_claims(lead_lg)
+    elif initial == "legacy":
+        record = checks._record
+
+        def record_legacy(lg: Ledger, run: checks.Verification, *args: Any, **kwargs: Any) -> checks.Recorded | None:
+            if run.retry != checks.RETRY_UNAVAILABLE:
+                return record(lg, run, *args, **kwargs)
+            return None
+
+        with monkeypatch.context() as patch:
+            patch.setattr(checks, "_record", record_legacy)
+            checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    else:
+        checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert len(calls) == 2
     assert not v.all_passed and v.retry == checks.RETRYING and rec.discarded_id is not None
+    assert rec.experiment_id == uuid.uuid5(receipt, "first run")
     assert [link["relation"] for link in links_to(lead_lg, rec.claim_id)] == ["refutes"]
+    if initial == "legacy":
+        assert len(attempts_of(lead_lg, sha)) == 1
+    else:
+        stopped = row(lead_lg, "experiments", receipt)
+        assert stopped["run_status"] == "error" and stopped["metrics"]["retry"] == checks.RETRY_UNAVAILABLE
+        assert stopped["metrics"]["retry_of"] == str(rec.experiment_id)
+
+
+def test_retry_compares_its_own_junit_counts(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
+                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = make_repo(tmp_path / "repo")
+    sha = piece(repo, "p", {"tests/test_added.py": TEST_EXTRA})
+    real, calls = checks.run_checks, []
+
+    def run(repo: Path, commit: str, specs: Any, *args: Any) -> Any:
+        if commit != sha:
+            return real(repo, commit, specs, *args)
+        calls.append(1)
+        unit = (checks.CheckResult("unit", "fail", exit_code=1, tests=2) if len(calls) == 1
+                else checks.CheckResult("unit", "ok", tests=1))
+        return [unit, checks.CheckResult("value", "ok")], None
+
+    monkeypatch.setattr(checks, "run_checks", run)
+    receipt = uuid.uuid4()
+    run_result, record = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert run_result.retry_of is not None
+    assert row(lead_lg, "experiments", run_result.retry_of)["metrics"]["tests_after"] == 2
+    assert (run_result.integrity.tests_before, run_result.integrity.tests_after) == (2, 1)
+    assert run_result.integrity.fewer_tests_in == ["unit"]
+    assert record.outcome is not None and record.outcome.person
+    replay, replayed = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert replay.integrity.fewer_tests_in == ["unit"]
+    assert replayed.outcome is not None and replayed.outcome.person
+    assert len(calls) == 2
 
 
 def test_check_verify_without_retry_runs_once(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:

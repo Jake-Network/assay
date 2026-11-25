@@ -37,7 +37,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4, uuid5
@@ -360,6 +360,7 @@ RETRYING = "failed; retried"
 RETRY_PASSED = "passed on a retry after a failed run"
 RETRY_FAILED = "failed again on a retry"
 RETRY_FAILED_OTHER = "failed again on a retry, differently"
+RETRY_UNAVAILABLE = "retry could not run"
 
 
 def _parent(prefix: str) -> str:
@@ -1025,26 +1026,40 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     scope = path_prefixes(changed)
     files = changed if len(changed) <= MAX_FILES else []
     found = None if given is None else given[0]
-    if receipt_id is not None and (stored := _stored_attempt(lg, receipt_id, piece, sha)) is not None:
+    first_id = uuid5(receipt_id, "first run") if receipt_id is not None else None
+    record_id = receipt_id
+    stored = _stored_attempt(lg, receipt_id, piece, sha) if receipt_id is not None else None
+    metrics = stored["metrics"] if stored is not None else None
+    if isinstance(metrics, dict) and metrics.get("retry") == RETRY_UNAVAILABLE:
+        # A terminal prepare failure leaves the original run as the check evidence.
+        assert first_id is not None
+        record_id = first_id
+        stored = _stored_attempt(lg, first_id, piece, sha)
+        if stored is None:
+            raise BenchbookError(f"verification receipt {receipt_id} is missing its first run")
+    elif stored is None and retry and first_id is not None:
+        if first := _stored_attempt(lg, first_id, piece, sha):
+            if _linked_discard(lg, first_id):
+                # An older processor may have finished an unavailable retry before terminal receipts existed.
+                stored, record_id = first, first_id
+            else:
+                v = _from_stored(first, piece, sha, b, scope)
+                v.files = files
+                return _retry(lg, v, repo, check_env(), reported_by, report, trace_ref, found,
+                              first_id, receipt_id, decide)
+    if stored is not None:
         # A retry of a request whose attempt is already in the ledger (the result cache was not written, a later
         # step failed): finish the links and the decision from that attempt, never from a new run, which could
         # disagree with what is stored.
         v = _from_stored(stored, piece, sha, b, scope)
         v.files = files
         sig = v.signature()
-        seen = [p for p in failures.earlier(lg, piece, sig) if p.id != receipt_id] if sig else []
-        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id,
-                      discard=v.retry in (None, RETRY_FAILED))
+        seen = [p for p in failures.earlier(lg, piece, sig) if p.id != record_id] if sig else []
+        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=record_id,
+                      discard=record_id != receipt_id or v.retry in (None, RETRY_FAILED))
         rec.seen_before = seen
         rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
         return v, rec
-    first_id = uuid5(receipt_id, "first run") if receipt_id is not None else None
-    if retry and first_id is not None and (stored := _stored_attempt(lg, first_id, piece, sha)) is not None:
-        # The failed first run of an earlier try of this request, recorded before its retry ran (an interruption or
-        # a crash during the retry): run the retry now.
-        v = _from_stored(stored, piece, sha, b, scope)
-        v.files = files
-        return _retry(lg, v, repo, check_env(), reported_by, report, trace_ref, found, first_id, receipt_id, decide)
     integ = integrity(repo, b, sha, moved)
     t0 = time.monotonic()
     prepared = Prepared()
@@ -1103,8 +1118,8 @@ def _retry(lg: Ledger, v: Verification, repo: Path, env: dict[str, str], reporte
       is not the piece's invalidates v, and its own check verify then decides from the passing runs.
     - It fails the same way: the retry leaves the discarded approach v did not, and nothing is decided.
     - It fails differently: no discarded approach either, since neither failure repeated.
-    - It could not run (its prepare step failed) or was interrupted: v stands as it would without a retry (a
-      discarded approach, no retry recorded); an interruption is raised, and a later try of the request retries."""
+    - It could not run: record the failed preparation under the receipt, then finish v as the only check evidence.
+    - It was interrupted: raise the interruption, so a later try of the request can resume."""
     v.retry = RETRYING
     first = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=first_id, discard=False)
     prep = Prepared()
@@ -1112,16 +1127,24 @@ def _retry(lg: Ledger, v: Verification, repo: Path, env: dict[str, str], reporte
     again, interrupted = run_checks(repo, v.commit, [v.base.checks[n] for n in v.declared], env, v.base.prep, prep)
     if interrupted is not None:
         raise interrupted
+    integ = replace(v.integrity, tests_before=None, tests_after=None, fewer_tests_in=[])
+    unavailable = prep.error is not None or not again or any(r.status == "not_run" for r in again)
+    if not unavailable and integ.guard_files and v.commit != v.base.merge_base:
+        if stopped := count_tests(repo, v.base, again, integ, env):
+            raise stopped
+    sig = v.signature()
+    v2 = Verification(v.piece, v.commit, v.base, integ, again, int((time.monotonic() - t0) * 1000), None,
+                      declared=list(v.declared), paths=v.paths, files=v.files, prepared=prep,
+                      retry_of=first.experiment_id, first_signature=sig)
     no_decision = Outcome(None, "recorded without a decision (--no-decide)")
-    if prep.error is not None or not again or any(r.status == "not_run" for r in again):
+    if unavailable:
+        v2.environment = prep.error or "retry did not run every declared check"
+        v2.retry = RETRY_UNAVAILABLE
+        _record(lg, v2, reported_by, report, trace_ref, found, receipt_id=receipt_id, discard=False)
         _discard(lg, v, first)
         first.seen_before = seen or []
         first.outcome = _decide(lg, v, first) if decide else no_decision
         return v, first
-    sig = v.signature()
-    v2 = Verification(v.piece, v.commit, v.base, v.integrity, again, int((time.monotonic() - t0) * 1000), None,
-                      declared=list(v.declared), paths=v.paths, files=v.files, prepared=prep,
-                      retry_of=first.experiment_id, first_signature=sig)
     v2.retry = (RETRY_PASSED if v2.all_passed else RETRY_FAILED if v2.signature() == sig else RETRY_FAILED_OTHER)
     rec = _record(lg, v2, reported_by, report, trace_ref, found, receipt_id=receipt_id,
                   discard=v2.retry == RETRY_FAILED)
@@ -1148,6 +1171,13 @@ def _stored_attempt(lg: Ledger, receipt_id: UUID, piece: str, commit: str) -> di
     if (row["config"] or {}).get("piece") != piece or row["code_ref"] != commit:
         raise BenchbookError(f"the experiment receipt {receipt_id} records another piece or commit")
     return row
+
+
+def _linked_discard(lg: Ledger, attempt: UUID) -> bool:
+    return bool(lg.sql_internal(
+        "SELECT 1 FROM benchbook.links l JOIN benchbook.claims c ON c.project_id = l.project_id AND c.id = l.dst_id"
+        " WHERE l.project_id = %s AND l.src_id = %s AND l.src_type = 'experiment' AND l.dst_type = 'claim'"
+        " AND l.relation = 'supports' AND 'discarded' = ANY(c.tags) LIMIT 1", (lg.project_id, attempt)))
 
 
 def _from_stored(row: dict[str, Any], piece: str, commit: str, b: Base, scope: list[str]) -> Verification:
