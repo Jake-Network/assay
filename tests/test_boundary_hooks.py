@@ -697,6 +697,37 @@ def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, mo
     assert launches[-1] == (spool, hooks.VERIFY)
 
 
+@pytest.mark.parametrize("change", ["text", "reporter"])
+def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
+    from benchbook import hooks, session_notes
+    from benchbook.verify_requests import enqueue
+
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    repo = make_repo(tmp_path / "repo")
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    first = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    same = fixture("post_tool_use_agent.json", repo)
+    same["tool_response"]["content"][0]["text"] = f"  {first}\n"
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["session_id"] = same["session_id"]
+    stop["last_assistant_message"] = first
+    different = fixture("post_tool_use_agent.json", repo)
+    different["tool_response"]["content"][0]["text"] = first
+    if change == "text":
+        different["tool_response"]["content"][0]["text"] = f"Checked again.\n{first}"
+    else:
+        different["tool_input"]["subagent_type"] = "another-worker"
+
+    assert not enqueue(stop)
+    assert f"re-running the checks of media-upload at {sha[:7]}" in enqueue(different)
+    assert not enqueue(same)  # its SubagentStop already queued it even though the notice is delivered
+    assert not session_notes.deliver(same["session_id"])
+    assert len(list(hooks._spool_dir().glob("*.json"))) == 2
+
+
 # ------------------------------------------------------------------------------------------- who decides a re-run
 
 

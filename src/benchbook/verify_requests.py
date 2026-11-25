@@ -90,33 +90,39 @@ def enqueue(data: dict[str, Any]) -> str:
     queued, said = notes / name, notes / session_notes.DELIVERED / name
     stop = data.get("hook_event_name") == "SubagentStop"
     spool = None
-    # Claude Code may report a foreground Agent in both hooks. The note suppresses a second notice, and a
-    # waiting SubagentStop note also proves its request was queued. Publish that note only after the spool write.
+    # Keep one display notice per commit, but only suppress a foreground request if SubagentStop queued this
+    # report for this writer. Another report of the same commit may need a fresh run after an environment failure.
+    report_hash = hashlib.sha256(report.encode()).hexdigest()
     try:
         with hooks._lock(notes, blocking=True):
             target_spool = hooks._spool_dir()
-            if not stop and queued.exists():
-                if target_spool.is_dir():
-                    spool = target_spool  # recover if SubagentStop exited before launching the processor
+            proof_key = hashlib.sha256(json.dumps([name, target_spool.name, reporter, report.strip()]).encode())
+            proof = notes / f"queued-{proof_key.hexdigest()}.request"
+            if stop or not proof.is_file() or not target_spool.is_dir():
+                target_spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+                request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
+                           "repo": str(where.repo), "report_sha256": report_hash}
+                hooks._write_spool(target_spool, {"event": "verify-request", "project": where.project, "accepted": True,
+                                                 "data": request})
+            spool = target_spool
+
+            if stop:
+                session_notes.write_note(proof, "queued")
+                if not queued.exists() and not said.exists():
+                    session_notes.write_note(queued, line)
+                return ""
+
+            proof.unlink(missing_ok=True)
+            if queued.exists():
                 said.parent.mkdir(exist_ok=True)
                 with suppress(FileNotFoundError):  # another lead hook may have delivered it
                     os.replace(queued, said)
                     return line
                 return ""
-
-            target_spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-            request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
-                       "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
-            hooks._write_spool(target_spool, {"event": "verify-request", "project": where.project, "accepted": True,
-                                             "data": request})
-            spool = target_spool
-            if not queued.exists() and not said.exists():
-                if stop:
-                    session_notes.write_note(queued, line)
-                else:
-                    said.parent.mkdir(exist_ok=True)
-                    session_notes.write_note(said, line)
-                    return line
+            if not said.exists():
+                said.parent.mkdir(exist_ok=True)
+                session_notes.write_note(said, line)
+                return line
             return ""
     finally:
         if spool is not None:  # a note write can fail after the request has already been queued
