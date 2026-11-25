@@ -474,7 +474,8 @@ def test_only_the_piece_changed_since_its_check_is_marked(db_url: str, code: str
     out = compile_brief(lg, None, 2000, log=False, repo=repo)
     base = changed["base"][:12]
     assert _line(out, f"media-upload at {base}").endswith("checked: person) · changed since (2 commits)")
-    assert _line(out, f"auth-refresh at {base}").endswith("checked: person)")  # unchanged: no mark
+    # unchanged: said so, since the third boundary pilot's lead read no mark as "HEAD moved, so it no longer applies"
+    assert _line(out, f"auth-refresh at {base}").endswith("checked: person) · applies at HEAD (its files unchanged)")
     assert _line(out, "old-import at 999999999999").endswith(" · commit not in this checkout")
     discarded = out.split("## Discarded approaches", 1)[1].split("\n## ", 1)[0].splitlines()[1:3]
     assert short("claim", changed["d_keep"]) in discarded[0] and not discarded[0].endswith("since")

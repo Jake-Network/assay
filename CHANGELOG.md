@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- A verified line whose files are the same at HEAD now ends in `· applies at HEAD (its files unchanged)`, not in
+  nothing: in the third boundary pilot a new session's lead read the unmarked line of an unchanged piece as "HEAD
+  moved, so it no longer applies".
 - `brief --here` and the boundary hooks also cover the pieces merged into HEAD (a completion at a commit in HEAD's
   history): their findings and dead ends, tagged with the piece, were outside an integration branch's scope. In the
   second boundary pilot this hid the lead's own `benchbook discard` and a worker's finding from the next session.

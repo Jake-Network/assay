@@ -700,8 +700,9 @@ merge marked the other piece changed. A line whose paths changed ends in
 `· changed since (2 commits)` (the commits since that touch those paths); one whose commit this checkout lacks ends
 in `· commit not in this checkout`; one whose commit exists but is not in HEAD's history (a piece's branch read from
 the base, or from the lead's branch before the merge) ends in `· not merged into this branch`, since its paths
-differ without any commit having changed them; an unchanged line has no mark. A squash-merged piece has no mark while
-its paths match, and `not merged into this branch` once a later commit changes them. A discarded approach whose
+differ without any commit having changed them; an unchanged line ends in `· applies at HEAD (its files unchanged)`.
+Before the third boundary pilot an unchanged line had no mark, and a new session's lead read the bare line as "HEAD
+moved, so the verification no longer applies". A squash-merged piece reads `applies at HEAD` while its paths match, and `not merged into this branch` once a later commit changes them. A discarded approach whose
 failing test file (the part of the signature before `::`) changed since the commit it failed at, in HEAD's history,
 ends in `· test changed since` and
 moves to the end of its section: the failure may no longer hold. Only the lines shown are compared (at most 8 per

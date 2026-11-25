@@ -49,6 +49,9 @@ GIT_TIMEOUT = 2.0  # seconds per git call of the validity check (T10)
 NOT_IN_CHECKOUT = "commit not in this checkout"
 NOT_MERGED = "not merged into this branch"
 NOT_IN_HEAD = (NOT_IN_CHECKOUT, NOT_MERGED)  # marks that say nothing about what changed since the commit
+# A verified piece whose files are the same at HEAD. Without it the third boundary pilot's lead read an unmarked line
+# as "HEAD moved, so the verification no longer applies".
+UNCHANGED = "applies at HEAD (its files unchanged)"
 _TEST_FILE = re.compile(r"([\w./-]+?)::")
 FETCH = 200  # rows read per section; the section's total counts all of them
 FILE_TAG = "file:"
@@ -244,13 +247,17 @@ def merged_commits(repo: Path) -> list[str]:
 
 
 def validity(repo: Path, commit: str | None, paths: Sequence[str]) -> str | None:
-    """T10: whether what was checked at commit still holds at HEAD for paths. None: unchanged (or unknown, when there
-    is nothing to compare or git did not answer in time); otherwise the mark the brief line carries."""
+    """T10: whether what was checked at commit still holds at HEAD for paths: the mark the brief line carries
+    (UNCHANGED when the paths are the same at HEAD), or None when there is nothing to compare or git did not answer
+    in time."""
     if not commit or not paths:
         return None
     if _git_ok(repo, "cat-file", "-e", f"{commit}^{{commit}}") != 0:
         return NOT_IN_CHECKOUT
-    if _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *paths) != 1:
+    same = _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *paths)
+    if same == 0:
+        return UNCHANGED
+    if same != 1:
         return None
     if _git_ok(repo, "merge-base", "--is-ancestor", commit, "HEAD") == 1:
         # The paths differ because HEAD never had this commit (a piece's branch read from the base or the lead's
@@ -370,7 +377,7 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         for r in discarded[: limits["discarded"]]:
             pl = r["payload"] or {}
             files = test_files(pl.get("signature"))
-            if files and validity(repo, pl.get("commit"), files) not in (None, *NOT_IN_HEAD):
+            if files and validity(repo, pl.get("commit"), files) not in (None, UNCHANGED, *NOT_IN_HEAD):
                 marks[r["id"]] = "test changed since"
                 stale.append(r)
         if stale:  # an approach whose failing test changed since goes to the end of its section
