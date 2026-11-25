@@ -385,7 +385,7 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
 # The plugin's files as of its version. Claude Code keeps an installed version's cached files, so a change under
 # integrations/claude-code/ reaches users only with a new version in plugin.json: change a file, and this fails until
 # the version is bumped and the pair updated (docs/claude-code.md, "Bump version").
-PLUGIN_RELEASE = ("0.2.1", "2c7879e8db4f3b0a21436680523696b4a6d9efbbe1f5981c33d27de9f154d785")
+PLUGIN_RELEASE = ("0.2.2", "0acc8fe993651d5865f2ee2c09c20462ed065305336bef00ef068036e52f5b5e")
 
 
 def test_the_plugin_version_moves_with_its_files() -> None:

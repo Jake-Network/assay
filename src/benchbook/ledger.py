@@ -664,7 +664,7 @@ class Ledger:
         if status not in ("done", "failed"):
             raise BenchbookError("status must be done or failed")
         if len(summary) > 1000:
-            raise ValidationFailed(["summary: at most 1000 characters (2-3 sentences); details belong in records"])
+            raise ValidationFailed(["summary: at most 1000 characters; details belong in records"])
         row = conn.execute(
             "UPDATE benchbook.tasks SET status=%s, summary=%s, lease_expires_at=NULL, updated_at=clock_timestamp()"
             " WHERE project_id=%s AND id=%s AND status='claimed' AND lease_owner=%s RETURNING *",
