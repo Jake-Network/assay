@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --all-groups
-      - run: uv run ruff check src tests bench examples
+      - run: uv run ruff check src tests bench examples scripts
       - run: uv run mypy src/benchbook
 
   test:
