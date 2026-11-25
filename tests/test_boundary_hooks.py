@@ -751,3 +751,49 @@ def test_under_a_token_the_re_run_is_the_tokens_agent(role: str, checked: str, c
     assert author["author"] == "tok-agent"
     assert not lg.sql_internal("SELECT 1 FROM benchbook.agents WHERE project_id = %s AND id = %s",
                                (code, checks.default_rerunner()))
+
+
+# ------------------------------------------------------------------------------------------- the lead's own records
+
+def test_a_code_projects_session_start_guides_the_lead_even_with_an_empty_ledger(
+        db_url: str, code: str, env: Path, capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Arm F's lead in the boundary pilot had no skill: it never asked its workers for findings and recorded no dead
+    end. A new (not resumed) session in a code project now starts with how to."""
+    cfg = (CONFIG.replace('project = "ignored"', f'project = "{code}"')
+           + '\n[report]\nout_of_scope_heading = "Out of scope"\n')
+    repo = make_repo(env / "repo", cfg)
+    text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
+    assert text.startswith("benchbook records this repository's checks and reports.")
+    assert "under a `## Out of scope` heading" in text and "benchbook --agent lead discard <piece>" in text
+    assert "# benchbook brief" not in text  # the ledger is empty: the guide alone
+    resumed = {**fixture("session_start_startup.json", repo), "source": "resume"}
+    assert not run("session-start", resumed, capsys, monkeypatch)
+
+
+def test_the_leads_dead_ends_and_findings_reach_the_brief(db_url: str, code: str, env: Path,
+                                                          capsys: pytest.CaptureFixture[str],
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_code_brief import SCRIPT
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    cli_env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "XDG_STATE_HOME": str(env / "state")}
+
+    def cli(*args: str) -> str:
+        p = subprocess.run([SCRIPT, "--agent", "lead", *args], capture_output=True, text=True, cwd=repo,
+                           timeout=120, env=cli_env)
+        assert p.returncode == 0, p.stderr
+        return p.stdout
+
+    assert "recorded" in cli("discard", "camel-to-kebab", "--approach", "regex-split",
+                             "--why", "re.split drops the acronym boundary in HTTPServer")
+    assert "already recorded" in cli("discard", "camel-to-kebab", "--approach", "regex-split",
+                                     "--why", "re.split drops the acronym boundary in  HTTPServer")
+    assert "recorded" in cli("finding", "add", "strutils.slugify keeps a trailing dash", "--file",
+                             "boltons/strutils.py")
+    text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
+    discarded = text.split("## Discarded approaches")[1].split("\n## ")[0]
+    assert "regex-split on camel-to-kebab: noted: re.split drops the acronym boundary in HTTPServer" in discarded
+    assert "×1" in discarded
+    findings = text.split("## Open out-of-scope findings")[1].split("\n## ")[0]
+    assert "strutils.slugify keeps a trailing dash" in findings and "boltons/strutils.py" in findings

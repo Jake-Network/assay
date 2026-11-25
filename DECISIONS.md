@@ -726,3 +726,24 @@ by hand, not a live session). Four are fixed; the fourth is not.
   arm F and the B1 live check, after the paid measurements; the gate's default is not changed without that.
 - **Stop hook: not yet.** Whether a lead ends its turn with a verdict still waiting is to be seen in the live check
   (after the paid measurements end) and arm F's streams; a Stop hook that blocks once is added only if it happens.
+
+## After the boundary pilot (2026-11-25)
+
+- **A merge waits for its verdict (the merge gate).** Arm F's lead merged all four pieces before their verdicts;
+  the docs already said to merge after the verdict line. Of the three options (docs only, a hook that holds the
+  merge, a `piece merge` command that waits) the hook was chosen: it acts where the merge happens and asks nothing
+  new of the lead. It waits up to 30 s (a re-run took 12-13 s) and holds a merge at most once per commit, so the
+  lead and a person stay able to merge; it runs only for `git merge` through the hook's `if`, so the 35 ms start-up
+  is not added to every Bash call. A merge the parser misses (`cd x && git merge` in another checkout) is not held.
+- **Stop hook: still not done.** No lead in the pilot ended its turn with a verdict waiting: each verdict came as
+  the next tool result of the same turn. The merge came first instead, which the gate covers.
+- **B3: the completion gate stays opt-in, documented.** Arm F merged four pieces with no false completion
+  (false_done 0/4), so there is no case for gating every branch; docs/code.md already tells the lead to run
+  `piece start` per worker.
+- **A lead records its own dead ends and findings, and is told how at session start.** The pilot's probes asked
+  for dead ends and findings that lived only in prompts and the lead's last message; benchbook recorded neither,
+  because it records dead ends from failed check runs and findings from worker reports. Reading the lead's own
+  messages for them (as `[report]` reads a worker's) was not done: free text would be recorded as findings by
+  mistake, and every one costs brief space. Instead two commands write them on purpose, and a code project's
+  session start gives a four-line guide even with an empty ledger, since arm F's lead loads no skill and a first
+  session gets no brief.

@@ -346,20 +346,49 @@ def _brief_or_none(w: Where, event: str) -> str:
     return brief
 
 
+def lead_guide(data: dict[str, Any], w: Where) -> str:
+    """What a lead needs to know to use benchbook in a swarm, at a session's start (not a resume: it is still in the
+    context) in a code project ([checks] declared). Given even when the ledger is empty: a first session's lead
+    learns it nowhere else (the boundary pilot's arm F lead had no skill, and its workers reported no findings and it
+    recorded no dead ends)."""
+    if data.get("source") == "resume" or w.repo is None:
+        return ""
+    try:
+        cfg = config.load(w.repo)
+    except Exception:  # noqa: BLE001 - an unreadable config.toml gives no guide
+        return ""
+    if not cfg.checks:
+        return ""
+    heading = cfg.out_of_scope_heading
+    found = (f" and to list what it noticed outside its piece under a `## {heading}` heading (recorded as findings)"
+             if heading else "")
+    return "\n".join([
+        "benchbook records this repository's checks and reports. If you hand pieces to subagents:",
+        f"- Ask each to end its report with `DONE <full commit sha>`{found}.",
+        "- Merge a piece after its verdict line (`benchbook: <piece> <sha>: re-run passed ...`); a `git merge` of a "
+        "reported commit waits for it.",
+        "- Write down what you learn yourself: `benchbook --agent lead discard <piece> --approach NAME --why \"...\"` "
+        "for a dead end, `benchbook --agent lead finding add \"...\" --file PATH` for a problem outside the pieces.",
+    ])
+
+
 def session_start(data: dict[str, Any]) -> str:
     w = where(data)
     if w is None:
         return ""
+    guide = lead_guide(data, w)
     try:
         brief = _brief_or_none(w, "session-start")
     except LedgerFailed as e:
         if not e.down:
-            return ""
+            return guide
         cause = e.__cause__
         why = (f"no answer within {TIMEOUT:g} s" if isinstance(cause, TimeoutError)
                else f"unreachable: {type(cause).__name__}")
         return from_state(w, why)
-    return "" if is_empty(brief) else brief
+    if is_empty(brief):
+        return guide
+    return f"{guide}\n\n{clip(brief, MAX_CHARS - len(guide) - 2)}" if guide else brief
 
 
 def pre_compact(data: dict[str, Any]) -> str:

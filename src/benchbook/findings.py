@@ -289,6 +289,18 @@ def capture(lg: Ledger, report: str, heading: str, *, source: dict[str, Any], pi
     return out
 
 
+NOTED_HEADING = "Out of scope"
+
+
+def record_noted(lg: Ledger, text: str, files: list[str], piece: str | None = None) -> Captured:
+    """A finding the lead (or any agent) writes down itself: `benchbook finding add`. Recorded as a one-item report
+    under NOTED_HEADING, so it has the same key, tags and dedup as one a worker's report named, with the note as its
+    source."""
+    where = "".join(f" `{f}`" for f in files)
+    report = f"## {NOTED_HEADING}\n- {' '.join(text.split())}{where}\n"
+    return capture(lg, report, NOTED_HEADING, source={"noted_by": lg.agent}, piece=piece)
+
+
 def _report_source(lg: Ledger, report: str, source: dict[str, Any]) -> Any:
     """The report as a source row, keyed by its digest like the auto-captured note: the same text arriving through
     a second hook event, or a retry, finds the row again instead of counting as another report."""
@@ -298,5 +310,7 @@ def _report_source(lg: Ledger, report: str, source: dict[str, Any]) -> Any:
                            " ORDER BY created_at LIMIT 1", (lg.project_id, uri))
     if rows:
         return rows[0]["id"]
+    if source.get("noted_by"):
+        return lg.add_source(uri, title=f"finding noted by {source['noted_by']}"[:300], sha256=digest)
     who = ", ".join(f"{k} {source[k]}" for k in ("agent_type", "agent_id", "session_id") if source.get(k))
     return lg.add_source(uri, title=f"subagent final report ({who or 'unknown subagent'})"[:300], sha256=digest)

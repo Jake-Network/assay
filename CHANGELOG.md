@@ -2,6 +2,12 @@
 
 ## Unreleased: code pack
 
+- A lead can record what it learns itself: `benchbook discard <piece> --approach NAME --why "..."` (a dead end without
+  a failed check run, listed with the discarded approaches) and `benchbook finding add "..." [--file PATH]` (an
+  out-of-scope finding). In a code project a new session (not a resume) starts with a four-line guide for a lead:
+  ask workers for `DONE <sha>` and an out-of-scope section, merge after the verdict, and these two commands. It is
+  given even when the ledger is empty. In the boundary pilot no finding and no dead end reached a new session: the
+  lead neither asked its workers for findings nor had a way to record its own.
 - The merge gate: with the Claude Code plugin, a lead's `git merge` of a commit a worker reported waits up to 30 s
   for that commit's re-run verdict. A clean verdict lets the merge run and is handed to the lead with it; a failed
   or needs-review verdict, or none within 30 s, holds the merge once with the reason, and merging again goes

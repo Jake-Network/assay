@@ -12,7 +12,8 @@ from typing import Annotated
 
 import typer
 
-finding_app = typer.Typer(no_args_is_help=True, help="Out-of-scope findings: accept one with its follow-up issue.")
+finding_app = typer.Typer(no_args_is_help=True,
+                          help="Out-of-scope findings: add your own, or accept one with its follow-up issue.")
 
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
 
@@ -60,3 +61,25 @@ def accept(
     emit({"ok": True, "id": short("decision", d.id), "claim": short("claim", cid), "status": d.new_status,
           "source": short("source", sid), "link": short("link", lid)},
          f"{short('decision', d.id)} {short('claim', cid)} -> supported (follow-up {short('source', sid)}: {issue})")
+
+
+@finding_app.command("add")
+def add(
+    text: Annotated[str, typer.Argument(help="The finding, one sentence: what is wrong or missing, and where")],
+    file: Annotated[list[str] | None, typer.Option("--file", help="A file it is about (repeatable)")] = None,
+    piece: Annotated[str | None, typer.Option(help="The piece it was found in")] = None,
+) -> None:
+    """Record an out-of-scope finding you found yourself (a lead's, or one a worker told you in a message), the same
+    way a report's "Out of scope" section is recorded: the brief lists it under open findings."""
+    from .cli import emit, ledger
+    from .errors import ValidationFailed
+    from .findings import TEXT_MAX, record_noted
+
+    if not text.strip() or len(text) > TEXT_MAX:
+        raise ValidationFailed([f"text: 1-{TEXT_MAX} characters"])
+    lg = ledger()
+    out = record_noted(lg, text, list(file or []), piece)
+    if not out.claims:
+        raise ValidationFailed(["text: nothing to record"])
+    emit({"ok": True, "claims": list(out.claims), "new": out.new},
+         f"{out.claims[0]} {'recorded' if out.new else 'already recorded: this note added as evidence'}")

@@ -621,6 +621,12 @@ author     the attempt's recorder: the verifier, or the agent of check run / the
            token's agent under BENCHBOOK_TOKEN)
 ```
 
+**A dead end known without a failed run.** `benchbook discard <piece> --approach NAME --why "..." [--commit SHA]`
+records the same claim for an approach the lead (or any agent) knows failed, such as one a worker described in a
+message or a prompt ruled out: signature `noted: <why>`, payload `noted_by` instead of `first_attempt`, and a source
+row for the note (`benchbook-note:sha256:...`) as its supporting evidence. The brief lists it with the others. The
+boundary pilot asked a new session for dead ends that lived only in task prompts; none had been recorded.
+
 **One claim per (piece, signature, approach).** The key is `sha256("benchbook:discarded\0" + piece + "\0" +
 signature + "\0" + approach)` (approach "" when none), stored as the claim's `statement_hash`, so it does not change
 between releases and does not include the author. A later failure with the same key, from anyone, links its attempt
@@ -938,7 +944,11 @@ benchbook finding accept c:1a2b3c4d --issue https://github.com/org/repo/issues/1
 benchbook decide c:1a2b3c4d refuted --oracle human --rationale "intended: uploads retry forever by design" --as human
 ```
 
-`benchbook finding accept` exists because no other command creates a source: it adds the issue URL as a source
+`benchbook finding add "..." [--file PATH] [--piece P]` records a finding the lead found itself (or one a worker
+gave in a message) as a one-item "Out of scope" report, with the same key and dedup as a report's, and a
+`finding noted by <agent>` source.
+
+`benchbook finding accept` exists because no other command links a follow-up issue: it adds the issue URL as a source
 (title "follow-up issue"), links it `cites` to the finding, and decides `supported` with that source as the
 decision's evidence and the rationale `accepted, follow-up <url>` unless `--rationale` says otherwise. It refuses a
 claim without the `out-of-scope` tag and a finding that is already decided, before anything is written. An agent
