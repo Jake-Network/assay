@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from benchbook.checks import signature
-from benchbook.checks.verify import CheckResult, failure_signature
+from benchbook.checks.rerun import CheckResult, failure_signature
 from benchbook.hooks import checks as check_hooks
 
 # ------------------------------------------------------------------------------------------- realistic outputs

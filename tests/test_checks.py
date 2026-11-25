@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from benchbook import Ledger, config
+from benchbook.checks import declarations, rerun
 from benchbook.checks import verify as checks
 from benchbook.errors import BenchbookError
 from benchbook.packs import load_pack
@@ -268,7 +269,7 @@ def test_worktree_is_removed_when_the_run_raises(repo: Path, vtmp: Path, verifie
     def boom(*a: Any, **k: Any) -> Any:
         raise RuntimeError("runner exploded")
 
-    monkeypatch.setattr(checks, "run_command", boom)
+    monkeypatch.setattr(rerun, "run_command", boom)
     with pytest.raises(RuntimeError, match="exploded"):
         checks.verify(verifier, "media", sha, repo=repo, reported_by="impl")
     assert_clean(repo, vtmp)
@@ -490,9 +491,9 @@ def lead_lg(db_url: str, code_project: str) -> Ledger:
     return Ledger.open(project=code_project, agent="lead", role="orchestrator", database_url=db_url)
 
 
-def pin_from_config(lg: Ledger, repo: Path, piece_name: str | None = None) -> checks.Pin:
+def pin_from_config(lg: Ledger, repo: Path, piece_name: str | None = None) -> declarations.Pin:
     cfg = config.load(repo)
-    return checks.pin_checks(lg, piece_name, cfg.checks, cfg.guard_paths, None, source="config")[0]
+    return declarations.pin_checks(lg, piece_name, cfg.checks, cfg.guard_paths, None, source="config")[0]
 
 
 def test_pinned_checks_verify_without_a_committed_config(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
@@ -506,7 +507,7 @@ def test_pinned_checks_verify_without_a_committed_config(tmp_path: Path, vtmp: P
     assert m["checks_source"] == "pin" and m["checks_sha256"] == p.sha256 and m["checks_changed"] is False
     assert rec.outcome is not None and rec.outcome.decision == "verified"
     # pinning the same declarations again records nothing
-    assert checks.pin_checks(lead_lg, None, p.checks, p.guard_paths, None, source="config") == (p, False)
+    assert declarations.pin_checks(lead_lg, None, p.checks, p.guard_paths, None, source="config") == (p, False)
 
 
 def test_a_pin_changed_under_the_work_goes_to_a_person(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
@@ -525,7 +526,7 @@ def test_a_new_pin_after_the_first_attempt_goes_to_a_person(tmp_path: Path, vtmp
     pin_from_config(lead_lg, repo, "media")
     bad = piece(repo, "bad", {"impl.txt": "no\n"})
     checks.verify(lead_lg, "media", bad, repo=repo, reported_by="impl")  # the first attempt, under the first pin
-    checks.pin_checks(lead_lg, "media", checks.parse_check_options(["value=grep -qx ok value.txt"]), [])
+    declarations.pin_checks(lead_lg, "media", declarations.parse_check_options(["value=grep -qx ok value.txt"]), [])
     good = piece(repo, "good", {"impl.txt": "fixed\n"})
     v, rec = checks.verify(lead_lg, "media", good, repo=repo, reported_by="impl")
     assert v.all_passed and v.integrity.checks_changed and [r.name for r in v.results] == ["value"]
@@ -546,7 +547,7 @@ def test_a_pin_by_the_implementer_is_ignored(tmp_path: Path, vtmp: Path, db_url:
 
 
 def test_a_committed_config_wins_over_a_pin(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
-    checks.pin_checks(lead_lg, None, checks.parse_check_options(["broken=false"]), [])
+    declarations.pin_checks(lead_lg, None, declarations.parse_check_options(["broken=false"]), [])
     sha = piece(repo, "good", {"impl.txt": "fixed\n"})
     v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
     assert v.all_passed and v.base.source == "merge-base" and [r.name for r in v.results] == ["unit", "value"]
@@ -557,7 +558,7 @@ def test_a_committed_config_wins_over_a_pin(repo: Path, vtmp: Path, lead_lg: Led
                                                 (["bad name=x"], "a check name is")])
 def test_bad_check_options(items: list[str], message: str) -> None:
     with pytest.raises(BenchbookError, match=message):
-        checks.parse_check_options(items)
+        declarations.parse_check_options(items)
 
 
 def test_cli_init_pins_and_verify_needs_no_commit(tmp_path: Path, vtmp: Path, cli_env: dict[str, str]) -> None:
@@ -709,13 +710,13 @@ def test_the_merge_base_runs_fresh_for_each_environment_failure(tmp_path: Path, 
     repo = make_env_repo(tmp_path / "repo", "")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     calls: list[str] = []
-    real = checks.run_checks
+    real = rerun.run_checks
 
     def counting(repo: Path, commit: str, *a: Any, **kw: Any) -> Any:
         calls.append(commit)
         return real(repo, commit, *a, **kw)
 
-    monkeypatch.setattr(checks, "run_checks", counting)
+    monkeypatch.setattr(rerun, "run_checks", counting)
     one = piece(repo, "one", {"impl.txt": "fixed\n"})
     two = piece(repo, "two", {"impl.txt": "fixed too\n"})
     implementer_passed(lead_lg, "media", one, ["secret"], repo)
@@ -939,18 +940,18 @@ def test_an_interrupted_retry_is_run_again_by_the_next_try(tmp_path: Path, vtmp:
     """The failed first run is recorded before its retry runs, under an id the next try of the request finds."""
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    receipt, real, calls = uuid.uuid4(), checks.run_checks, []
+    receipt, real, calls = uuid.uuid4(), rerun.run_checks, []
 
     def stopped_on_the_retry(*args: Any, **kwargs: Any) -> Any:
         calls.append(1)
         results, interrupted = real(*args, **kwargs)
         return (results, KeyboardInterrupt()) if len(calls) == 2 else (results, interrupted)
 
-    monkeypatch.setattr(checks, "run_checks", stopped_on_the_retry)
+    monkeypatch.setattr(rerun, "run_checks", stopped_on_the_retry)
     with pytest.raises(KeyboardInterrupt):
         checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
     assert not discarded_claims(lead_lg) and len(attempts_of(lead_lg, sha)) == 1
-    monkeypatch.setattr(checks, "run_checks", real)
+    monkeypatch.setattr(rerun, "run_checks", real)
     v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
     assert v.retry == checks.RETRY_PASSED and rec.experiment_id == receipt
     assert len(attempts_of(lead_lg, sha)) == 2  # the first run was not run again
@@ -962,16 +963,16 @@ def test_a_retry_that_could_not_run_leaves_the_failure_as_it_was(
         initial: str) -> None:
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    receipt, real, calls = uuid.uuid4(), checks.run_checks, []
+    receipt, real, calls = uuid.uuid4(), rerun.run_checks, []
 
-    def no_retry(repo: Path, commit: str, specs: Any, env: Any, prep: Any, prepared: checks.Prepared) -> Any:
+    def no_retry(repo: Path, commit: str, specs: Any, env: Any, prep: Any, prepared: rerun.Prepared) -> Any:
         calls.append(1)
         if len(calls) == 2:  # the retry's prepare step failed: nothing ran
             prepared.error = "preparation unavailable"
-            return [checks.CheckResult(s.name, "not_run") for s in specs], None
+            return [rerun.CheckResult(s.name, "not_run") for s in specs], None
         return real(repo, commit, specs, env, prep, prepared)
 
-    monkeypatch.setattr(checks, "run_checks", no_retry)
+    monkeypatch.setattr(rerun, "run_checks", no_retry)
     if initial == "interrupted":
         def crash(*args: Any) -> None:
             raise KeyboardInterrupt()
@@ -1011,17 +1012,17 @@ def test_retry_compares_its_own_junit_counts(tmp_path: Path, vtmp: Path, lead_lg
                                            monkeypatch: pytest.MonkeyPatch) -> None:
     repo = make_repo(tmp_path / "repo")
     sha = piece(repo, "p", {"tests/test_added.py": TEST_EXTRA})
-    real, calls = checks.run_checks, []
+    real, calls = rerun.run_checks, []
 
     def run(repo: Path, commit: str, specs: Any, *args: Any) -> Any:
         if commit != sha:
             return real(repo, commit, specs, *args)
         calls.append(1)
-        unit = (checks.CheckResult("unit", "fail", exit_code=1, tests=2) if len(calls) == 1
-                else checks.CheckResult("unit", "ok", tests=1))
-        return [unit, checks.CheckResult("value", "ok")], None
+        unit = (rerun.CheckResult("unit", "fail", exit_code=1, tests=2) if len(calls) == 1
+                else rerun.CheckResult("unit", "ok", tests=1))
+        return [unit, rerun.CheckResult("value", "ok")], None
 
-    monkeypatch.setattr(checks, "run_checks", run)
+    monkeypatch.setattr(rerun, "run_checks", run)
     receipt = uuid.uuid4()
     run_result, record = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
     assert run_result.retry_of is not None

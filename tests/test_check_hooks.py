@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from benchbook import Ledger, config
-from benchbook.checks.verify import last_line_hash
+from benchbook.checks.rerun import last_line_hash
 from benchbook.code import pieces
 from benchbook.config import LocalConfig, parse_checks
 from benchbook.hooks import checks as check_hooks

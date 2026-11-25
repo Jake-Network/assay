@@ -169,7 +169,7 @@ def init(
 def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:
     """code pack: keep .benchbook/ out of git (info/exclude) and pin the declared checks in the ledger, so a piece
     can be verified without committing anything (T01)."""
-    from ..checks.verify import pin_checks
+    from ..checks.declarations import pin_checks
     from ..config import exclude_local_dir, load
     from ..core.ids import short
     from ..core.ledger import Ledger

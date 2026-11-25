@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from benchbook import Ledger
+from benchbook.checks import gitrepo
 from benchbook.checks import verify as checks
 from benchbook.checks.attempts import build
 from benchbook.checks.failures import DISCARDED_DOMAIN, discarded_hash
@@ -353,7 +354,7 @@ def test_reads_that_changed_a_plan(db_url: str, code: str, ledger: dict[str, Any
     ([], 20, []),
 ])
 def test_path_prefixes(paths: list[str], limit: int, want: list[str]) -> None:
-    assert checks.path_prefixes(paths, limit) == want
+    assert gitrepo.path_prefixes(paths, limit) == want
 
 
 def test_here_scope_uses_dirty_paths_on_a_new_branch_at_the_base_tip(tmp_path: Path) -> None:

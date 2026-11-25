@@ -161,7 +161,7 @@ def test_exit_code_passes_through_and_the_output_is_never_stored(repo: Path, tmp
     [exp] = wait_attempts(lg, 1)
     assert exp["author"] == "impl-1" and exp["metrics"]["checks"] == {"fails": "fail"}
     assert exp["metrics"]["checks_passed"] == 0
-    from benchbook.checks.verify import last_line_hash
+    from benchbook.checks.rerun import last_line_hash
 
     assert exp["metrics"]["failure_signature"] == f"fails:exit 3:{last_line_hash('boom: took 99ms')}"
     assert "SECRET-OUTPUT" not in json.dumps(exp, default=str)

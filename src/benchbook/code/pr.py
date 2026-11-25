@@ -63,7 +63,8 @@ def pieces(repo: Path, base: str, head: str) -> tuple[list[Piece], list[str]]:
     """The pieces the commits in base..head complete, oldest first, and the trailer values skipped as unusable. A
     piece's commit is the last commit of the range carrying its trailer (`git log --topo-order` lists no commit
     before its descendants, so the first one met is the last)."""
-    from ..checks.verify import PIECE, resolve_commit, toplevel
+    from ..checks.declarations import PIECE
+    from ..checks.gitrepo import resolve_commit, toplevel
 
     root = toplevel(repo)
     b, h = resolve_commit(root, base), resolve_commit(root, head)

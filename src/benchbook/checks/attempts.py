@@ -24,8 +24,12 @@ from uuid import UUID
 
 from .. import config as localcfg
 from ..errors import BenchbookError
+from . import declarations, gitrepo, guard
 from . import verify as checks
-from .verify import Base, CheckResult, Integrity, Verification
+from .declarations import Base
+from .guard import Integrity
+from .rerun import CheckResult
+from .verify import Verification
 
 GUARD_KEYS = ("guard_touched", "guard_files", "checks_changed", "guard_weakened", "guard_weakened_files",
               "guard_added_files", "tests_before", "tests_after", "fewer_tests_checks")
@@ -78,8 +82,8 @@ def _integrity(repo: Path, sha: str) -> tuple[Base, Integrity] | str:
     try:
         if not repo.is_dir():
             return f"{repo} no longer exists"
-        b = checks.read_base(repo, localcfg.load(repo).guard_base or checks.DEFAULT_BASE, sha)
-        return b, checks.integrity(repo, b, sha)
+        b = declarations.read_base(repo, localcfg.load(repo).guard_base or checks.DEFAULT_BASE, sha)
+        return b, guard.integrity(repo, b, sha)
     except (BenchbookError, OSError, ValueError) as e:
         return str(e).splitlines()[0] if str(e) else type(e).__name__
 
@@ -99,7 +103,7 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
     else:
         (base, integ), note = found, None
         try:  # T06: the directories the commit changed, as check verify records them
-            paths = checks.path_prefixes(checks.changed_paths(Path(str(data["repo"])), base.merge_base, sha))
+            paths = gitrepo.path_prefixes(gitrepo.changed_paths(Path(str(data["repo"])), base.merge_base, sha))
         except BenchbookError:
             paths = []
     source = f"{SOURCES[event]}: {name} in {data['repo']}"

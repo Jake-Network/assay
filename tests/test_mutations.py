@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from benchbook import Ledger, config
+from benchbook.checks import gitrepo, guard
 from benchbook.checks import verify as checks
 from tests.conftest import CONFIG, PY, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
 
@@ -160,7 +161,7 @@ def test_import_rewrite_preserves_the_original_test_bindings(tmp_path: Path, upd
     git(repo, "commit", "-qm", "original tests")
     base = git(repo, "rev-parse", "HEAD")
     sha = piece(repo, "changed-import", {path: updated + test})
-    assert checks.classify_guard(repo, base, sha, [path]) == ([], [], [path])
+    assert guard.classify_guard(repo, base, sha, [path]) == ([], [], [path])
 
 
 PILOT = Path(__file__).parent / "fixtures" / "boundary_pilot"
@@ -225,9 +226,9 @@ def test_pilot_import_rewrites_are_appended(tmp_path: Path, commit: str) -> None
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", commit)
     head = git(repo, "rev-parse", "HEAD")
-    files = sorted(checks.changed_paths(repo, base, head))
+    files = sorted(gitrepo.changed_paths(repo, base, head))
     assert "tests/test_iterutils.py" in files
-    added, appended, weakened = checks.classify_guard(repo, base, head, files)
+    added, appended, weakened = guard.classify_guard(repo, base, head, files)
     assert (added, weakened) == ([], []) and appended == files
 
 

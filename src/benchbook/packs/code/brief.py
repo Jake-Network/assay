@@ -196,7 +196,8 @@ def changed_scope(repo: Path, base: str | None = None) -> list[str]:
     plus the working tree's changes, as file:<prefix> tags (checks.path_prefixes), and piece:<branch>. Empty on the
     base branch itself, or when the base ref or HEAD cannot be read."""
     from ... import config as localcfg
-    from ...checks.verify import DEFAULT_BASE, _git, path_prefixes
+    from ...checks.gitrepo import _git, path_prefixes
+    from ...checks.verify import DEFAULT_BASE
 
     def out(*args: str) -> str:
         return _git(repo, *args, check=False).stdout

@@ -140,7 +140,7 @@ def test_graded_exit_codes_and_junit_name_the_first_failing_test(tmp_path: Path)
                                     ("PASS_TO_PASS", "t.py::test_gone", "MISSING")])
     assert g.exit_code == swe_check.EXIT_FAIL and [t[1] for t in g.failing()] == ["t.py::test_fix", "t.py::test_gone"]
     swe_check.write_junit(g, tmp_path / "j.xml")
-    from benchbook.checks.verify import failed_tests  # the parser check verify uses
+    from benchbook.checks.rerun import failed_tests  # the parser check verify uses
 
     assert failed_tests(tmp_path / "j.xml") == [("FAIL_TO_PASS::t.py::test_fix", "FAILED"),
                                                 ("PASS_TO_PASS::t.py::test_gone", "MISSING")]

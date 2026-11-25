@@ -99,7 +99,7 @@ def pin(
     Without --check the [checks], [guard] and [verify] tables of the working tree's config.toml are pinned. check
     verify reads a pin only when the merge-base has no committed config.toml, ignores pins written by the piece's
     implementer, and sends the piece to a person when the pin changed after its first attempt (docs/code.md)."""
-    from ..checks.verify import parse_check_options, pin_checks
+    from ..checks.declarations import parse_check_options, pin_checks
     from ..config import load
     from ..core.ids import short
     from .main import emit, ledger

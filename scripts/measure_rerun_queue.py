@@ -107,8 +107,7 @@ def pycache_share(repo: Path, rounds: int = 3) -> dict[str, float]:
 
 def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel: bool) -> dict[str, Any]:
     from benchbook import Ledger
-    from benchbook.checks import verify as checks
-    from benchbook.checks import verify_requests
+    from benchbook.checks import rerun, verify_requests
     from benchbook.hooks import subagent as hooks
     from benchbook.packs import load_pack
 
@@ -125,7 +124,7 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
     runs: list[dict[str, Any]] = []
     verifies: list[dict[str, Any]] = []
     recorded: list[float] = []
-    real_run_checks, real_process = checks.run_checks, verify_requests.process
+    real_run_checks, real_process = rerun.run_checks, verify_requests.process
 
     def timed_run_checks(repo_: Path, commit: str, *a: Any, **k: Any) -> Any:
         t = time.monotonic()
@@ -139,7 +138,7 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
         verifies.append({"piece": data["piece"], "start": t, "end": time.monotonic(), "result": out})
         return out
 
-    checks.run_checks, verify_requests.process = timed_run_checks, timed_process
+    rerun.run_checks, verify_requests.process = timed_run_checks, timed_process
     real_start, hooks.start_processor = hooks.start_processor, lambda *args: None
     try:
         session = f"m-{uuid.uuid4().hex[:8]}"
@@ -180,7 +179,7 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
                 hooks.replay(spool)
         th.join()
     finally:
-        checks.run_checks, verify_requests.process = real_run_checks, real_process
+        rerun.run_checks, verify_requests.process = real_run_checks, real_process
         hooks.start_processor = real_start
     cand = [r["s"] for r in runs if r["kind"] == "candidate"]
     mb = [r["s"] for r in runs if r["kind"] == "merge-base"]

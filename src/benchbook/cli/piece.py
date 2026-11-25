@@ -37,7 +37,7 @@ def start(
     lg = ledger()
     specs = None
     if check:
-        from ..checks.verify import parse_check_options
+        from ..checks.declarations import parse_check_options
 
         specs = parse_check_options(check)  # a malformed --check fails before the piece is started
     s = run_start(lg, piece, paths or [], Path.cwd(), lease_seconds=lease, tags=csv(tags))
@@ -47,7 +47,7 @@ def start(
         print(f"note: {s.note}", file=sys.stderr)
     out, text = summary(s), render(s)
     if specs:
-        from ..checks.verify import pin_checks
+        from ..checks.declarations import pin_checks
         from ..config import load
         from ..core.ids import short
 
