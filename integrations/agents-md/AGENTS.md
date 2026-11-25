@@ -1,9 +1,9 @@
 ## benchbook research ledger
 
-This repository records experiments in an benchbook ledger (`.benchbook/config.toml`). The ledger is the source of
+This repository records experiments in a benchbook ledger (`.benchbook/config.toml`). The ledger is the source of
 truth for results; messages carry only short summaries and record ids (`e:`, `c:`, `t:`).
 
-If an `benchbook` MCP server is configured, use its tools; otherwise use the CLI with `--json`.
+If a `benchbook` MCP server is configured, use its tools; otherwise use the CLI with `--json`.
 Always identify yourself: MCP `agent` argument, or `BENCHBOOK_AGENT=worker-<n>` for the CLI.
 
 1. Start: take a task (`benchbook_next_task` / `benchbook task next`), then read the brief (`benchbook_brief` /
