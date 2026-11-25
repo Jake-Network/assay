@@ -27,7 +27,7 @@ ENV_KEYS = ("BENCHBOOK_DATABASE_URL", "BENCHBOOK_DATA_DIR", "BENCHBOOK_PROJECT")
 # values doctor compares but never prints: a database URL can carry a password
 SECRET_KEYS = {"BENCHBOOK_DATABASE_URL"}
 RECENT_SECONDS = 24 * 3600
-# hook.log lines that mean a report did not reach the ledger (see hooks.py)
+# hook.log lines that mean a report did not reach the ledger (see hooks/spooler.py)
 FAILURE_MARKERS = ("failed", "not captured", "moved to", "quarantined", "cannot read")
 INFORMATIONAL_HOOK_LOG = re.compile(
     r"^[\w-]+: (?:queued |observed |blocked piece |allowed: |out-of-scope findings: |recorded: |adopted )"
@@ -37,7 +37,7 @@ NO_PROJECT = re.compile(r"no (?:benchbook|assay) project for (.+?)(?: \(|$)")
 SPOOL_KEY = re.compile(r"/spool/([0-9a-f]{64})\b")
 # a queued report older than this was not drained by the background processor (its retries take about a minute)
 STUCK_SECONDS = 300
-# hook commands the plugin runs since 0.1.3 (check_hooks.py); an installed copy without them is older
+# hook commands the plugin runs since 0.1.3 (hooks/checks.py); an installed copy without them is older
 CHECK_HOOKS = ("benchbook hook bash-result", "benchbook hook task-completed")
 # 0.2 plugins run every hook through a shim in the plugin root; read as `benchbook hook EVENT`
 SHIM = re.compile(r'^"?\$\{CLAUDE_PLUGIN_ROOT\}/bin/benchbook-hook"?\s+')
@@ -333,7 +333,7 @@ def _observed_since(path: Path, since: float) -> list[dict[str, Any]]:
 
 def check_harness_input() -> Check | None:
     """For this shell's database: declared check runs another harness's hook observed in the last 24 hours whose
-    input was not shaped as that harness documents (harnesses.py), i.e. as the stored fixtures are. The line names
+    input was not shaped as that harness documents (hooks/harnesses.py), i.e. as the stored fixtures are. The line names
     the harness version where the input carries one (Cursor's cursor_version) next to the fixtures' version. None
     when no such harness observed anything."""
     from ..hooks.checks import OBSERVED

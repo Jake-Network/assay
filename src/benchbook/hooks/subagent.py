@@ -210,7 +210,7 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     to capture this event (spool entries record it), so the current BENCHBOOK_HOOK_AGENTS is not consulted again.
     out_of_scope_heading: [report] out_of_scope_heading as the hook read it; without a project the config of the
     working directory supplies both. In a code-pack project its findings are recorded whether or not the report
-    cites its own records (findings.py); the return value stays about the report itself."""
+    cites its own records (code/findings.py); the return value stays about the report itself."""
     if not accepted and not is_worker(_agent_type(data), require_type=False):
         return f"skipped:not-a-worker ({_agent_type(data)})"
     text = extract_text(data).replace("\x00", "").strip()  # Postgres text cannot hold NUL
@@ -259,7 +259,7 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
 
 def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[str, Any], fired_at: datetime,
                       source: dict[str, Any]) -> None:
-    """The out-of-scope section of the report as finding claims (findings.py). The claims are written by whoever
+    """The out-of-scope section of the report as finding claims (code/findings.py). The claims are written by whoever
     the hook writes as (the token's agent under a token); source names the subagent that reported them."""
     from ..code import findings
 

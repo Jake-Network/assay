@@ -336,8 +336,8 @@ OUTCOMES: dict[str, Callable[[dict[str, Any]], Outcome]] = {
 
 
 def report_input(harness: str, data: dict[str, Any]) -> dict[str, Any]:
-    """A subagent-stop input in the shape hooks.py reads (Claude Code's SubagentStop): agent_type,
-    last_assistant_message, cwd, session_id, agent_id. The transcript paths are dropped: hooks.py reads Claude
+    """A subagent-stop input in the shape subagent.py reads (Claude Code's SubagentStop): agent_type,
+    last_assistant_message, cwd, session_id, agent_id. The transcript paths are dropped: subagent.py reads Claude
     Code's transcript format to see whether the report cites the run's own records, and Codex says its transcript
     "isn't a stable interface for hooks". Without them every report is captured as a note."""
     if check_harness(harness) == CLAUDE_CODE:

@@ -2,6 +2,11 @@
 
 ## Unreleased: code pack
 
+- The package is arranged by function: `benchbook.core` (ledger, models, ids, brief, the command runner),
+  `benchbook.checks` (declared checks and the re-run that verifies a completion), `benchbook.code` (pieces,
+  findings, PR evidence, status line), `benchbook.hooks` and `benchbook.cli`. Code that imported a module by its old
+  path must use the new one, e.g. `benchbook.runner` is `benchbook.core.runner`; `from benchbook import Ledger`, the
+  commands, `python -m benchbook.cli` and `python -m benchbook.hooks` are unchanged.
 - Worker instructions (MCP server instructions, the worker subagents, AGENTS.md) ask for a short final summary with
   record ids instead of at most 3 sentences; the 1000-character limit on a task summary is unchanged. The Claude Code
   plugins are 0.2.2 (`benchbook`) and 0.2.1 (`benchbook-mcp`) for it.

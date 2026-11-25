@@ -136,7 +136,7 @@ def matching(paths: Iterable[str], patterns: Sequence[str]) -> list[str]:
 
 # ---------------------------------------------------------------------------------------------- overlap
 #
-# Two glob sets overlap when some path matches a pattern of each. Path occupancy (pieces.py) refuses a piece whose
+# Two glob sets overlap when some path matches a pattern of each. Path occupancy (code/pieces.py) refuses a piece whose
 # paths overlap a live one's, so the test must never miss a common path. It is exact: overlap() returns a path both
 # patterns match, or None only when there is none. A file is a pattern too, escaped (escape()), so file-vs-file,
 # file-vs-glob and glob-vs-glob are one question.

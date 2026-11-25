@@ -7,7 +7,7 @@ approaches").
   check matches a check verify run that failed that check among others.
 - Discarded approaches: a finished, failed attempt of a commit leaves an observation claim tagged `discarded` and
   `piece:<piece>` (plus `approach:<name>` and the piece's `mod:` tags), one per (piece, signature, approach).
-  A later failure with the same key adds its attempt as evidence instead of a second claim (as findings.py does for
+  A later failure with the same key adds its attempt as evidence instead of a second claim (as code/findings.py does for
   out-of-scope findings, with its own fixed hash domain). The claim stays when the piece is later verified: it
   records that this approach failed this way, which a verified commit does not undo.
 

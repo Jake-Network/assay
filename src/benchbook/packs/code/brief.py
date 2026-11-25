@@ -2,11 +2,11 @@
 
 `benchbook brief --tags mod:media` (MCP benchbook_brief(tags=[...])) shows, for the given tags:
 
-1. Discarded approaches: observation claims tagged `discarded` (failures.py) of the pieces in scope, with their
+1. Discarded approaches: observation claims tagged `discarded` (checks/failures.py) of the pieces in scope, with their
    signature, approach and first attempt, most recently failed first.
-2. Open out-of-scope findings: observations tagged `out-of-scope` still `proposed` or `inconclusive` (findings.py),
+2. Open out-of-scope findings: observations tagged `out-of-scope` still `proposed` or `inconclusive` (code/findings.py),
    matched by tag or, for a `file:<prefix>` tag, by path prefix; most reported first.
-3. Occupied paths: live piece intents (v_inflight) with their tags and spec.paths (pieces.py).
+3. Occupied paths: live piece intents (v_inflight) with their tags and spec.paths (code/pieces.py).
 4. The last verified commit of each piece in scope, most recent first.
 5. Completions a re-run looked at and nobody decided (shown only when there is one): the re-run passed but the commit
    weakened tests or changed [checks] (a person decides), it failed (refutes), or runs disagree (inconclusive).

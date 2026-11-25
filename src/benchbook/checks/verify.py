@@ -536,7 +536,7 @@ def statements(piece: str, commit: str, reporter: str) -> tuple[str, str]:
 
 
 # The completion claims of a piece and commit, oldest first: tagged with both and naming both in the payload, as
-# pr.py finds them. Whatever their statement: a report written in other words is the same report (the reporter
+# code/pr.py finds them. Whatever their statement: a report written in other words is the same report (the reporter
 # decides, in _completion_claim).
 _OWN_CLAIMS = ("SELECT c.id, c.author, c.payload, a.role AS author_role FROM benchbook.claims c"
                " LEFT JOIN benchbook.agents a ON a.project_id = c.project_id AND a.id = c.author"
@@ -550,7 +550,7 @@ _CLAIM_ROW = ("SELECT c.kind, c.author, c.tags, c.payload, a.role AS author_role
 
 def given_claim(lg: Ledger, ref: str, piece: str, commit: str, reported_by: str | None) -> tuple[UUID, str]:
     """(claim id, reporter) of --claim, after checking that it is a completion claim of this project about piece at
-    commit (tags and payload, as pr.py finds it), and that --reported-by, when given, names its reporter."""
+    commit (tags and payload, as code/pr.py finds it), and that --reported-by, when given, names its reporter."""
     from ..core.ids import short
     from ..core.ledger import reporter_of
 

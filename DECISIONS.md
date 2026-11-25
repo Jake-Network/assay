@@ -785,3 +785,26 @@ by hand, not a live session). Four are fixed; the fourth is not.
   finished from the stored retry lost which run had failed, so the merge gate gave the wrong advice (review of
   0e64b10). Now every later try of the request finds where it stopped. A retry that fails on a different test leaves
   no dead end: neither failure repeated.
+
+## Package layout (2026-11-26)
+
+- **Subpackages by function.** The 46 modules at the top of `src/benchbook/` were grouped only by name prefixes
+  (`check_*`, `*_cli`, `*_hooks`). Now: `core/` (ledger, models, ids, dedup, tokens, blobs, identity, brief,
+  lookup, runner), `checks/` (run, attempts, failures, signature, globs, proposals, verify_requests and the stages of
+  `check verify`), `code/` (pieces, findings, pr, status), `hooks/` and `cli/`; `db/`, `packs/`,
+  `integrations/` and `web/` stay. At the top remain the entry points and what every layer uses: `entry`,
+  `errors`, `config`, `mcp_server`. The runner is core, not checks: `benchbook ar run` uses it too, and
+  docs/sdk.md offers it.
+- **No modules at the old paths.** Before 1.0 the supported API is `from benchbook import Ledger`, the commands, the
+  MCP tools and the documented `python -m` entries; the old module paths were never documented except
+  `benchbook.runner` (CHANGELOG). The `python -m` entries keep working through `cli/__main__.py` and
+  `hooks/__main__.py`: a hook started before an upgrade runs `python -m benchbook.hooks`, and that command line is
+  unchanged. Names that were persisted (pack.toml `brief_compiler`, the pre-rename names) did not move.
+- **The `__init__.py` of `checks/` and `hooks/` import nothing.** `hook bash-result` loads modules from both and
+  has 50 ms, imports included; the import tests now name the heavy modules exactly (`benchbook.core.ledger`,
+  `benchbook.checks.verify`), since `benchbook.checks` also holds what the hook loads.
+- **checks.py and hooks.py were split by stage, code unchanged.** `check verify` is gitrepo, declarations, guard,
+  rerun, baseline and verify; the subagent hook is spooler, citations and subagent. A function that tests replace
+  (`rerun.run_checks`, the spooler's functions) is called through its module everywhere, so replacing it reaches
+  every caller, as it did when they shared a module. The Ledger class stays in one file: its methods share one
+  connection and transaction discipline, and splitting it is a separate change.

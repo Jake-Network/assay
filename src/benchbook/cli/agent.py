@@ -1,5 +1,5 @@
 """`benchbook agent`: register agents and issue, list and revoke their tokens. Operator commands: they change
-agents.token_hash, which only the database owner's connection may do (identity.py, docs/multi-machine.md)."""
+agents.token_hash, which only the database owner's connection may do (core/identity.py, docs/multi-machine.md)."""
 from __future__ import annotations
 
 from typing import Annotated, Any
