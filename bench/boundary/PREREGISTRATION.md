@@ -226,3 +226,16 @@ any rerun before paying for it.
   containment scoring of the probes as a sensitivity (as the pilot's report did), and, for F, where and when each
   verdict line reached the lead and every merge the gate held, read from the copied transcripts. A trial stopped by
   the five-hour usage limit is kept, reported and repeated after the reset, as in the pilot.
+- **2026-11-25, third boundary pilot.** Written before any call of this run, after the second pilot's report; the
+  owner decided to measure again the two fixes that report led to. Everything the second pilot's amendment fixes
+  holds, except the following. Outputs go to `boundary-pilot3-boltons-<arm>-try<k>`; arms A, C and F run again
+  in that order, one repetition each, under their own USD 10 total with the same USD 3.5 floor per arm. Arm F runs
+  benchbook at the commit that adds this amendment (branch `boundary-pilot-3`), which since the second pilot's
+  `4ba17cf` adds: `check verify` records the files the verified commit changed, and the brief marks a verified
+  piece "changed since" only when one of those files changed (before: any change under the directories the commit
+  touched); a checkout's brief also covers every piece with a completion at a commit in HEAD's history, so the
+  records of pieces merged into an integration branch are in its `--here` scope; and the lead guide's merge-gate
+  line is given only under Claude Code (no change for this run). A and C run the same runner and oracles as in the
+  second pilot. The report gives directions only, set beside both earlier pilots, with the containment scoring as a
+  sensitivity, and for F says which of the second pilot's six misses each fix was meant to remove and what F
+  answered this time.
