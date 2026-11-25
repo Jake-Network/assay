@@ -142,7 +142,7 @@ def _wait_for_verdict(
     notes: Path, path: Path, deadline: float,
 ) -> tuple[dict[str, Any], tuple[str, bool] | None] | None:
     """Read the current report at every poll, consuming its marker under the same lock as a new report."""
-    from .hooks import _lock
+    from .subagent import _lock
 
     while True:
         with _lock(notes, blocking=True):

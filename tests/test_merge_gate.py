@@ -12,7 +12,9 @@ from typing import Any
 
 import pytest
 
-from benchbook import check_hooks, hooks, merge_gate, session_notes
+from benchbook.hooks import checks as check_hooks
+from benchbook.hooks import merge_gate, session_notes
+from benchbook.hooks import subagent as hooks
 from tests.conftest import CONFIG, git, make_repo, piece
 
 SESSION = "lead-session"

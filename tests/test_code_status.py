@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import hooks
 from benchbook.code import status as code_status
+from benchbook.hooks import subagent as hooks
 from benchbook.packs import load_pack
 from tests.conftest import make_project
 from tests.test_boundary_hooks import code_repo, context, fixture, run

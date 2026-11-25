@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 import benchbook
-from benchbook import hooks
+from benchbook.hooks import subagent as hooks
 
 BIN = str(Path(sys.executable).parent)
 

@@ -10,8 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .. import boundary_hooks, config, hooks, merge_gate, session_notes
+from .. import config
 from ..code.pr import TRAILER
+from ..hooks import boundary as boundary_hooks
+from ..hooks import merge_gate, session_notes
+from ..hooks import subagent as hooks
 from .run import PIECE
 
 if TYPE_CHECKING:

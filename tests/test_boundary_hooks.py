@@ -14,10 +14,11 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import boundary_hooks, harnesses
 from benchbook.checks.verify_requests import reported_ref
 from benchbook.core.ids import short
 from benchbook.entry import hook_args
+from benchbook.hooks import boundary as boundary_hooks
+from benchbook.hooks import harnesses
 from tests.conftest import CONFIG, make_project, make_repo, piece
 from tests.test_code_brief import _finding, agent, attempt, git
 
@@ -414,7 +415,7 @@ def test_a_subagents_tool_result_leaves_the_leads_notes(env: Path, capsys: pytes
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     """Claude Code gives a subagent's hooks the lead's session_id and the subagent's agent_id. A worker's Bash or
     Read result must not take the lead's verdict into the worker's context; the lead's next tool result gets it."""
-    from benchbook import check_hooks
+    from benchbook.hooks import checks as check_hooks
 
     notes = _pending(env, "s-swarm", "benchbook: media-upload abc1234: re-run failed")
     worker = {"agent_id": "a1b2c3", "agent_type": "general-purpose"}
@@ -451,7 +452,7 @@ def test_hooks_running_at_once_deliver_a_note_once(env: Path, monkeypatch: pytes
     calls): each note goes to exactly one of them."""
     from concurrent.futures import ThreadPoolExecutor
 
-    from benchbook import session_notes
+    from benchbook.hooks import session_notes
 
     lines = [f"benchbook: piece-{i} {i:07}: re-run passed" for i in range(20)]
     _pending(env, "s-race", *lines)
@@ -549,7 +550,7 @@ def test_a_background_agent_report_is_re_run_from_subagent_stop(code: str, env: 
                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     """Claude Code 2.1.330 launches every Agent call in the background (T08): the report comes with SubagentStop,
     which gives the lead no context. The queued line and the result wait as notes for the next hook that does."""
-    from benchbook import hooks
+    from benchbook.hooks import subagent as hooks
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
     sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
@@ -583,7 +584,8 @@ def test_a_background_agent_report_is_re_run_from_subagent_stop(code: str, env: 
 def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: str, env: Path, db_url: str,
                                                 capsys: pytest.CaptureFixture[str],
                                                 monkeypatch: pytest.MonkeyPatch) -> None:
-    from benchbook import check_hooks, hooks
+    from benchbook.hooks import checks as check_hooks
+    from benchbook.hooks import subagent as hooks
 
     cfg = CONFIG.replace('project = "ignored"', f'project = "{code}"')
     if case == "environment":
@@ -633,7 +635,7 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
     """The boundary pilot (2.1.331): one report came as SubagentStop and as PostToolUse:Agent, and the lead got
     "re-running the checks" twice. Either order gives the line once; SubagentStop first queues the re-run once."""
-    from benchbook import hooks
+    from benchbook.hooks import subagent as hooks
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
     sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
@@ -657,7 +659,7 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
     assert len(requests) == (1 if stop_first else 2)  # PostToolUse first cannot tell SubagentStop's report is its own
     assert hooks.replay_now(hooks._spool_dir()).recorded == len(requests)
     if stop_first:  # the lead merges before reading the verdict: the merge gate hands it over
-        from benchbook import merge_gate
+        from benchbook.hooks import merge_gate
 
         gate = merge_gate.decide({"session_id": post["session_id"], "cwd": str(repo), "tool_name": "Bash",
                                   "tool_input": {"command": "git merge --no-ff media-upload"}}, wait=1)
@@ -674,8 +676,9 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
 @pytest.mark.parametrize("failed_note", [False, True], ids=["spool-write-failed", "note-write-failed"])
 def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                               failed_note: bool) -> None:
-    from benchbook import hooks, session_notes
     from benchbook.checks.verify_requests import enqueue
+    from benchbook.hooks import session_notes
+    from benchbook.hooks import subagent as hooks
 
     monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -711,8 +714,9 @@ def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, mo
 @pytest.mark.parametrize("change", ["text", "reporter"])
 def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
-    from benchbook import hooks, session_notes
     from benchbook.checks.verify_requests import enqueue
+    from benchbook.hooks import session_notes
+    from benchbook.hooks import subagent as hooks
 
     monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -745,7 +749,8 @@ def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
 def _report_and_replay(repo: Path, sha: str, capsys: pytest.CaptureFixture[str],
                        monkeypatch: pytest.MonkeyPatch) -> str:
     """An implementer's foreground report of sha, its re-run in the spool processor, and the line it leaves."""
-    from benchbook import hooks, session_notes
+    from benchbook.hooks import session_notes
+    from benchbook.hooks import subagent as hooks
 
     data = fixture("post_tool_use_agent.json", repo)
     data["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"

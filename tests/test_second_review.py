@@ -22,12 +22,12 @@ from typing import Any
 
 import pytest
 
-from benchbook import hooks
 from benchbook.checks import runner
 from benchbook.checks import verify as checks
 from benchbook.checks.runner import run_command
 from benchbook.code import pieces, pr
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition, LeaseLost
+from benchbook.hooks import subagent as hooks
 from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, cli_env, git, make_checkout, wait_attempts
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok

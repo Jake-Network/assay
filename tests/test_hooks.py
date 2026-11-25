@@ -11,9 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import Ledger, hooks
+from benchbook import Ledger
 from benchbook.config import write_config
-from benchbook.hooks import extract_text, process
+from benchbook.hooks import subagent as hooks
+from benchbook.hooks.subagent import extract_text, process
 
 FX = Path(__file__).parent / "fixtures" / "hooks"
 

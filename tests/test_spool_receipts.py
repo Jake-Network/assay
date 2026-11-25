@@ -8,9 +8,9 @@ from typing import IO, Any
 import psycopg
 import pytest
 
-from benchbook import hooks
 from benchbook.core import identity
 from benchbook.core.ledger import Ledger
+from benchbook.hooks import subagent as hooks
 from tests.test_review_holes import code_project, owner_rows, tok
 from tests.test_second_review import _capture_entry
 from tests.writer import as_writer

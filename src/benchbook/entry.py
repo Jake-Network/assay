@@ -49,11 +49,11 @@ def main(legacy: bool = False) -> None:
     if (hook := hook_args(argv)) is not None:
         event, harness = hook
         if event in CHECK_HOOK_EVENTS:
-            from .check_hooks import main as check_hook_main
+            from .hooks.checks import main as check_hook_main
 
             sys.exit(check_hook_main(event, harness))
         if event in BOUNDARY_HOOK_EVENTS:
-            from . import boundary_hooks
+            from .hooks import boundary as boundary_hooks
 
             boundary_hooks.main(event, harness)
             if boundary_hooks.abandoned:  # a ledger call still running past its limit: do not wait for it
@@ -61,7 +61,7 @@ def main(legacy: bool = False) -> None:
 
                 os._exit(0)
             sys.exit(0)
-        from .hooks import main as hook_main
+        from .hooks.subagent import main as hook_main
 
         hook_main(event, harness)
         sys.exit(0)

@@ -13,10 +13,12 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_hooks, config, hooks
+from benchbook import Ledger, config
 from benchbook.checks.verify import last_line_hash
 from benchbook.code import pieces
 from benchbook.config import LocalConfig, parse_checks
+from benchbook.hooks import checks as check_hooks
+from benchbook.hooks import subagent as hooks
 from tests.conftest import make_project
 from tests.test_check_run import PY, SCRIPT, attempts, cli_env, git, make_checkout, wait_attempts
 

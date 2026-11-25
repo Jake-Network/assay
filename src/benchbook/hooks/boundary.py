@@ -29,7 +29,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from . import config, session_notes
+from .. import config
+from . import session_notes
 
 BRIEF_TOKENS = 1500
 MAX_CHARS = 6000  # Claude Code replaces a longer additionalContext with a file path and a 2,000-character preview
@@ -49,7 +50,7 @@ abandoned = False
 
 
 def _log(msg: str) -> None:
-    from .hooks import log
+    from .subagent import log
 
     log(msg)
 
@@ -90,7 +91,7 @@ def main(event: str, harness: str | None = None) -> None:
         elif event == "agent-result":
             response = data.get("tool_response")
             if not (isinstance(response, dict) and response.get("status") == "async_launched"):
-                from .checks.verify_requests import enqueue  # not for a launch: it has no report, and the import costs
+                from ..checks.verify_requests import enqueue  # not for a launch: it has no report, and the import costs
 
                 text = enqueue(data)
             if data.get("hook_event_name") == "SubagentStop":
@@ -158,7 +159,7 @@ def where(data: dict[str, Any]) -> Where | None:
     cfg = config.load(cwd)
     if not cfg.project:
         return None
-    from .checks.run import find_repo
+    from ..checks.run import find_repo
 
     repo = find_repo(cwd)
     root = repo or (cfg.path.parent.parent if cfg.path is not None else cwd)
@@ -167,14 +168,14 @@ def where(data: dict[str, Any]) -> Where | None:
 
 def compile_brief(w: Where) -> str:
     """The boundary brief: the code pack's scoped by changed_scope, with validity marks against this checkout."""
-    from .core.ledger import Ledger
+    from ..core.ledger import Ledger
 
     lg = Ledger.open(project=w.project, agent=config.default_agent("hook"), role="harness")
     tags: list[str] = []
     warning = ""
     if lg.pack.name == "code":
-        from .code.status import recording_warning
-        from .packs.code.brief import changed_scope
+        from ..code.status import recording_warning
+        from ..packs.code.brief import changed_scope
 
         warning = recording_warning(w.repo or w.local.parent)
         if w.repo is not None:
@@ -232,7 +233,7 @@ def ledger_id() -> str | None:
             return None  # implicit socket directory or a list of candidate endpoints
         key = ["postgresql", host, addr, port, user, database or user]
     else:
-        from .db.conn import data_dir
+        from ..db.conn import data_dir
 
         key = ["embedded", str(data_dir().resolve())]
     return hashlib.sha256(json.dumps(key).encode("utf-8")).hexdigest()
@@ -405,7 +406,7 @@ def pre_compact(data: dict[str, Any]) -> str:
         return ""
     if is_empty(brief):
         return ""
-    from .code.status import RECORDING_STOPPED
+    from ..code.status import RECORDING_STOPPED
 
     if brief.startswith(RECORDING_STOPPED):
         warning = brief.splitlines()[0]

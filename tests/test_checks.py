@@ -821,8 +821,9 @@ def test_guard_compares_junit_counts_in_the_current_environment(
 
 def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
         tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
-    from benchbook import hooks, session_notes
     from benchbook.checks import verify_requests
+    from benchbook.hooks import session_notes
+    from benchbook.hooks import subagent as hooks
 
     flag = tmp_path / "service-up"
     prepare = json.dumps(f"test -f {shlex.quote(str(flag))}")
@@ -886,8 +887,8 @@ def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no
         tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
     """Third boundary pilot: two re-runs failed once on socket timing tests outside the pieces, and became
     refutations and discarded approaches that the lead's own passing check verify could not undo."""
-    from benchbook import merge_gate
     from benchbook.checks.verify_requests import _result_line
+    from benchbook.hooks import merge_gate
 
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})

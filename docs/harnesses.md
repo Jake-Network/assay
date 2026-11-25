@@ -212,4 +212,4 @@ documentation's example values or a placeholder.
 | `gemini/after_tool_shell.json`, `gemini/after_tool_shell_failure.json` | gemini_hooks_ref.md "Base input schema" and "`AfterTool`"; `llmContent` as gemini_shell.ts builds it |
 
 When a harness changes its hook input, add a fixture of the new shape next to the old one, teach its parser in
-`harnesses.py`, and update `FIXTURE_VERSIONS` when the new fixture carries a version.
+`src/benchbook/hooks/harnesses.py`, and update `FIXTURE_VERSIONS` when the new fixture carries a version.

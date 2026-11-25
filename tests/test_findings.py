@@ -17,13 +17,14 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, config, hooks
+from benchbook import Ledger, config
 from benchbook.code import findings
 from benchbook.code.findings import FINDING_DOMAIN, finding_hash, parse
 from benchbook.config import write_config
 from benchbook.core.brief import compile_brief
 from benchbook.errors import BenchbookError
-from benchbook.hooks import extract_text, process
+from benchbook.hooks import subagent as hooks
+from benchbook.hooks.subagent import extract_text, process
 
 from .conftest import make_project
 from .writer import as_writer, issue

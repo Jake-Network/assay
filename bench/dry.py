@@ -247,7 +247,7 @@ class Sim:
         """Leave each worker's SubagentStop in the hook spool, in the form `benchbook hook subagent-stop` writes
         it, without starting the hook's background processor: the harness's own replay then has entries to
         snapshot, record and export, which is the path a real C run takes when a processor was still behind."""
-        from benchbook import hooks
+        from benchbook.hooks import subagent as hooks
 
         # The spool is keyed by the database target, which this process shares with the replay; only the state
         # directory is the run's own.

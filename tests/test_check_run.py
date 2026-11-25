@@ -13,8 +13,9 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, config, hooks
+from benchbook import Ledger, config
 from benchbook.checks import run as check_run
+from benchbook.hooks import subagent as hooks
 from tests.conftest import make_project
 
 PY = shlex.quote(sys.executable)

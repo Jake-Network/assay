@@ -38,8 +38,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from . import config
-from .config import env
+from .. import config
+from ..config import env
 
 MAX_INPUT = 2_000_000
 STATEMENT_HEAD = 300
@@ -585,7 +585,7 @@ def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
     """Accept a new ID from a write response. A duplicate response refers to an already existing record: its id
     is that record (claims) or missing (a refused experiment). A repeat recorded in notify mode is new: its id
     differs from duplicate_of."""
-    from .core.ids import SHORT_ID_RE
+    from ..core.ids import SHORT_ID_RE
 
     try:
         result = json.loads(text)
@@ -659,8 +659,8 @@ def _run_receipts(data: dict[str, Any], fired_at: datetime) -> tuple[datetime | 
 
 
 def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: datetime) -> bool:
-    from .core.ids import SHORT_ID_RE
-    from .errors import BenchbookError
+    from ..core.ids import SHORT_ID_RE
+    from ..errors import BenchbookError
 
     cited = [(pfx, f"{pfx}:{body}") for pfx, body in SHORT_ID_RE.findall(text) if pfx in CITABLE]
     if not cited:
@@ -713,8 +713,8 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
     if not project:
         log(f"{event}: not captured: no benchbook project for {data.get('cwd') or cwd or os.getcwd()}")
         return "skipped:no-project"
-    from .config import default_agent
-    from .core.ledger import Ledger
+    from ..config import default_agent
+    from ..core.ledger import Ledger
 
     lg = Ledger.open(project=project, agent=default_agent("hook"), role="harness")
     if lg.token is not None:
@@ -744,7 +744,7 @@ def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[s
                       source: dict[str, Any]) -> None:
     """The out-of-scope section of the report as finding claims (findings.py). The claims are written by whoever
     the hook writes as (the token's agent under a token); source names the subagent that reported them."""
-    from .code import findings
+    from ..code import findings
 
     if not findings.parse(text, heading):
         return  # no section, or nothing in it: no transcript read, no writes
@@ -758,8 +758,8 @@ def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[s
 def _reported_piece(cwd: str | None, text: str) -> str | None:
     """The piece the report's own commit names (verify_requests.reported_target), for a subagent that recorded no
     attempt: the same piece the automatic re-run of this report verifies."""
-    from .checks.run import find_repo
-    from .checks.verify_requests import reported_target
+    from ..checks.run import find_repo
+    from ..checks.verify_requests import reported_target
 
     repo = find_repo(Path(cwd)) if cwd else None
     target = reported_target(repo, text) if repo is not None else None
@@ -769,7 +769,7 @@ def _reported_piece(cwd: str | None, text: str) -> str | None:
 def _run_piece(lg: Any, data: dict[str, Any], fired_at: datetime) -> str | None:
     """The piece this run worked on, when the ledger knows it: config.piece of the attempts this subagent recorded
     (write receipts in its own transcript), if they name exactly one piece."""
-    from .errors import BenchbookError
+    from ..errors import BenchbookError
 
     _, receipts = _run_receipts(data, fired_at)
     ids = []
@@ -795,7 +795,7 @@ def _permanent(e: BaseException) -> bool:
     SQL errors. Connection trouble and OS errors are transient."""
     import psycopg
 
-    from .errors import BenchbookError
+    from ..errors import BenchbookError
 
     if isinstance(e, BenchbookError):
         return True
@@ -877,11 +877,11 @@ def process_file(path: Path) -> str:
         return f"dead:{reason}"
     try:
         if event in ATTEMPT_EVENTS:  # a check run (check run, the Bash hook): an attempt, not a report
-            from .checks.attempts import record_spooled
+            from ..checks.attempts import record_spooled
 
             result = record_spooled(event, data, spooled["project"], _entry_receipt(path, spooled))
         elif event == "verify-request":
-            from .checks.verify_requests import process as verify_request
+            from ..checks.verify_requests import process as verify_request
 
             spool = path.parent.parent if path.parent.name == "dead" else path.parent
             result = verify_request(data, spooled["project"], _entry_receipt(path, spooled), spool)
@@ -899,7 +899,7 @@ def process_file(path: Path) -> str:
                 os.fsync(f.fileno())
         path.unlink(missing_ok=True)
         if result.startswith(("captured", "recorded")) and isinstance(project := spooled.get("project"), str):
-            from .code.status import refresh_cache
+            from ..code.status import refresh_cache
 
             refresh_cache(path.parent.parent if path.parent.name == "dead" else path.parent, project)
     except Exception as e:  # noqa: BLE001
@@ -1037,7 +1037,7 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
     me = writer_identity()
     if me is None or not spool.parent.is_dir():
         return
-    from .errors import InvalidAgentToken
+    from ..errors import InvalidAgentToken
 
     target = _target_key()
     current: dict[str, str | None] = {}
@@ -1047,7 +1047,7 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
     def agent_in(project: str) -> str | None:
         if project not in current:
             try:
-                from .core.ledger import Ledger
+                from ..core.ledger import Ledger
 
                 lg = Ledger.open(project=project)  # the current token's agent, or an error
                 current[project] = lg.agent
@@ -1125,11 +1125,3 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
     for project, reason in unavailable.items():
         summary.errors.append(f"could not confirm the current token's agent in {project} ({reason}); "
                               "earlier entries are still queued")
-
-
-if __name__ == "__main__":
-    path = Path(sys.argv[1])
-    if path.is_dir():
-        replay(path, sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] in LANES else RECORDS)
-    else:
-        print(process_file(path))

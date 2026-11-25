@@ -13,11 +13,12 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import Ledger, cli, hooks, packs
+from benchbook import Ledger, cli, packs
 from benchbook.core import ledger as ledger_module
 from benchbook.db import conn as dbconn
 from benchbook.db import migrate as dbmigrate
 from benchbook.errors import BenchbookError
+from benchbook.hooks import subagent as hooks
 from benchbook.mcp_server import build
 from tests.conftest import make_project
 from tests.test_mcp import call

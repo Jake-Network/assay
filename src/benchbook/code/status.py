@@ -97,7 +97,7 @@ def read_cache(project: str | None = None) -> str:
     """Read the cache for the current project and spool without opening a ledger."""
     from ..config import load
     from ..errors import BenchbookError
-    from ..hooks import _spool_dir
+    from ..hooks.subagent import _spool_dir
 
     try:
         project = project or load().project

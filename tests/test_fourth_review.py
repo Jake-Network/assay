@@ -19,10 +19,10 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import hooks
 from benchbook.code import pieces
 from benchbook.core import identity
 from benchbook.errors import BenchbookError
+from benchbook.hooks import subagent as hooks
 from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, attempts, cli_env, make_checkout, spool_entries
 from tests.test_review_holes import code_project, make_repo, owner_rows, tok

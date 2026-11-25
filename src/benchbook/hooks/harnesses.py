@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .check_hooks import Outcome, rough_signature
-from .check_hooks import outcome as claude_code_outcome
+from .checks import Outcome, rough_signature
+from .checks import outcome as claude_code_outcome
 
 CLAUDE_CODE = "claude-code"
 HARNESSES = (CLAUDE_CODE, "codex", "cursor", "gemini", "opencode", "pi")

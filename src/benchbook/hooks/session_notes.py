@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import config
+from .. import config
 
 DELIVERED = "delivered"
 _SESSION = re.compile(r"[A-Za-z0-9_.-]{1,128}")

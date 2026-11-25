@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import config
+from .. import config
 
 if TYPE_CHECKING:
     from .harnesses import ShellCall
@@ -228,7 +228,7 @@ def rough_signature(text: str) -> str | None:
     """The hook's signature input, from the Bash error text alone (signature.detail): the TypeScript errors when
     there are any, else a hash of the normalised last error line. checks.failure_signature turns it and the exit
     code into the attempt's signature at replay."""
-    from .checks.signature import detail
+    from ..checks.signature import detail
 
     return detail(text)
 
@@ -282,7 +282,7 @@ def _read_input() -> dict[str, Any]:
 
 
 def _log(msg: str) -> None:
-    from .hooks import _log_notices, log
+    from .subagent import _log_notices, log
 
     log(msg)
     _log_notices()
@@ -345,8 +345,8 @@ def bash_result(harness: str = "claude-code") -> int:
 
 
 def _record(call: ShellCall, found: Match) -> None:
-    from .checks.run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
-    from .hooks import _spool_dir
+    from ..checks.run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
+    from .subagent import _spool_dir
 
     project = found.project
     res = call.outcome()
@@ -403,7 +403,7 @@ def _base_branches(cfg: config.LocalConfig) -> set[str]:
 def _queued_passes(project: str, piece: str, sha: str, junit_checks: set[str]) -> set[str]:
     """Checks with a passing clean run still waiting in the spool (check run returns before its processor has
     written the attempt)."""
-    from .hooks import ATTEMPT_EVENTS, _spool_dir
+    from .subagent import ATTEMPT_EVENTS, _spool_dir
 
     out: set[str] = set()
     for p in _spool_dir().glob("*.json"):
@@ -437,7 +437,7 @@ def _allow(why: str) -> int:
 
 
 def _gate(data: dict[str, Any]) -> int:
-    from .checks.run import find_repo, git_state, head_branch, resolve_piece
+    from ..checks.run import find_repo, git_state, head_branch, resolve_piece
 
     cwd = Path(data.get("cwd") or os.getcwd())
     cfg = config.load(cwd)
@@ -457,8 +457,8 @@ def _gate(data: dict[str, Any]) -> int:
     state = git_state(repo)
     if state is None or state.sha is None:
         return _allow(f"no commit at HEAD in {repo}")
-    from .checks.attempts import check_states, live_piece
-    from .packs import load_pack
+    from ..checks.attempts import check_states, live_piece
+    from ..packs import load_pack
 
     # A branch is a piece only when `piece start` made it one (or BENCHBOOK_PIECE says so): where nothing is
     # committed to main, the lead works on a feature branch too, and its own task list is not a piece.

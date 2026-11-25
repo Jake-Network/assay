@@ -265,7 +265,7 @@ def hook_health(root: Path) -> HookHealth:
     replay of its spool, and the reports still waiting in that spool (dead/, or queued and not drained). hook.log
     is shared by every database: a line about another database's spool does not count, and a replay of another
     spool settles nothing here."""
-    from .hooks import _spool_dir, _state_dir
+    from .hooks.subagent import _spool_dir, _state_dir
 
     log = _state_dir() / "hook.log"
     spool = _spool_dir()
@@ -336,9 +336,9 @@ def check_harness_input() -> Check | None:
     input was not shaped as that harness documents (harnesses.py), i.e. as the stored fixtures are. The line names
     the harness version where the input carries one (Cursor's cursor_version) next to the fixtures' version. None
     when no such harness observed anything."""
-    from .check_hooks import OBSERVED
-    from .harnesses import CLAUDE_CODE, FIXTURE_VERSIONS
-    from .hooks import _spool_dir
+    from .hooks.checks import OBSERVED
+    from .hooks.harnesses import CLAUDE_CODE, FIXTURE_VERSIONS
+    from .hooks.subagent import _spool_dir
 
     path = _spool_dir() / OBSERVED
     rows = [r for r in _observed_since(path, time.time() - RECENT_SECONDS)
