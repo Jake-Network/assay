@@ -18,7 +18,7 @@ from benchbook.errors import ValidationFailed
 from benchbook.failures import DISCARDED_DOMAIN, discarded_hash
 from benchbook.ids import short
 from benchbook.packs import load_pack
-from benchbook.packs.code.brief import FOOTER
+from benchbook.packs.code.brief import FOOTER, validity
 from benchbook.tokens import estimate_tokens
 from tests.conftest import make_project
 from tests.writer import token_ledger
@@ -613,6 +613,27 @@ def _integration(tmp_path: Path, db_url: str, code: str) -> tuple[Path, Ledger, 
     failures.record_noted(lead, "pb", "regex-split", "drops the acronym boundary")
     findings.record_noted(agent(db_url, code, "impl"), "the cache keeps stale entries", [], piece="pb")
     return repo, lead, shas, compile_brief(lead, None, 2000, log=False, tags=changed_scope(repo), repo=repo)
+
+
+def test_validity_compares_and_counts_literal_paths(repo: Path) -> None:
+    route = "app/[id]/route.ts"
+    sibling = "app/i/route.ts"
+    for name in (route, sibling):
+        path = repo / name
+        path.parent.mkdir(parents=True)
+        path.write_text("initial\n")
+    git(repo, "add", "--all")
+    git(repo, "commit", "-qm", "routes")
+    base = git(repo, "rev-parse", "HEAD")
+
+    (repo / sibling).write_text("sibling changed\n")
+    git(repo, "commit", "-qam", "change sibling route")
+    assert validity(repo, base, [route]) is None
+    assert validity(repo, base, ["app/*/route.ts"], literal=False) == "changed since (1 commit)"
+
+    (repo / route).write_text("dynamic route changed\n")
+    git(repo, "commit", "-qam", "change dynamic route")
+    assert validity(repo, base, [route]) == "changed since (1 commit)"
 
 
 def test_only_the_piece_whose_files_changed_is_marked_on_an_integration_branch(tmp_path: Path, db_url: str,

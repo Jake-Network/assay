@@ -266,10 +266,14 @@ def capture(lg: Ledger, report: str, heading: str, *, source: dict[str, Any], pi
     source that supports each of them. A finding already in the ledger (same key) gets the report as evidence
     instead of a second claim, so the out-of-scope claims follow the distinct findings, not the reports.
     Idempotent: a retry of the same report finds its source, its claims and its links again."""
-    found = parse(report, heading, root)
+    return _record(lg, parse(report, heading, root), report, heading, source, piece)
+
+
+def _record(lg: Ledger, found: list[Finding], report: str, heading: str, source: dict[str, Any],
+            piece: str | None, *, locator: str | None = None) -> Captured:
     if not found:
         return Captured()
-    sid = _report_source(lg, report, source)
+    sid = _report_source(lg, report, source, locator)
     out = Captured(findings=len(found))
     ids: list[str] = []
     for f in found:
@@ -296,12 +300,28 @@ def record_noted(lg: Ledger, text: str, files: list[str], piece: str | None = No
     """A finding the lead (or any agent) writes down itself: `benchbook finding add`. Recorded as a one-item report
     under NOTED_HEADING, so it has the same key, tags and dedup as one a worker's report named, with the note as its
     source."""
-    where = "".join(f" `{f}`" for f in files)
-    report = f"## {NOTED_HEADING}\n- {' '.join(text.split())}{where}\n"
-    return capture(lg, report, NOTED_HEADING, source={"noted_by": lg.agent}, piece=piece)
+    from .errors import ValidationFailed
+
+    sentence = " ".join(text.split())
+    if not sentence or normalize_finding(sentence) in NOTHING:
+        return Captured()
+    explicit = []
+    for file in files:
+        path = PurePosixPath(file)
+        if not path.parts or path.is_absolute() or ".." in path.parts or not file.isprintable():
+            raise ValidationFailed([f"--file: expected a repository-relative path, got {file!r}"])
+        explicit.append(path.as_posix() + ("/" if file.endswith("/") else ""))
+    paths = tuple(dict.fromkeys((*_paths(sentence, None), *explicit)))
+    # The source retains any new explicit paths when the append-only claim already exists.
+    locator = "\n".join(FILE_TAG + file for file in dict.fromkeys(explicit)) or None
+    report = f"## {NOTED_HEADING}\n- {sentence}\n"
+    if locator:
+        report += f"\n{locator}\n"
+    return _record(lg, [Finding(sentence, "", paths)], report, NOTED_HEADING, {"noted_by": lg.agent}, piece,
+                   locator=locator)
 
 
-def _report_source(lg: Ledger, report: str, source: dict[str, Any]) -> Any:
+def _report_source(lg: Ledger, report: str, source: dict[str, Any], locator: str | None) -> Any:
     """The report as a source row, keyed by its digest like the auto-captured note: the same text arriving through
     a second hook event, or a retry, finds the row again instead of counting as another report."""
     digest = hashlib.sha256(report.encode("utf-8")).hexdigest()
@@ -311,6 +331,6 @@ def _report_source(lg: Ledger, report: str, source: dict[str, Any]) -> Any:
     if rows:
         return rows[0]["id"]
     if source.get("noted_by"):
-        return lg.add_source(uri, title=f"finding noted by {source['noted_by']}"[:300], sha256=digest)
+        return lg.add_source(uri, title=f"finding noted by {source['noted_by']}"[:300], locator=locator, sha256=digest)
     who = ", ".join(f"{k} {source[k]}" for k in ("agent_type", "agent_id", "session_id") if source.get(k))
     return lg.add_source(uri, title=f"subagent final report ({who or 'unknown subagent'})"[:300], sha256=digest)

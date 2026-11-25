@@ -110,7 +110,13 @@ FROM benchbook.v_claim_status s
 WHERE s.project_id = %(p)s AND s.kind = 'observation' AND 'out-of-scope' = ANY(s.tags)
   AND s.status IN ('proposed', 'inconclusive')
   AND (%(all)s OR s.tags && %(t)s::text[]
-       OR EXISTS (SELECT 1 FROM unnest(s.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[])))
+       OR EXISTS (SELECT 1 FROM unnest(s.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[]))
+       OR (cardinality(%(flikes)s::text[]) > 0 AND EXISTS (
+           SELECT 1 FROM benchbook.links l JOIN benchbook.sources src ON src.id = l.src_id
+           CROSS JOIN LATERAL unnest(string_to_array(src.locator, chr(10))) AS x(tag)
+           WHERE l.project_id = s.project_id AND src.project_id = s.project_id AND l.dst_id = s.id
+             AND l.src_type = 'source' AND l.dst_type = 'claim' AND l.relation = 'supports'
+             AND starts_with(src.uri, 'subagent-report:sha256:') AND x.tag LIKE ANY(%(flikes)s::text[]))))
 ORDER BY s.n_support DESC, s.created_at DESC, s.id
 LIMIT %(n)s"""
 OCCUPIED = f"""
@@ -243,21 +249,22 @@ def merged_commits(repo: Path) -> list[str]:
     return p.stdout.split() if p.returncode == 0 else []
 
 
-def validity(repo: Path, commit: str | None, paths: Sequence[str]) -> str | None:
+def validity(repo: Path, commit: str | None, paths: Sequence[str], *, literal: bool = True) -> str | None:
     """T10: whether what was checked at commit still holds at HEAD for paths. None: unchanged (or unknown, when there
     is nothing to compare or git did not answer in time); otherwise the mark the brief line carries."""
     if not commit or not paths:
         return None
     if _git_ok(repo, "cat-file", "-e", f"{commit}^{{commit}}") != 0:
         return NOT_IN_CHECKOUT
-    if _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *paths) != 1:
+    pathspecs = [f":(literal){path}" for path in paths] if literal else paths
+    if _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *pathspecs) != 1:
         return None
     if _git_ok(repo, "merge-base", "--is-ancestor", commit, "HEAD") == 1:
         # The paths differ because HEAD never had this commit (a piece's branch read from the base or the lead's
         # branch before the merge), not because a later commit changed them: rev-list would count 0.
         return NOT_MERGED
     try:
-        n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD", "--", *paths],
+        n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD", "--", *pathspecs],
                            capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         n = ""
@@ -363,8 +370,10 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
             # paths, else the directories: a directory also holds the other pieces' files, whose merges marked every
             # piece "changed since" in that pilot
             files = [str(x) for x in r["files"] or [] if isinstance(x, str)] if isinstance(r["files"], list) else []
-            paths = files or piece_paths.get(r["piece"]) or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
-            if (m := validity(repo, r["commit"], paths)) is not None:
+            declared = piece_paths.get(r["piece"])
+            paths = files or declared or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
+            # Task declarations may contain glob patterns; the recorded Git paths and directory prefixes are literal.
+            if (m := validity(repo, r["commit"], paths, literal=bool(files) or not declared)) is not None:
                 marks[r["id"]] = m
         stale = []
         for r in discarded[: limits["discarded"]]:
