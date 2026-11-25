@@ -87,7 +87,8 @@ def test_passing_commit_supports_the_completion(repo: Path, vtmp: Path, verifier
         "guard_touched": False, "guard_files": [], "checks_changed": False, "guard_weakened": False}
     claim = row(verifier, "claims", rec.claim_id)
     assert claim["author"] == "impl" and claim["kind"] == "completion"  # two different agents in the ledger
-    assert claim["payload"] == {"piece": "media", "commit": sha, "reported_checks": [], "paths": ["impl.txt"]}
+    assert claim["payload"] == {"piece": "media", "commit": sha, "reported_checks": [], "paths": ["impl.txt"],
+                                "files": ["impl.txt"]}
     assert set(claim["tags"]) == {"piece:media", f"commit:{sha}", "file:impl.txt"}
     [link] = links_to(verifier, rec.claim_id)
     assert (link["src_id"], link["relation"], link["author"]) == (rec.experiment_id, "supports", "verifier@test")
@@ -147,7 +148,7 @@ def test_report_file_keeps_a_hash_and_the_check_names_it_mentions(repo: Path, tm
     _, rec = checks.verify(verifier, "media", sha, repo=repo, reported_by="impl", report_file=report)
     payload = row(verifier, "claims", rec.claim_id)["payload"]
     assert payload == {"piece": "media", "commit": sha, "reported_checks": ["unit"], "paths": ["impl.txt"],
-                       "report": {"sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                       "files": ["impl.txt"], "report": {"sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
                                   "bytes": len(report.read_bytes())}}
     with pytest.raises(BenchbookError, match="report-file"):
         checks.verify(verifier, "media", sha, repo=repo, reported_by="impl", report_file=tmp_path / "missing")
