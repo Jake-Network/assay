@@ -756,3 +756,8 @@ by hand, not a live session). Four are fixed; the fourth is not.
   because they are what the re-run checked. With `[guard] base` pointing below the integration branch (as in the
   benchmark) a later phase's piece also lists the earlier phases' files, which is coarser than its own changes but
   still finer than directories.
+- **A checkout's brief covers the pieces merged into it.** The `--here` scope (the branch's directories and
+  `piece:<branch>`) missed records tagged with a merged piece and no file. The brief adds every piece with a
+  completion at a commit among HEAD's newest 5,000 (one `git rev-list`, then one query); by commit rather than by
+  branch name, since workers' branches are often deleted after the merge. Records of pieces merged long ago come
+  back into scope too; the section limits keep the newest first.

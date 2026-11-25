@@ -719,8 +719,11 @@ piece never started with `piece start` is found by path, and a `piece:<name>` ta
 **`--here`** computes the scope from the checkout: the directories the current branch changed since its merge-base
 with the base ref (`[guard] base`, else `origin/main`) plus the working tree's changes and untracked files, each
 file reduced to its directory and the deepest lifted to their parent until at most 20 remain, as `file:` tags, plus
-`piece:<branch>`. On the base branch itself the scope is empty and the brief covers the whole project. The boundary
-hooks use the same scope. Without `--tags` the brief covers the whole project. With several tags
+`piece:<branch>`. On the base branch itself the scope is empty and the brief covers the whole project. The brief then
+adds `piece:<piece>` for every piece with a completion at a commit in HEAD's last 5,000 commits (one `git rev-list`,
+2 seconds), and its Scope line ends `+ N pieces merged into HEAD`: on an integration branch the records of the
+pieces merged into it (a worker's finding, a lead's `benchbook discard`, both tagged `piece:<piece>`) belong to it,
+and in the second boundary pilot they were outside the scope. The boundary hooks use the same scope. Without `--tags` the brief covers the whole project. With several tags
 the sections hold the union.
 
 **Budget.** At most 8 items per section (pack.toml `[brief]`), each line cut to a fixed length; then items are

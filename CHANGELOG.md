@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- `brief --here` and the boundary hooks also cover the pieces merged into HEAD (a completion at a commit in HEAD's
+  history): their findings and dead ends, tagged with the piece, were outside an integration branch's scope. In the
+  second boundary pilot this hid the lead's own `benchbook discard` and a worker's finding from the next session.
 - The brief's "changed since" mark compares the files a verified commit changed (recorded as the completion's
   `payload.files`), not the directories: on an integration branch every piece shared `src/` and `tests/` with the
   others, so in the second boundary pilot each merge marked every verified piece changed and the lead could not tell

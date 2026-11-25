@@ -621,3 +621,12 @@ def test_only_the_piece_whose_files_changed_is_marked_on_an_integration_branch(t
     _, _, shas, out = _integration(tmp_path, db_url, code)
     assert _line(out, f"pa at {shas['pa'][:12]}").endswith("· changed since (1 commit)")
     assert "changed since" not in _line(out, f"pb at {shas['pb'][:12]}")
+
+
+def test_records_of_pieces_merged_into_head_are_in_the_here_brief(tmp_path: Path, db_url: str, code: str) -> None:
+    """A noted dead end and a worker's finding tagged piece:pb, with no file: tag, were outside the work branch's
+    --here scope (piece:work and file: prefixes)."""
+    _, _, _, out = _integration(tmp_path, db_url, code)
+    assert out.splitlines()[2].endswith("+ 2 pieces merged into HEAD")
+    assert "regex-split on pb: noted: drops the acronym boundary" in out
+    assert "the cache keeps stale entries" in out

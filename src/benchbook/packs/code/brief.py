@@ -157,6 +157,12 @@ SELECT config ->> 'piece' AS piece, code_ref AS commit, metrics FROM benchbook.e
 WHERE project_id = %s AND run_status = 'ok' AND config ->> 'piece' = ANY(%s) AND code_ref = ANY(%s)
   AND metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb
 ORDER BY created_at, id"""
+# The pieces with a completion reported at a commit HEAD contains (merged_commits), for a checkout's brief.
+MERGED_PIECES = """
+SELECT DISTINCT c.payload ->> 'piece' AS piece FROM benchbook.claims c
+WHERE c.project_id = %s AND c.kind = 'completion' AND c.payload ? 'piece' AND c.payload ->> 'commit' = ANY(%s)
+ORDER BY 1"""
+MERGED_DEPTH = 5000  # commits of HEAD's history read for merged pieces
 # The paths a piece occupies (its newest task's spec.paths): what the validity check compares (T10).
 PIECE_PATHS = """
 SELECT DISTINCT ON (t.spec ->> 'piece') t.spec ->> 'piece' AS piece, t.spec -> 'paths' AS paths
@@ -225,6 +231,16 @@ def _git_ok(repo: Path, *args: str) -> int | None:
                               stdin=subprocess.DEVNULL).returncode
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def merged_commits(repo: Path) -> list[str]:
+    """The newest MERGED_DEPTH commits of HEAD's history (one git call, GIT_TIMEOUT); [] when git does not answer."""
+    try:
+        p = subprocess.run(["git", "-C", str(repo), "rev-list", f"--max-count={MERGED_DEPTH}", "HEAD"],
+                           capture_output=True, text=True, timeout=GIT_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return p.stdout.split() if p.returncode == 0 else []
 
 
 def validity(repo: Path, commit: str | None, paths: Sequence[str]) -> str | None:
@@ -308,8 +324,17 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     scope = Scope.of(tags)
     limits = {**LIMITS, **{k: int(v) for k, v in lg.pack.brief_limits.items() if k in LIMITS}}
     labels = lg.pack.brief_labels
-    params = scope.params(p.id, FETCH)
+    merged: list[str] = []
+    label = scope.label()
     with lg._conn() as conn:
+        if repo is not None and not scope.everything and (heads := merged_commits(repo)):
+            # The pieces whose reported commit HEAD contains: on an integration branch their records (a worker's
+            # findings, a lead's noted dead end, tagged piece:<piece>) belong to this checkout as much as its own
+            # piece's do, and the second boundary pilot's brief left them out.
+            merged = [r["piece"] for r in conn.execute(MERGED_PIECES, (p.id, heads))
+                      if f"piece:{r['piece']}" not in scope.exact]
+            scope = Scope(scope.exact + tuple(f"piece:{m}" for m in merged), scope.prefixes)
+        params = scope.params(p.id, FETCH)
         if now is None:
             now = conn.execute("SELECT now() AS t").fetchone()["t"]
         assert now is not None
@@ -352,7 +377,8 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
             discarded = [r for r in discarded if r not in stale] + stale
 
     head = [f"# benchbook brief · {p.id} · {now.astimezone(UTC):%Y-%m-%d %H:%MZ}", f"Goal: {clip(p.goal, 300)}",
-            f"Scope: {clip(scope.label(), 300)}"]
+            f"Scope: {clip(label, 300)}" + (f" + {len(merged)} piece{'' if len(merged) == 1 else 's'} merged into "
+                                             "HEAD" if merged else "")]
     if task is not None:
         t_tags = f" · tags: {clip(', '.join(task['tags']), 200)}" if task["tags"] else ""
         head.append(f'Your task {short("task", task["id"])}: "{clip(task["title"], 200)}"{t_tags}')
