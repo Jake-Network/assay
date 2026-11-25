@@ -31,6 +31,8 @@ MIN_CLAUDE_VERSION = (2, 1, 277)
 USD_TOLERANCE = 1e-9
 # A call's own usage in a result event (Claude Code 2.1.332), whether or not a resume restored the session's totals.
 OWN_USAGE = "model_usage_since_last_result"
+# Summed costUSD rows against total_cost_usd: equal in every receipt of the pilots, up to float addition.
+OWN_USAGE_TOLERANCE = 1e-6
 WORK_SCOPE = ("Work only in the task checkout and use the arm's provided mechanism for prior context. "
               "Leave the benchmark's evaluator, run logs, and oracle receipts to the harness.")
 
@@ -41,9 +43,10 @@ class Batch:
     out: Path
     execute_call: Callable[[real.PreparedRun, Path, int], None]
     spent: float = 0.0
-    # The last receipt of each session: (total_cost_usd, tokens). A resumed call's receipt reports the session's whole
-    # spend (code.claude.com/docs/en/agent-sdk/cost-tracking), so a call's own is the difference from the previous one.
-    sessions: dict[str, tuple[float, int]] = field(default_factory=dict)
+    # Each session's totals after its last call: (cost, tokens) as counted here, then (total_cost_usd, tokens) as that
+    # call's receipt reported them. The two differ after a resume that did not restore the session's earlier totals;
+    # own_spend says which receipts it accepts.
+    sessions: dict[str, tuple[float, int, float, int]] = field(default_factory=dict)
 
     def capture(
         self, arm: str, work: Path, env: dict[str, str], target: Path, prompt: str, session: str, *,
@@ -64,7 +67,8 @@ class Batch:
         self.execute_call(real.PreparedRun(work, cmd, env, None, None, session), target, self.args.wall_clock)
         events = real._read_stream(target)
         metrics = own_spend(read_call(events, session), self.sessions.get(session) if resume else None)
-        self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"])
+        self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"],
+                                  metrics["reported_session_cost_usd"], metrics["reported_session_tokens"])
         self.spent += metrics["cost_usd"] - cap
         self.record_spend()
         metrics["seconds"] = time.monotonic() - started
@@ -103,7 +107,8 @@ def read_call(events: list[tuple[int, dict[str, Any]]], session: str) -> dict[st
 
 
 def usage_totals(rows: Any) -> tuple[float, int] | None:
-    """Cost and tokens summed over a per-model usage map, or None when any row lacks them."""
+    """Cost and tokens summed over a per-model usage map, or None when any row lacks them. An empty map is None too:
+    read_call also requires the lead's context, so the call made at least one API request."""
     if not isinstance(rows, dict) or not rows:
         return None
     costs = [row.get("costUSD") if isinstance(row, dict) else None for row in rows.values()]
@@ -113,20 +118,32 @@ def usage_totals(rows: Any) -> tuple[float, int] | None:
     return sum(costs), sum(sum(n) for n in counts if n is not None)
 
 
-def own_spend(receipt: dict[str, Any], before: tuple[float, int] | None) -> dict[str, Any]:
-    """A call's own cost and tokens, with the session totals beside them (before: the session's previous totals).
+def own_spend(receipt: dict[str, Any], before: tuple[float, int, float, int] | None) -> dict[str, Any]:
+    """A call's own cost and tokens, with the session totals beside them (before: Batch.sessions' entry).
 
-    A receipt that reports the call's own usage (OWN_USAGE) is read from that: a resumed session's totals cover the
-    whole session only when Claude Code restored the earlier ones, and on 2026-11-25 one resume did not. Otherwise
-    the receipt covers the whole session so far, and the call's own spend is the difference from `before`."""
-    cost, tokens = before or (0.0, 0)
+    A receipt that reports the call's own usage (OWN_USAGE) is read from that, since a resumed session's totals cover
+    the whole session only when Claude Code restored the earlier ones (on 2026-11-25 one resume did not). The own
+    usage must fit the receipt one of two ways: the receipt's totals are the own usage (a first call, or a resume
+    that restored nothing) or the previous receipt's totals plus it (a resume that restored them). Without it the
+    receipt covers the whole session so far, and the call's own spend is the difference from the previous receipt.
+    The receipt's totals are kept as reported_session_*; session_* are the totals counted here (the same as the
+    receipt's without the own usage)."""
+    cost, tokens, said_cost, said_tokens = before or (0.0, 0, 0.0, 0)
+    rest = {key: value for key, value in receipt.items() if key != "own"}
+    reported = {"reported_session_cost_usd": receipt["cost_usd"], "reported_session_tokens": receipt["tokens"]}
     if (own := receipt.get("own")) is not None:
-        rest = {key: value for key, value in receipt.items() if key != "own"}
-        return {**rest, "cost_usd": own[0], "tokens": own[1],
-                "session_cost_usd": cost + own[0], "session_tokens": tokens + own[1]}
-    if receipt["cost_usd"] < cost - USD_TOLERANCE or receipt["tokens"] < tokens:
+        own_cost, own_tokens = own
+        bases = [(0.0, 0)] + ([(said_cost, said_tokens)] if before else [])
+        if not any(abs(receipt["cost_usd"] - (c + own_cost)) <= OWN_USAGE_TOLERANCE
+                   and receipt["tokens"] == t + own_tokens for c, t in bases):
+            raise real.BenchRunError(f"a call's {OWN_USAGE} fits neither its receipt's totals nor the previous "
+                                     "receipt's totals plus it")
+        return {**rest, **reported, "cost_usd": own_cost, "tokens": own_tokens,
+                "session_cost_usd": cost + own_cost, "session_tokens": tokens + own_tokens}
+    if receipt["cost_usd"] < said_cost - USD_TOLERANCE or receipt["tokens"] < said_tokens:
         raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
-    return {**receipt, "cost_usd": max(receipt["cost_usd"] - cost, 0.0), "tokens": receipt["tokens"] - tokens,
+    return {**rest, **reported, "cost_usd": max(receipt["cost_usd"] - said_cost, 0.0),
+            "tokens": receipt["tokens"] - said_tokens,
             "session_cost_usd": receipt["cost_usd"], "session_tokens": receipt["tokens"]}
 
 

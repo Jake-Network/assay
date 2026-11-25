@@ -122,6 +122,7 @@ def test_a_resumed_call_reads_its_own_usage_whether_or_not_the_session_totals_we
     second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
     assert (second["cost_usd"], second["tokens"]) == (0.0623, 27113)
     assert second["session_cost_usd"] == pytest.approx(0.1225) and second["session_tokens"] == 81113
+    assert (second["reported_session_cost_usd"], second["reported_session_tokens"]) == totals[1]
     assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == pytest.approx(0.1225)
 
 
@@ -133,6 +134,60 @@ def test_an_unreadable_own_usage_is_a_missing_receipt() -> None:
                    run.OWN_USAGE: {"m": {"inputTokens": 5}}})]
     with pytest.raises(real.BenchRunError, match="unreadable"):
         run.read_call(events, "s")
+
+
+def own_usage_call(tmp_path: Path, calls: list[tuple[float, int, dict[str, tuple[float, int]]]], *,
+                   cap: float = 3.0) -> run.Batch:
+    """A batch whose calls return these receipts: (total_cost_usd, modelUsage tokens, own usage per model)."""
+    receipts = iter(calls)
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        cost, tokens, own = next(receipts)
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                   "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0, "costUSD": cost}},
+                   run.OWN_USAGE: {name: {"inputTokens": n, "outputTokens": 0, "costUSD": usd}
+                                   for name, (usd, n) in own.items()}}]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=cap, max_budget_usd=cap, total_budget_usd=10.0, model="m",
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    return run.Batch(args, tmp_path, execute)
+
+
+@pytest.mark.parametrize("second", [
+    (0.30, 1300, {"m": (0.05, 300)}),  # restored, but 0.30 is not 0.06 + 0.05
+    (0.30, 1300, {"m": (0.30, 300)}),  # costs fit the unrestored shape, tokens do not
+])
+def test_an_own_usage_that_fits_neither_receipt_shape_stops_the_trial(
+    tmp_path: Path, second: tuple[float, int, dict[str, tuple[float, int]]],
+) -> None:
+    batch = own_usage_call(tmp_path, [(0.06, 1000, {"m": (0.06, 1000)}), second])
+    batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    with pytest.raises(real.BenchRunError, match="fits neither"):
+        batch.capture("A", tmp_path, {}, tmp_path / "second", "probe", "s-1", resume=True, probe=True)
+
+
+def test_a_first_call_whose_own_usage_differs_from_its_receipt_stops_the_trial(tmp_path: Path) -> None:
+    batch = own_usage_call(tmp_path, [(2.9, 1000, {"m": (0.4, 1000)})])
+    with pytest.raises(real.BenchRunError, match="fits neither"):
+        batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+
+
+def test_an_own_usage_sums_every_model_and_counts_against_the_cap(tmp_path: Path) -> None:
+    """A lead on one model and subagents on another: both rows count, against the call's cap."""
+    batch = own_usage_call(tmp_path, [(0.5, 1000, {"lead": (0.2, 400), "sub": (0.3, 600)}),
+                                      (1.2, 2000, {"lead": (0.3, 500), "sub": (0.4, 500)})], cap=0.6)
+    batch.capture("F", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    first = json.loads((tmp_path / "first" / "metrics.json").read_text(encoding="utf-8"))
+    assert first["cost_usd"] == pytest.approx(0.5) and first["tokens"] == 1000
+    with pytest.raises(real.BenchRunError, match="second exceeded its cap"):
+        batch.capture("F", tmp_path, {}, tmp_path / "second", "work", "s-1", resume=True, probe=False)
+    second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
+    assert second["cost_usd"] == pytest.approx(0.7) and second["tokens"] == 1000
+    assert (second["reported_session_cost_usd"], second["reported_session_tokens"]) == (1.2, 2000)
 
 
 def test_every_call_copies_its_session_transcripts(tmp_path: Path) -> None:
