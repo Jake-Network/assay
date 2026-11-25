@@ -25,7 +25,10 @@ own spend (USD 0.0623 after the work call's 0.0602), as Claude Code had not rest
 and the runner stopped on "a resumed session reported less spend than its previous receipt". It counts USD 0.56
 (0.06 plus the probe's full USD 0.5 cap). The runner now reads a call's own spend from the result event's
 `model_usage_since_last_result` (`e592049`); replaying the second pilot's A and F streams through it gives every
-call's recorded cost and tokens exactly. A ran again as `try2`, whose resumes did restore the totals.
+call's recorded cost and tokens exactly. A ran again as `try2`, whose resumes did restore the totals. After the run a
+review added a check that a call's own usage fits its receipt (the receipt's totals are the own usage, or the previous
+receipt's totals plus it; commit `5931db1`); all 37 calls of the second and third pilots pass it with the same numbers,
+and so does A-try1's stopped resume.
 
 ## Directions
 
