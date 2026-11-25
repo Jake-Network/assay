@@ -585,7 +585,7 @@ def _receipt(text: str, prefix: str, is_mcp: bool) -> str | None:
     """Accept a new ID from a write response. A duplicate response refers to an already existing record: its id
     is that record (claims) or missing (a refused experiment). A repeat recorded in notify mode is new: its id
     differs from duplicate_of."""
-    from .ids import SHORT_ID_RE
+    from .core.ids import SHORT_ID_RE
 
     try:
         result = json.loads(text)
@@ -659,8 +659,8 @@ def _run_receipts(data: dict[str, Any], fired_at: datetime) -> tuple[datetime | 
 
 
 def _cites_own_record(lg: Any, text: str, data: dict[str, Any], fired_at: datetime) -> bool:
+    from .core.ids import SHORT_ID_RE
     from .errors import BenchbookError
-    from .ids import SHORT_ID_RE
 
     cited = [(pfx, f"{pfx}:{body}") for pfx, body in SHORT_ID_RE.findall(text) if pfx in CITABLE]
     if not cited:
@@ -714,7 +714,7 @@ def process(event: str, data: dict[str, Any], cwd: str | None = None, *, project
         log(f"{event}: not captured: no benchbook project for {data.get('cwd') or cwd or os.getcwd()}")
         return "skipped:no-project"
     from .config import default_agent
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
     lg = Ledger.open(project=project, agent=default_agent("hook"), role="harness")
     if lg.token is not None:
@@ -1047,7 +1047,7 @@ def _adopt(spool: Path, summary: ReplaySummary) -> None:
     def agent_in(project: str) -> str | None:
         if project not in current:
             try:
-                from .ledger import Ledger
+                from .core.ledger import Ledger
 
                 lg = Ledger.open(project=project)  # the current token's agent, or an error
                 current[project] = lg.agent

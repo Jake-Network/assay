@@ -24,7 +24,7 @@ from psycopg.types.json import Jsonb
 
 from benchbook import Ledger, attempts, check_run, checks, findings, pr, signature
 from benchbook.config import CheckSpec
-from benchbook.dedup import statement_hash
+from benchbook.core.dedup import statement_hash
 from benchbook.errors import InvalidTransition, PermissionDenied
 from tests.conftest import make_project
 from tests.writer import as_writer, issue

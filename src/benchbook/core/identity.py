@@ -16,7 +16,7 @@ from typing import Any
 
 import psycopg
 
-from .errors import BenchbookError, InvalidAgentToken, NotFound, PermissionDenied
+from ..errors import BenchbookError, InvalidAgentToken, NotFound, PermissionDenied
 
 TOKEN_PREFIX = "bbt_"  # recognisable in a secret scanner; carries no information
 _OWNER_ONLY = ("this needs the database owner's connection: the benchbook_writer login cannot register agents or "

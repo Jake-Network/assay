@@ -24,8 +24,8 @@ import pytest
 
 import benchbook
 from benchbook import Ledger, config, doctor, hooks
-from benchbook import ledger as ledger_mod
-from benchbook.blobs import LEGACY_BLOB_PREFIX, artifact_blob, blob_digest, is_blob_uri
+from benchbook.core import ledger as ledger_mod
+from benchbook.core.blobs import LEGACY_BLOB_PREFIX, artifact_blob, blob_digest, is_blob_uri
 from benchbook.db import conn as dbconn
 from benchbook.integrations.autoresearch import ops
 from benchbook.integrations.autoresearch.checkout import Checkout
@@ -395,7 +395,7 @@ def test_assay_hook_starts_without_the_cli_framework(tmp_path: Path) -> None:
             "from benchbook.entry import legacy_main\n"
             "try:\n    legacy_main()\nexcept SystemExit as e:\n    assert e.code == 0, e.code\n"
             "else:\n    raise AssertionError('the hook entry did not exit')\n"
-            "heavy = [m for m in ('typer', 'click', 'benchbook.cli', 'benchbook.ledger', 'psycopg', 'tomllib')"
+            "heavy = [m for m in ('typer', 'click', 'benchbook.cli', 'benchbook.core.ledger', 'psycopg', 'tomllib')"
             " if m in sys.modules]\n"
             "assert not heavy, heavy\n")
     env = legacy_environ(HOOK_AGENTS="assay-worker")

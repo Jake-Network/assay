@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from benchbook.blobs import artifact_blob
+from benchbook.core.blobs import artifact_blob
 from benchbook.integrations.autoresearch.code import code_hash
 
 

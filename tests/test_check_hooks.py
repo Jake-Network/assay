@@ -211,7 +211,8 @@ def test_the_bash_hook_never_loads_the_database_layer(gate_repo: Path, tmp_path:
             "from benchbook.entry import main\n"
             "try:\n    main()\nexcept SystemExit as e:\n    assert e.code == 0, e.code\n"
             "heavy = [m for m in sys.modules if m.split('.')[0] in ('typer', 'click', 'psycopg', 'jsonschema', "
-            "'pydantic') or m.startswith(('benchbook.cli', 'benchbook.ledger', 'benchbook.db', 'benchbook.checks'))]\n"
+            "'pydantic') or m.startswith(('benchbook.cli', 'benchbook.core.ledger', 'benchbook.db', "
+            "'benchbook.checks'))]\n"
             "assert not heavy, heavy\n")
     p = subprocess.run([sys.executable, "-c", code], cwd=gate_repo, env=cli_env(tmp_path), capture_output=True,
                        text=True, timeout=60)

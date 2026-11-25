@@ -53,8 +53,8 @@ def gate_patch(settings: dict[str, Any]) -> dict[str, Any]:
 
 def gate_on(project: str, hw: str | None = None, start: Path | None = None, skill: str | None = None,
             force: bool = False) -> dict[str, Any]:
+    from ...core.ledger import Ledger
     from ...errors import BenchbookError, NotFound
-    from ...ledger import Ledger
     from . import hw as hwmod
     from . import ops, referee
     from .checkout import Checkout

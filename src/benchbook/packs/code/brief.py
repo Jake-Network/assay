@@ -32,13 +32,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from ...brief import Section, age
+from ...core.brief import Section, age
+from ...core.ids import short
+from ...core.tokens import estimate_tokens
 from ...errors import ValidationFailed
-from ...ids import short
-from ...tokens import estimate_tokens
 
 if TYPE_CHECKING:
-    from ...ledger import Ledger
+    from ...core.ledger import Ledger
 
 FOOTER = ("\nDetails: benchbook get <id> (one record, at most 400 tokens). Name your approach when you run a check "
           "(benchbook check run <check> --approach NAME, or BENCHBOOK_APPROACH): a failure seen before is named in the "
@@ -300,7 +300,7 @@ def rerun_reason(status: str, attempts: list[dict[str, Any]]) -> str:
     """Why a completion a re-run looked at is not decided, from its attempts' metrics (oldest first), as check verify's
     decision reads them (checks._decide): a guarded test weakened, fewer tests, [checks] changed, runs that disagree,
     a failed check, or a pass that decided nothing (a worker's run, not every declared check)."""
-    from ...ledger import attempt_summary
+    from ...core.ledger import attempt_summary
 
     summaries = [attempt_summary(UUID(int=0), "", m) for m in attempts]
     passed = bool(summaries) and summaries[-1]["passed"]
@@ -332,7 +332,7 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     """partition is accepted for the compiler interface and not read: a code project's partition is the piece, and
     the brief is scoped by tags. repo: the checkout whose HEAD the validity marks compare with (T10); max_chars: a
     character limit applied with the token budget (the boundary hooks pass 6,000)."""
-    from ...lookup import checked
+    from ...core.lookup import checked
 
     limit = int(budget_tokens) * 105 // 100
     if limit < 1:

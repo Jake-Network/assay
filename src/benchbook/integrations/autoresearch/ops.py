@@ -27,12 +27,12 @@ from uuid import UUID, uuid4
 from psycopg.types.json import Jsonb
 
 from ... import config as localcfg
-from ...blobs import artifact_blob, blob_digest, blob_uris
-from ...dedup import canonical_json
+from ...core.blobs import artifact_blob, blob_digest, blob_uris
+from ...core.dedup import canonical_json
+from ...core.ids import short
+from ...core.ledger import Ledger
+from ...core.models import RecordResult
 from ...errors import BenchbookError, Conflict, LeaseLost, NotFound
-from ...ids import short
-from ...ledger import Ledger
-from ...models import RecordResult
 from . import hw as hwmod
 from . import referee, skills
 from .checkout import Checkout, partition_keys

@@ -27,8 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from benchbook.dedup import canonical_json
-from benchbook.tokens import estimate_tokens
+from benchbook.core.dedup import canonical_json
+from benchbook.core.tokens import estimate_tokens
 
 from .common import duplicate_ratio, load_evals
 from .real import SYNTHETIC_MODEL, TOKEN_KEYS, BenchRunError, _read_stream, _usage, usage_check
@@ -600,7 +600,7 @@ def render(runs: list[dict[str, Any]], rel_tol: float, earlier: dict[str, Any] |
     doc = ["# Benchmark cost breakdown", "",
            "Written by `python -m bench.analyze_cost`. Every number is labelled. **Measured** numbers come from the "
            "API usage in the run's stream or from evals.jsonl. **Estimated** numbers are the chars/4 estimate of "
-           "block text (`benchbook.tokens.estimate_tokens`). A measured increase of an agent's prompt between two "
+           "block text (`benchbook.core.tokens.estimate_tokens`). A measured increase of an agent's prompt between two "
            "model calls is split between the blocks that entered in between by their share of the estimate. That "
            "split is the only estimated part of a measured figure, and the `unsplit` column of section 4 shows "
            "how much needed none.", ""]

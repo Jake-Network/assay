@@ -53,7 +53,7 @@ def verify(
     from .checks import verify as run_verify
     from .cli import STATE, csv, die, emit, load_json
     from .config import env
-    from .ledger import Ledger
+    from .core.ledger import Ledger
     from .runner import Interrupted
 
     trace = load_json(trace_ref, "--trace-ref")
@@ -102,7 +102,7 @@ def pin(
     from .checks import parse_check_options, pin_checks
     from .cli import emit, ledger
     from .config import load
-    from .ids import short
+    from .core.ids import short
 
     cfg = load()
     specs = parse_check_options(check) if check else cfg.checks
@@ -116,7 +116,7 @@ def pin(
 
 
 def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
-    from .ids import short
+    from .core.ids import short
 
     out = rec.outcome
     return {
@@ -139,8 +139,8 @@ def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
 
 
 def render(v: Verification, rec: Recorded) -> str:
+    from .core.ids import short
     from .failures import notice
-    from .ids import short
 
     width = max(len("check"), *(len(r.name) for r in v.results))
     lines = [f"verify {v.piece} at {v.commit[:12]} (base {v.base.ref}, merge-base {v.base.merge_base[:12]})",

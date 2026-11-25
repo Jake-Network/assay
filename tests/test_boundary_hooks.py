@@ -15,8 +15,8 @@ import psycopg
 import pytest
 
 from benchbook import boundary_hooks, harnesses
+from benchbook.core.ids import short
 from benchbook.entry import hook_args
-from benchbook.ids import short
 from benchbook.verify_requests import reported_ref
 from tests.conftest import CONFIG, make_project, make_repo, piece
 from tests.test_code_brief import _finding, agent, attempt, git

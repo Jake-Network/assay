@@ -49,7 +49,7 @@ from .globs import matching
 from .runner import Interrupted, _trap_signals, forget_stopped, run_command, stop_commands
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
 # Where a commit keeps its declarations; .assay/ is the folder's name before the rename.
 CONFIG_PATHS = (".benchbook/config.toml", ".assay/config.toml")
@@ -229,7 +229,7 @@ class Verification:
     def metrics(self) -> dict[str, Any]:
         pin: dict[str, Any] = {}
         if self.base.source == "pin":  # a merge-base run keeps the keys it always had
-            from .ids import short
+            from .core.ids import short
 
             pin = {"checks_source": "pin", "checks_sha256": self.base.checks_sha256 or "",
                    "checks_pin": short("claim", self.base.pin_id) if self.base.pin_id else ""}
@@ -433,7 +433,7 @@ def pin_checks(lg: Ledger, piece: str | None, specs: dict[str, CheckSpec], guard
                verify: dict[str, Any] | None = None, *, source: str = "cli") -> tuple[Pin, bool]:
     """Pin the checks of PIECE (None: the project's) in lg's name. Returns the pin in effect and whether it is new:
     pinning what the latest pin of that scope already holds records nothing."""
-    from .dedup import statement_hash
+    from .core.dedup import statement_hash
 
     if not specs:
         raise BenchbookError("nothing to pin: no [checks.<name>] in config.toml and no --check NAME=CMD")
@@ -510,7 +510,7 @@ def pin_changed(lg: Ledger, pin: Pin, piece: str, repo: Path, exclude: set[str] 
 
 def implementers_of(lg: Ledger, piece: str, commit: str, reported_by: str | None) -> set[str]:
     """Who reported PIECE done at COMMIT: reported_by and the reporters of its completion claims so far."""
-    from .ledger import reporter_of
+    from .core.ledger import reporter_of
 
     out = {reported_by} if reported_by else set()
     for row in lg.sql_internal(_OWN_CLAIMS, (lg.project_id, [f"piece:{piece}", f"commit:{commit}"], piece, commit)):
@@ -530,7 +530,7 @@ def read_base(repo: Path, ref: str, commit: str, pin: Callable[[], Pin | None] |
     except _Unreadable as e:
         raise BenchbookError(f"the base's declarations are unreadable: {e}") from e
     if found is None and pin is not None and (p := pin()) is not None:
-        from .ids import short
+        from .core.ids import short
 
         return Base(ref, sha, mb, f"pin {short('claim', p.id)}", p.checks, p.guard_paths or list(DEFAULT_GUARD_PATHS),
                     bool(p.guard_paths), "pin", p.id, p.sha256, parse_verify(p.verify, f"pin {short('claim', p.id)}"))
@@ -1312,8 +1312,8 @@ _CLAIM_ROW = ("SELECT c.kind, c.author, c.tags, c.payload, a.role AS author_role
 def given_claim(lg: Ledger, ref: str, piece: str, commit: str, reported_by: str | None) -> tuple[UUID, str]:
     """(claim id, reporter) of --claim, after checking that it is a completion claim of this project about piece at
     commit (tags and payload, as pr.py finds it), and that --reported-by, when given, names its reporter."""
-    from .ids import short
-    from .ledger import reporter_of
+    from .core.ids import short
+    from .core.ledger import reporter_of
 
     _, cid = lg.resolve(ref, ["claim"])  # within lg's project: another project's claim is not found
     rows = lg.sql_internal(_CLAIM_ROW, (lg.project_id, cid))
@@ -1341,8 +1341,8 @@ def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report
     this reporter's report: ledger.reporter_of names the reporter, or the proposer wrote it exactly as this call
     would. When another claim holds the usual statement, the claim names the reporter in its statement; when that
     one is taken too, it gets the same statement under a hash nobody can know in advance."""
-    from .dedup import statement_hash
-    from .ledger import reporter_of
+    from .core.dedup import statement_hash
+    from .core.ledger import reporter_of
 
     payload: dict[str, Any] = {"piece": v.piece, "commit": v.commit,
                                "reported_checks": report.mentions if report else []}
@@ -1400,8 +1400,8 @@ def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:
 def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
     """Step 5. The ledger's rule (decide, rule all_pass) is what makes a completion verified; this only picks the
     decision the evidence calls for and asks the rule before writing anything."""
-    from .ids import short
-    from .ledger import DECIDERS, TRANSITIONS
+    from .core.ids import short
+    from .core.ledger import DECIDERS, TRANSITIONS
 
     if rec.claim_id is None:
         return Outcome(None, "no completion claim to decide (no --reported-by)")

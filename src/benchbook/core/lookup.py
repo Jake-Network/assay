@@ -124,7 +124,7 @@ def render(got: dict[str, Any], limit: int = LIMIT_TOKENS, labels: dict[str, str
 
 def log_lookup(project: str | None, ref: str) -> None:
     """Append one line to lookups.jsonl in the state directory; never raises."""
-    from .config import state_dir
+    from ..config import state_dir
 
     try:
         d = state_dir()

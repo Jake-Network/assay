@@ -167,7 +167,7 @@ def where(data: dict[str, Any]) -> Where | None:
 
 def compile_brief(w: Where) -> str:
     """The boundary brief: the code pack's scoped by changed_scope, with validity marks against this checkout."""
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
     lg = Ledger.open(project=w.project, agent=config.default_agent("hook"), role="harness")
     tags: list[str] = []

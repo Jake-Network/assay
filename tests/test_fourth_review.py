@@ -19,7 +19,8 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import hooks, identity, pieces
+from benchbook import hooks, pieces
+from benchbook.core import identity
 from benchbook.errors import BenchbookError
 from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, attempts, cli_env, make_checkout, spool_entries

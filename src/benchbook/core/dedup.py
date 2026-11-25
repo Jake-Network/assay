@@ -8,7 +8,7 @@ import re
 import unicodedata
 from typing import Any
 
-from .errors import ValidationFailed
+from ..errors import ValidationFailed
 
 
 def _norm(value: Any, path: str) -> Any:

@@ -13,14 +13,14 @@ import typer
 from .agent_cli import agent_app
 from .check_cli import check_app
 from .config import env
+from .core.ids import short
 from .errors import BenchbookError, Conflict, ValidationFailed
 from .finding_cli import finding_app
-from .ids import short
 from .piece_cli import piece_app
 from .pr_cli import pr_app
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
 app = typer.Typer(add_completion=False, no_args_is_help=True,
                   help="benchbook: your agents' lab notebook. Nothing they find gets lost, repeated, "
@@ -68,7 +68,7 @@ def die(msg: str, code: int = 1) -> NoReturn:
 
 
 def emit(data: Any, text: str | None = None) -> None:
-    from .ledger import jsonable
+    from .core.ledger import jsonable
 
     if STATE["json"]:
         print(json.dumps(jsonable(data), ensure_ascii=False, default=str))
@@ -81,7 +81,7 @@ def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
     'human' so a person can look around without naming themselves (I1). With BENCHBOOK_TOKEN the token names the
     agent, so there is no fallback."""
     from .config import default_agent
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
     fallback = default_agent("human") if read_only else None
     name = agent or STATE["agent"] or env("AGENT") or fallback
@@ -144,7 +144,7 @@ def init(
     root = _repo_root()
     pid = project or STATE["project"] or re.sub(r"[^a-z0-9_-]+", "-", root.name.lower()).strip("-") or "benchbook"
     schema = load_json(config_schema, "--config-schema")
-    from .ledger import Ledger
+    from .core.ledger import Ledger
     from .packs import load_pack
 
     defaults = load_pack(pack).project_defaults  # e.g. code: checks_passed (max), partitioned by piece
@@ -171,8 +171,8 @@ def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False)
     can be verified without committing anything (T01)."""
     from .checks import pin_checks
     from .config import exclude_local_dir, load
-    from .ids import short
-    from .ledger import Ledger
+    from .core.ids import short
+    from .core.ledger import Ledger
 
     lines = []
     if exclude_local_dir(root):
@@ -314,7 +314,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
 def get(id: str) -> None:
     """Show one record: status, how it was checked, statement, up to 5 links each way and the last 3 decisions,
     within 400 tokens. --json prints the whole record."""
-    from .lookup import log_lookup, render
+    from .core.lookup import log_lookup, render
 
     lg = ledger(read_only=True)
     got = lg.get(id)
@@ -498,9 +498,9 @@ def discard(
 ) -> None:
     """Record a dead end you know without a failed check run (a lead's own, or one a worker told you): the brief
     lists it under discarded approaches, like an approach whose check failed."""
+    from .core.ids import short
     from .errors import ValidationFailed
     from .failures import APPROACH, record_noted
-    from .ids import short
 
     problems = []
     if not APPROACH.fullmatch(approach):

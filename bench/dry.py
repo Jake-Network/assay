@@ -30,8 +30,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from benchbook.dedup import canonical_json
-from benchbook.tokens import estimate_tokens
+from benchbook.core.dedup import canonical_json
+from benchbook.core.tokens import estimate_tokens
 
 from . import real
 from .common import CODE_REF, SPACE, EvalLog, RunMetrics, best_curve, duplicate_ratio, load_evals

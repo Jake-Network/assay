@@ -123,8 +123,8 @@ def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: U
     """The spool processor's step for an attempt entry: 'recorded:e:<id>'. Raises like any ledger write; the spool
     keeps transient failures queued and moves permanent ones to dead/."""
     from .config import default_agent
-    from .ids import short
-    from .ledger import Ledger
+    from .core.ids import short
+    from .core.ledger import Ledger
 
     run = build(event, data)
     agent = data.get("agent") or None

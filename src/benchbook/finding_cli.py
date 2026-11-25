@@ -29,10 +29,10 @@ def accept(
     """Accept a finding: link the follow-up issue as a source and decide the claim supported (orchestrator or
     human only)."""
     from .cli import emit, ledger
+    from .core.ids import short
+    from .core.ledger import ORACLES, TRANSITIONS
     from .errors import BenchbookError, ValidationFailed
     from .findings import FINDING_TAG
-    from .ids import short
-    from .ledger import ORACLES, TRANSITIONS
 
     issue = issue.strip()
     why = rationale or f"accepted, follow-up {issue}"

@@ -23,11 +23,11 @@ import pytest
 from psycopg import sql
 
 from benchbook import Ledger
+from benchbook.core.ledger import BLOB_PREFIX, schema_version_ok
 from benchbook.db import conn as dbconn
 from benchbook.db import migrate as dbmigrate
 from benchbook.db.conn import notification_channel
 from benchbook.errors import BenchbookError, PermissionDenied
-from benchbook.ledger import BLOB_PREFIX, schema_version_ok
 
 from .conftest import LEGACY_SWITCH, make_project
 from .legacy_db import (

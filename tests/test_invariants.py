@@ -13,7 +13,8 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from benchbook import Ledger, identity
+from benchbook import Ledger
+from benchbook.core import identity
 from benchbook.db.conn import notification_channel
 from benchbook.errors import InvalidTransition, LeaseLost, PermissionDenied, ValidationFailed
 

@@ -14,7 +14,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from benchbook import Ledger
-from benchbook.dedup import dedup_key
+from benchbook.core.dedup import dedup_key
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition
 from tests.conftest import make_project
 from tests.test_core_ext import cfg, ml_project

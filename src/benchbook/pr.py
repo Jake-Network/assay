@@ -16,7 +16,7 @@ from .errors import BenchbookError, InvalidTransition
 from .findings import FINDING_TAG
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
 TRAILER = "Benchbook-Piece"
 MARKER = "<!-- benchbook-summary -->"  # first line of the comment; how a later run finds it
@@ -131,7 +131,7 @@ def _claim_params(lg: Ledger, p: Piece) -> tuple[Any, ...]:
 
 
 def _reporter(row: dict[str, Any]) -> str:
-    from .ledger import reporter_of
+    from .core.ledger import reporter_of
 
     return reporter_of(str(row["author"]), row["author_role"], (row["payload"] or {}).get("reported_by"))
 
@@ -141,7 +141,7 @@ def describe(lg: Ledger, found: Sequence[Piece]) -> list[PieceState]:
 
 
 def _describe(lg: Ledger, p: Piece) -> PieceState:
-    from .ledger import attempt_summary
+    from .core.ledger import attempt_summary
 
     pid, tag = lg.project_id, f"piece:{p.piece}"
     rows = lg.sql_internal(_CLAIM, _claim_params(lg, p))
@@ -218,7 +218,7 @@ def _code(text: str, limit: int = 60) -> str:
 
 
 def _short(kind: str, id: UUID) -> str:
-    from .ids import short
+    from .core.ids import short
 
     return short(kind, id)
 

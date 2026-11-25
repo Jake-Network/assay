@@ -139,9 +139,9 @@ def enqueue(data: dict[str, Any]) -> str:
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
     """role: the re-running agent's; when nothing decided the claim, the line says why the rest of it does not."""
     from .checks import RETRY_FAILED, RETRY_FAILED_OTHER, RETRY_PASSED
-    from .ids import short
-    from .ledger import DECIDERS
-    from .lookup import checked
+    from .core.ids import short
+    from .core.ledger import DECIDERS
+    from .core.lookup import checked
 
     if run.environment:
         result = "environment failure"
@@ -185,7 +185,7 @@ def _cached_line(path: Path) -> str | None:
 def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> str:
     """The spool lock serializes attempts for this database and writer. Keep the result for duplicate reports."""
     from . import checks
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
     piece, commit, reporter = data["piece"], data["commit"], data["agent_type"]
     notes = session_notes.notes_dir(data["session_id"])

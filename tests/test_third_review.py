@@ -19,8 +19,9 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import checks, hooks, identity, pieces
+from benchbook import checks, hooks, pieces
 from benchbook.check_hooks import match
+from benchbook.core import identity
 from benchbook.errors import BenchbookError, LeaseLost
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok
 from tests.test_second_review import JUNIT_CONFIG, PY, TWO_CHECKS, _capture_entry

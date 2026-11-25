@@ -26,8 +26,8 @@ from uuid import UUID
 from . import signature
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
-    from .models import ClaimResult
+    from .core.ledger import Ledger
+    from .core.models import ClaimResult
 
 DISCARDED_TAG = "discarded"
 PIECE_TAG = "piece:"

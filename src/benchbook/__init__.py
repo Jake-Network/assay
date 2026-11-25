@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from .errors import BenchbookError, LeaseLost, NotFound, PermissionDenied, ValidationFailed
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
 try:
     from ._version import __version__  # written from git by the build (hatch-vcs)
@@ -18,7 +18,7 @@ __all__ = ["__version__", "Ledger", "BenchbookError", "ValidationFailed", "NotFo
 def __getattr__(name: str) -> Any:
     # Lazy: `benchbook hook` must start fast and never needs the SDK's heavier imports.
     if name == "Ledger":
-        from .ledger import Ledger
+        from .core.ledger import Ledger
 
         return Ledger
     raise AttributeError(name)

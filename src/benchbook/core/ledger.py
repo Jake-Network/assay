@@ -21,14 +21,12 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from . import config as localcfg
-from . import globs, identity
-from .blobs import BLOB_PREFIX, blob_digest
-from .db import conn as dbconn
-from .db.migrate import head as migrate_head
-from .db.migrate import migrate as run_migrate
-from .dedup import canonical_json, dedup_key, statement_hash
-from .errors import (
+from .. import config as localcfg
+from .. import globs
+from ..db import conn as dbconn
+from ..db.migrate import head as migrate_head
+from ..db.migrate import migrate as run_migrate
+from ..errors import (
     Ambiguous,
     BenchbookError,
     Conflict,
@@ -38,17 +36,12 @@ from .errors import (
     PermissionDenied,
     ValidationFailed,
 )
+from ..packs import Pack, check, depth, load_pack
+from . import identity
+from .blobs import BLOB_PREFIX, blob_digest
+from .dedup import canonical_json, dedup_key, statement_hash
 from .ids import KIND_BY_PREFIX, TABLE, short
-from .models import (
-    ClaimResult,
-    Decision,
-    ExperimentSummary,
-    Project,
-    RecordResult,
-    Task,
-    TriedResult,
-)
-from .packs import Pack, check, depth, load_pack
+from .models import ClaimResult, Decision, ExperimentSummary, Project, RecordResult, Task, TriedResult
 from .tokens import estimate_tokens
 
 ROLES = ("worker", "orchestrator", "human", "harness")
@@ -1700,6 +1693,6 @@ def config_line(cfg: Any, max_len: int = 90) -> str:
 
 
 def schema_version_ok(url: str) -> bool:
-    from .db.migrate import current
+    from ..db.migrate import current
 
     return current(url) == migrate_head()

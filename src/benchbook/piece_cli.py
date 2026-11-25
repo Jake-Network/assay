@@ -49,7 +49,7 @@ def start(
     if specs:
         from .checks import pin_checks
         from .config import load
-        from .ids import short
+        from .core.ids import short
 
         cfg = load()
         p, new = pin_checks(lg, piece, specs, cfg.guard_paths, cfg.verify.table())

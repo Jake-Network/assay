@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .errors import ValidationFailed
+from ..errors import ValidationFailed
 from .ids import short
 from .tokens import estimate_tokens
 

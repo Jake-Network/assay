@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
 RECORDING_STOPPED = "benchbook: recording stopped: "
 
@@ -112,7 +112,7 @@ def read_cache(project: str | None = None) -> str:
 def refresh_cache(spool: Path, project: str) -> None:
     """Best-effort after processing. A cache failure never makes a recorded entry retry."""
     from . import config
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
     try:
         lg = Ledger.open(project=project, agent=config.default_agent("hook"), role="harness")

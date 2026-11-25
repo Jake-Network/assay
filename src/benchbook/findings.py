@@ -26,10 +26,10 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from .dedup import normalize_statement
+from .core.dedup import normalize_statement
 
 if TYPE_CHECKING:
-    from .ledger import Ledger
+    from .core.ledger import Ledger
 
 # Tags (docs/code.md "Out-of-scope findings"): the brief and the PR summary select findings by these.
 FINDING_TAG = "out-of-scope"
