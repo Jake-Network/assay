@@ -660,6 +660,43 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
     assert not run("notes", notification, capsys, monkeypatch)
 
 
+@pytest.mark.parametrize("failed_note", [False, True], ids=["spool-write-failed", "note-write-failed"])
+def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                              failed_note: bool) -> None:
+    from benchbook import hooks, session_notes
+    from benchbook.verify_requests import enqueue
+
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    repo = make_repo(tmp_path / "repo")
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    post = fixture("post_tool_use_agent.json", repo)
+    report = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    post["tool_response"]["content"][0]["text"] = report
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["session_id"] = post["session_id"]
+    stop["last_assistant_message"] = report
+    spool = hooks._spool_dir()
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(hooks, "start_processor", lambda path, lane: launches.append((path, lane)))
+
+    def fail(*args: Any) -> None:
+        raise OSError("injected write failure")
+
+    target, method = (session_notes, "write_note") if failed_note else (hooks, "_write_spool")
+    with monkeypatch.context() as patch:
+        patch.setattr(target, method, fail)
+        with pytest.raises(OSError, match="injected write failure"):
+            enqueue(stop)
+
+    assert session_notes.deliver(post["session_id"]) == ""
+    assert len(list(spool.glob("*.json"))) == int(failed_note)
+    assert launches == ([(spool, hooks.VERIFY)] if failed_note else [])
+    assert f"re-running the checks of media-upload at {sha[:7]}" in enqueue(post)
+    assert len(list(spool.glob("*.json"))) == int(failed_note) + 1
+    assert launches[-1] == (spool, hooks.VERIFY)
+
+
 # ------------------------------------------------------------------------------------------- who decides a re-run
 
 
