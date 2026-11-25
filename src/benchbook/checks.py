@@ -34,7 +34,6 @@ import tempfile
 import threading
 import time
 import tomllib
-from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -552,7 +551,7 @@ def classify_guard(repo: Path, merge_base: str, commit: str,
     """T04: (added, appended, weakened) of the changed guarded files. A new file is added and a file with lines added
     and none deleted is appended, unless an added line carries a SKIP_MARKERS entry or the file is a conftest.py;
     everything else (deleted, rewritten, binary) is weakened. A Python file whose deleted lines are all in import
-    statements, and that still imports everything it did, counts as lines added (_imports_extended)."""
+    statements can also count as lines added when the import bindings are preserved (_imports_extended)."""
     if not files:
         return [], [], []
     out = _git(repo, "diff", "--numstat", "--no-renames", "-z", merge_base, commit, "--", *files).stdout
@@ -596,11 +595,7 @@ HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", re.MULTILINE)
 
 
 def _imports_extended(repo: Path, merge_base: str, commit: str, path: str, diff: str) -> bool:
-    """T04 after the boundary pilot: a Python test file whose every deleted line is inside an import statement (and
-    not on a line that also holds another statement or a compound statement's header), and whose imports after the
-    change include all of those before (module, level, name and alias, counted), only had names added to an import:
-    `get_path)` rewritten as `get_path,` + `run_length)`, or `import a, b` as `import a, b, c`. Anything that
-    does not parse at either commit is not."""
+    """Allow a Python test to extend module-level imports without changing existing bindings or statement order."""
     if not path.endswith(".py"):
         return False
     deleted = {start + i for m in HUNK.finditer(diff)
@@ -615,24 +610,71 @@ def _imports_extended(repo: Path, merge_base: str, commit: str, path: str, diff:
         except (SyntaxError, ValueError):
             return False
     old, new = trees
+    top_level = {node for node in old.body if isinstance(node, (ast.Import, ast.ImportFrom))}
     in_import: set[int] = set()
     elsewhere: set[int] = set()
     for node in ast.walk(old):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+        if node in top_level and isinstance(node, (ast.Import, ast.ImportFrom)):
             in_import.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
         elif isinstance(node, ast.stmt):
-            # a compound statement holds its body's lines: only its header line is its own
+            # A compound statement holds its body's lines: only its header line is its own.
             own = node.lineno if hasattr(node, "body") else None
             elsewhere.update([own] if own is not None else range(node.lineno, (node.end_lineno or node.lineno) + 1))
-    if not deleted or not deleted <= in_import or deleted & elsewhere:
-        return False
-    return not _imports(old) - _imports(new)
+    return bool(deleted and deleted <= in_import and not deleted & elsewhere and _keeps_import_bindings(old, new))
 
 
-def _imports(tree: ast.AST) -> Counter[tuple[str | None, int, str, str | None]]:
-    return Counter((getattr(node, "module", None), getattr(node, "level", 0) or 0, alias.name, alias.asname)
-                   for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
-                   for alias in node.names)
+def _bound_name(alias: ast.alias) -> str:
+    return alias.asname or alias.name.split(".", 1)[0]
+
+
+def _added_imports(old: ast.stmt | None, new: ast.Import | ast.ImportFrom) -> list[ast.alias] | None:
+    """New names in the same import statement when its old names are still in order."""
+    if not isinstance(old, (ast.Import, ast.ImportFrom)) or type(old) is not type(new):
+        return None
+    if isinstance(old, ast.ImportFrom) and isinstance(new, ast.ImportFrom):
+        if (old.level, old.module) != (new.level, new.module):
+            return None
+    added = []
+    remaining = iter(old.names)
+    expected = next(remaining, None)
+    for alias in new.names:
+        if expected is not None and (alias.name, alias.asname) == (expected.name, expected.asname):
+            expected = next(remaining, None)
+        else:
+            added.append(alias)
+    return added if expected is None else None
+
+
+def _keeps_import_bindings(old: ast.Module, new: ast.Module) -> bool:
+    # References matter as much as declarations: a new import can also shadow a builtin used in an assertion.
+    names: set[str] = set()
+    for node in ast.walk(old):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.alias):
+            names.add(_bound_name(node))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+
+    remaining = iter(old.body)
+    expected = next(remaining, None)
+    for node in new.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            added = _added_imports(expected, node)
+            if added is None:
+                added = node.names
+            else:
+                expected = next(remaining, None)
+            if added and isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                return False
+            for alias in added:
+                name = _bound_name(alias)
+                if name == "*" or name in names:
+                    return False
+                names.add(name)
+        elif expected is not None and ast.dump(node) == ast.dump(expected):
+            expected = next(remaining, None)
+    return expected is None
 
 
 # ---------------------------------------------------------------------------------------------------- running

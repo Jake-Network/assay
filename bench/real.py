@@ -267,13 +267,17 @@ def pin_claude(args: Any) -> str:
     """`claude --version` of the CLI a paid run will use, checked before its first paid call. With --claude-version
     a different version stops the run (ValueError); without it, a warning. The installed CLI updates itself between
     runs: 2.1.330 became 2.1.331 on 2026-11-24 during the H5 sweep, and DISABLE_AUTOUPDATER in a run's environment
-    does not hold back the claude on PATH that the next run starts."""
-    binary = claude_bin(args)
+    does not hold back the claude on PATH that the next run starts. Keep the checked executable for all calls."""
+    requested = claude_bin(args)
+    executable = shutil.which(requested)
+    if executable is None:
+        raise ValueError(f"could not find an executable for {requested} --version")
     try:
+        binary = str(Path(executable).resolve())
         found = subprocess.run([binary, "--version"], capture_output=True, check=True, timeout=60,
                                text=True).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError(f"could not read {binary} --version: {exc}") from exc
+        raise ValueError(f"could not read {requested} --version: {exc}") from exc
     expected = getattr(args, "claude_version", None)
     match = CLAUDE_VERSION.match(found)
     if expected is None:
@@ -281,6 +285,7 @@ def pin_claude(args: Any) -> str:
     elif match is None or ".".join(match.groups()) != expected:
         raise ValueError(f"--claude-version {expected}: {binary} --version says {found!r}; nothing was run "
                          "(pin the CLI with --claude-bin ~/.local/share/claude/versions/<version>)")
+    args.claude_bin = binary
     return found
 
 
@@ -485,7 +490,7 @@ def model_counts(events: list[tuple[int, dict[str, Any]]]) -> tuple[dict[str, in
         if event.get("type") != "assistant" or not isinstance(message, dict):
             continue
         if event.get("parent_tool_use_id"):
-            if isinstance(model := message.get("model"), str):
+            if isinstance(model := message.get("model"), str) and model != SYNTHETIC_MODEL:
                 messages.setdefault(model, set()).add(str(message.get("id") or f"event-{n}"))
             continue
         content = message.get("content")
