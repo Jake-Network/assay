@@ -22,7 +22,6 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .. import config as localcfg
-from ..checks import globs
 from ..db import conn as dbconn
 from ..db.migrate import head as migrate_head
 from ..db.migrate import migrate as run_migrate
@@ -37,7 +36,7 @@ from ..errors import (
     ValidationFailed,
 )
 from ..packs import Pack, check, depth, load_pack
-from . import identity
+from . import globs, identity
 from .blobs import BLOB_PREFIX, blob_digest
 from .dedup import canonical_json, dedup_key, statement_hash
 from .ids import KIND_BY_PREFIX, TABLE, short
@@ -512,7 +511,7 @@ class Ledger:
         """Announce work you are about to do (C3): a task created already claimed by you, tagged 'intent'.
         Needs settings.worker_intents for workers. For each spec field named in `exclusive`, another live
         intent with the same value is a conflict (raises Conflict, CLI exit 2). Each field named in
-        `exclusive_paths` holds a list of path globs (checks/globs.py, a file escaped with globs.escape); another live
+        `exclusive_paths` holds a list of path globs (globs.py, a file escaped with globs.escape); another live
         intent whose same field can match a common path is a conflict too (path occupancy, docs/code.md)."""
         with self._intent_transaction() as conn:
             return self._create_intent(conn, title, spec, tags, lease_seconds, exclusive, exclusive_paths)

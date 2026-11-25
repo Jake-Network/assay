@@ -8,9 +8,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..core.globs import matching
 from .declarations import Base
 from .gitrepo import _diff_u0, _git, _Unreadable, changed_paths, config_at
-from .globs import matching
 
 MAX_GUARD_FILES = 100  # stored in metrics; guard_touched is computed from all of them
 # T04: an added line with one of these makes a guarded file weakened even when nothing was deleted.
