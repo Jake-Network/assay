@@ -715,3 +715,10 @@ by hand, not a live session). Four are fixed; the fourth is not.
   arm F and the B1 live check, after the paid measurements; the gate's default is not changed without that.
 - **Stop hook: not yet.** Whether a lead ends its turn with a verdict still waiting is to be seen in the live check
   (after the paid measurements end) and arm F's streams; a Stop hook that blocks once is added only if it happens.
+
+## Prompt audit (2026-11-25)
+
+- **Worker replies:** workers hand the lead "a short summary with the record ids" instead of "at most 3 sentences". A
+  fixed sentence count is a dated way to set length on current models; what keeps the lead's context small is that
+  results live in the ledger, which every worker prompt says. The hard bound that stays is the 1000-character limit on
+  a task summary (`complete_task`), enforced in code.

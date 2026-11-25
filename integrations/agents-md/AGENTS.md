@@ -16,8 +16,8 @@ Always identify yourself: MCP `agent` argument, or `BENCHBOOK_AGENT=worker-<n>` 
    and record it right after (`benchbook_record_experiment`), including failures, errors and timeouts, with the
    cause in one sentence in notes.
 4. Generalisable findings: propose a claim with its evidence ids (`benchbook_propose_claim` / `benchbook claim add`).
-5. Finish: complete the task (`benchbook_complete_task` / `benchbook task done <id> -m "..."`). Your final message is at
-   most 3 sentences plus record ids.
+5. Finish: complete the task (`benchbook_complete_task` / `benchbook task done <id> -m "..."`). Your final message is a
+   short summary with the record ids; the lead reads the details from the ledger.
 6. Do not decide claim status; that is the orchestrator's (or a human's) job.
 
 MCP server config (Codex `~/.codex/config.toml`; other MCP clients take the same command):
