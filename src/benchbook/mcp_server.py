@@ -35,7 +35,7 @@ Workers: benchbook_next_task, then benchbook_brief. Before every evaluation call
 call
 benchbook_record_experiment (failures too). Propose generalisable findings with benchbook_propose_claim and \
 evidence ids.
-Finish with benchbook_complete_task and reply to the lead in at most 3 sentences plus record ids.
+Finish with benchbook_complete_task and reply to the lead with a short summary and the record ids.
 If no project has been initialized, run benchbook init in the project directory before calling a ledger tool.
 Only the orchestrator decides (benchbook_decide). verified needs a non-LLM oracle and evidence."""
 
@@ -198,8 +198,8 @@ def build(project: str | None = None, toolset: str = "all", legacy_names: bool |
 
     @tool
     async def benchbook_complete_task(agent: str, task_id: str, status: str, summary: str) -> dict[str, Any]:
-        """Call when you finish a task. status: done|failed. summary: at most 3 sentences; details are in the
-        records."""
+        """Call when you finish a task. status: done|failed. summary: a short summary, at most 1000
+        characters; details are in the records."""
         t = await _run(lambda: srv.lg(agent).complete_task(task_id, status, summary))
         return {"ok": True, "task": t.short_id, "status": t.status}
 
