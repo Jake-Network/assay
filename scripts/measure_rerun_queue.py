@@ -106,7 +106,9 @@ def pycache_share(repo: Path, rounds: int = 3) -> dict[str, float]:
 
 
 def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel: bool) -> dict[str, Any]:
-    from benchbook import Ledger, checks, hooks, verify_requests
+    from benchbook import Ledger, hooks
+    from benchbook.checks import verify as checks
+    from benchbook.checks import verify_requests
     from benchbook.packs import load_pack
 
     project = f"m-{uuid.uuid4().hex[:10]}"

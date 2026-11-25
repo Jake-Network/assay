@@ -12,7 +12,7 @@ import typer
 from .check_run_cli import run as run_command
 
 if TYPE_CHECKING:
-    from .checks import Recorded, Verification
+    from .checks.verify import Recorded, Verification
 
 check_app = typer.Typer(no_args_is_help=True, help="Declared checks: re-run them on a reported commit.")
 check_app.command("run")(run_command)
@@ -49,12 +49,12 @@ def verify(
     The verifier is --agent or BENCHBOOK_AGENT (or BENCHBOOK_TOKEN's agent), else verifier@<host>; it must differ
     from --reported-by. With lead authority (orchestrator or human role) verify also decides: verified, inconclusive,
     or nothing when a guarded path or [checks] changed (docs/code.md)."""
-    from .checks import default_verifier
-    from .checks import verify as run_verify
+    from .checks.runner import Interrupted
+    from .checks.verify import default_verifier
+    from .checks.verify import verify as run_verify
     from .cli import STATE, csv, die, emit, load_json
     from .config import env
     from .core.ledger import Ledger
-    from .runner import Interrupted
 
     trace = load_json(trace_ref, "--trace-ref")
     if trace is not None and not isinstance(trace, dict):
@@ -99,7 +99,7 @@ def pin(
     Without --check the [checks], [guard] and [verify] tables of the working tree's config.toml are pinned. check
     verify reads a pin only when the merge-base has no committed config.toml, ignores pins written by the piece's
     implementer, and sends the piece to a person when the pin changed after its first attempt (docs/code.md)."""
-    from .checks import parse_check_options, pin_checks
+    from .checks.verify import parse_check_options, pin_checks
     from .cli import emit, ledger
     from .config import load
     from .core.ids import short
@@ -139,8 +139,8 @@ def summary(v: Verification, rec: Recorded) -> dict[str, Any]:
 
 
 def render(v: Verification, rec: Recorded) -> str:
+    from .checks.failures import notice
     from .core.ids import short
-    from .failures import notice
 
     width = max(len("check"), *(len(r.name) for r in v.results))
     lines = [f"verify {v.piece} at {v.commit[:12]} (base {v.base.ref}, merge-base {v.base.merge_base[:12]})",

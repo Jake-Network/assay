@@ -30,8 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import config
-from .config import env
+from .. import config
+from ..config import env
 
 EVENT = "check-run"  # the spool entry's event; attempts.record_spooled records it
 VIA = "check-run"  # metrics.via of the attempt it becomes
@@ -161,7 +161,7 @@ def parse_status(out: str) -> GitState:
 
 def spool_attempt(event: str, project: str, data: dict[str, Any]) -> Path:
     """Queue one attempt for the ledger and make sure a processor drains the spool. Returns the spool directory."""
-    from .hooks import _spool_dir, _write_spool, start_processor
+    from ..hooks import _spool_dir, _write_spool, start_processor
 
     spool = _spool_dir()
     spool.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -192,7 +192,7 @@ class Plan:
 def plan(name: str, piece: str | None = None, *, project: str | None = None, agent: str | None = None,
          cwd: Path | None = None, approach: str | None = None) -> Plan:
     """Everything decided before the check starts. NotRun when it cannot be recorded."""
-    from .errors import BenchbookError
+    from ..errors import BenchbookError
 
     here = (cwd or Path.cwd()).resolve()
     try:

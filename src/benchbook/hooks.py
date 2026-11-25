@@ -758,8 +758,8 @@ def _capture_findings(lg: Any, event: str, text: str, heading: str, data: dict[s
 def _reported_piece(cwd: str | None, text: str) -> str | None:
     """The piece the report's own commit names (verify_requests.reported_target), for a subagent that recorded no
     attempt: the same piece the automatic re-run of this report verifies."""
-    from .check_run import find_repo
-    from .verify_requests import reported_target
+    from .checks.run import find_repo
+    from .checks.verify_requests import reported_target
 
     repo = find_repo(Path(cwd)) if cwd else None
     target = reported_target(repo, text) if repo is not None else None
@@ -877,11 +877,11 @@ def process_file(path: Path) -> str:
         return f"dead:{reason}"
     try:
         if event in ATTEMPT_EVENTS:  # a check run (check run, the Bash hook): an attempt, not a report
-            from .attempts import record_spooled
+            from .checks.attempts import record_spooled
 
             result = record_spooled(event, data, spooled["project"], _entry_receipt(path, spooled))
         elif event == "verify-request":
-            from .verify_requests import process as verify_request
+            from .checks.verify_requests import process as verify_request
 
             spool = path.parent.parent if path.parent.name == "dead" else path.parent
             result = verify_request(data, spooled["project"], _entry_receipt(path, spooled), spool)

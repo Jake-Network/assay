@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
+from .checks.runner import Interrupted, RunResult, parse_summary, run_command, tail
 from .core.ids import short
-from .runner import Interrupted, RunResult, parse_summary, run_command, tail
 
 if TYPE_CHECKING:
     from .core.ledger import Ledger

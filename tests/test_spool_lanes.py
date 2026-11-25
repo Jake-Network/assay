@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import attempts, hooks, verify_requests
+from benchbook import hooks
+from benchbook.checks import attempts, verify_requests
 from tests.conftest import CONFIG, make_project, make_repo, piece
 
 REAL_START = hooks.start_processor

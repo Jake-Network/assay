@@ -169,7 +169,7 @@ def init(
 def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:
     """code pack: keep .benchbook/ out of git (info/exclude) and pin the declared checks in the ledger, so a piece
     can be verified without committing anything (T01)."""
-    from .checks import pin_checks
+    from .checks.verify import pin_checks
     from .config import exclude_local_dir, load
     from .core.ids import short
     from .core.ledger import Ledger
@@ -180,7 +180,7 @@ def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False)
         lines.append("  git:    .benchbook/ added to .git/info/exclude (nothing to commit)")
     cfg = load(root)
     if cfg.path is not None and not cfg.checks:
-        from .proposals import propose
+        from .checks.proposals import propose
 
         prop = propose(root)
         if prop.checks:
@@ -498,9 +498,9 @@ def discard(
 ) -> None:
     """Record a dead end you know without a failed check run (a lead's own, or one a worker told you): the brief
     lists it under discarded approaches, like an approach whose check failed."""
+    from .checks.failures import APPROACH, record_noted
     from .core.ids import short
     from .errors import ValidationFailed
-    from .failures import APPROACH, record_noted
 
     problems = []
     if not APPROACH.fullmatch(approach):

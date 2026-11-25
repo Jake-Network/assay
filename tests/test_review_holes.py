@@ -22,7 +22,10 @@ import pytest
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from benchbook import Ledger, attempts, check_run, checks, findings, pr, signature
+from benchbook import Ledger, findings, pr
+from benchbook.checks import attempts, signature
+from benchbook.checks import run as check_run
+from benchbook.checks import verify as checks
 from benchbook.config import CheckSpec
 from benchbook.core.dedup import statement_hash
 from benchbook.errors import InvalidTransition, PermissionDenied

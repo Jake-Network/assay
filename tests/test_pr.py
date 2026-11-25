@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, checks, pr
+from benchbook import Ledger, pr
+from benchbook.checks import verify as checks
 from tests.conftest import make_project
 
 from .writer import as_writer, issue

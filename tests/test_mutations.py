@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import Ledger, checks, config
+from benchbook import Ledger, config
+from benchbook.checks import verify as checks
 from tests.conftest import CONFIG, PY, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
 
 FIXED = {"impl.txt": "fixed\n"}

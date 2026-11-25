@@ -22,7 +22,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .. import config as localcfg
-from .. import globs
+from ..checks import globs
 from ..db import conn as dbconn
 from ..db.migrate import head as migrate_head
 from ..db.migrate import migrate as run_migrate

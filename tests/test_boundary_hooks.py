@@ -15,9 +15,9 @@ import psycopg
 import pytest
 
 from benchbook import boundary_hooks, harnesses
+from benchbook.checks.verify_requests import reported_ref
 from benchbook.core.ids import short
 from benchbook.entry import hook_args
-from benchbook.verify_requests import reported_ref
 from tests.conftest import CONFIG, make_project, make_repo, piece
 from tests.test_code_brief import _finding, agent, attempt, git
 
@@ -277,7 +277,8 @@ def test_a_rerun_that_decided_nothing_is_in_every_brief_with_why(db_url: str, co
     """The boundary pilot: a piece whose re-run passed but whose commit changed a test was in no section of the
     brief, so a new session's lead could not know it waited for a person. It is listed after the verified pieces with
     the reason, in session start, pre-compact and brief --here; so is a re-run that failed. A verified piece is not."""
-    from benchbook import Ledger, checks
+    from benchbook import Ledger
+    from benchbook.checks import verify as checks
     from tests.test_code_brief import SCRIPT
     from tests.test_mutations import FIXED, NO_ASSERT
 
@@ -674,7 +675,7 @@ def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: 
 def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                               failed_note: bool) -> None:
     from benchbook import hooks, session_notes
-    from benchbook.verify_requests import enqueue
+    from benchbook.checks.verify_requests import enqueue
 
     monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -711,7 +712,7 @@ def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, mo
 def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
     from benchbook import hooks, session_notes
-    from benchbook.verify_requests import enqueue
+    from benchbook.checks.verify_requests import enqueue
 
     monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -767,7 +768,7 @@ def test_the_re_run_decides_whichever_command_ran_first(first: str, code: str, e
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     """PR #4 issue 5: the hook's re-run is rerun@<host> (orchestrator), check verify without --agent is
     verifier@<host> (harness). With one shared name, whichever ran first in a project fixed the role for both."""
-    from benchbook import checks
+    from benchbook.checks import verify as checks
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
     by_hand = piece(repo, "by-hand", {"impl.txt": "fixed\n"})
@@ -802,7 +803,7 @@ def test_under_a_token_the_re_run_is_the_tokens_agent(role: str, checked: str, c
                                                       capsys: pytest.CaptureFixture[str],
                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     """A token names the agent and its role, as before issue 5; a line that decided nothing says why."""
-    from benchbook import checks
+    from benchbook.checks import verify as checks
     from tests.writer import as_writer, issue
 
     repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))

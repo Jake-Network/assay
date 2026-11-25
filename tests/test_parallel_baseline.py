@@ -10,10 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import Ledger, checks
+from benchbook import Ledger
+from benchbook.checks import verify as checks
+from benchbook.checks.runner import Interrupted
 from benchbook.config import VerifyPrep, parse_verify
 from benchbook.errors import BenchbookError
-from benchbook.runner import Interrupted
 from tests.conftest import PY, git, make_project, make_repo, piece
 
 SLOW = f"""project = "ignored"

@@ -13,7 +13,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_run, config, hooks
+from benchbook import Ledger, config, hooks
+from benchbook.checks import run as check_run
 from tests.conftest import make_project
 
 PY = shlex.quote(sys.executable)
@@ -159,7 +160,7 @@ def test_exit_code_passes_through_and_the_output_is_never_stored(repo: Path, tmp
     [exp] = wait_attempts(lg, 1)
     assert exp["author"] == "impl-1" and exp["metrics"]["checks"] == {"fails": "fail"}
     assert exp["metrics"]["checks_passed"] == 0
-    from benchbook.checks import last_line_hash
+    from benchbook.checks.verify import last_line_hash
 
     assert exp["metrics"]["failure_signature"] == f"fails:exit 3:{last_line_hash('boom: took 99ms')}"
     assert "SECRET-OUTPUT" not in json.dumps(exp, default=str)
@@ -298,7 +299,7 @@ def test_status_parser() -> None:
 def test_an_attempt_without_guard_columns_says_why(tmp_path: Path) -> None:
     """When the guard cannot be computed (here the checkout is gone) the three columns are left out rather than
     reported as untouched, and an interrupted run is an error with its check not run."""
-    from benchbook.attempts import build
+    from benchbook.checks.attempts import build
 
     run = build("check-run", {"piece": "media", "check": "unit", "status": "interrupted", "exit_code": None,
                               "duration_ms": 5, "sha": "a" * 40, "repo": str(tmp_path / "gone"), "dirty": True,
@@ -341,7 +342,7 @@ def test_only_a_failure_asks_the_ledger(repo: Path, tmp_path: Path, lg: Ledger, 
                                         capfd: pytest.CaptureFixture[str]) -> None:
     """A passing run never looks anything up (its time is the 300 ms budget above); a failing one asks once, with
     the signature the attempt will carry."""
-    from benchbook import failures
+    from benchbook.checks import failures
 
     asked: list[tuple[str, str, str | None]] = []
     monkeypatch.setattr(failures, "quick_notice", lambda p, piece, sig, *a: asked.append((p, piece, sig)) or None)
@@ -359,7 +360,7 @@ def test_only_a_failure_asks_the_ledger(repo: Path, tmp_path: Path, lg: Ledger, 
 
 def test_the_lookup_is_bounded_and_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ledger that does not answer costs at most the timeout and prints nothing; an error prints nothing."""
-    from benchbook import failures
+    from benchbook.checks import failures
 
     def slow(*a: Any) -> list[failures.Prior]:
         time.sleep(5)

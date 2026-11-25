@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, checks
+from benchbook import Ledger
+from benchbook.checks import verify as checks
 from benchbook.errors import BenchbookError, InvalidTransition
 from benchbook.packs import VerifyPolicy, load_pack, read_verify
 from tests.conftest import make_project, make_repo, piece

@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from . import boundary_hooks, config, hooks, merge_gate, session_notes
-from .check_run import PIECE
-from .pr import TRAILER
+from .. import boundary_hooks, config, hooks, merge_gate, session_notes
+from ..pr import TRAILER
+from .run import PIECE
 
 if TYPE_CHECKING:
-    from .checks import Recorded, Verification
+    from .verify import Recorded, Verification
 
 _DONE = re.compile(r"(?m)^\s*DONE[ \t]+([0-9a-fA-F]{7,40})[ \t]*$")
 _COMMIT = re.compile(r"(?im)^[ \t]*(?:commit|커밋):[ \t]*([0-9a-f]{7,40})[ \t]*$")
@@ -138,10 +138,10 @@ def enqueue(data: dict[str, Any]) -> str:
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
     """role: the re-running agent's; when nothing decided the claim, the line says why the rest of it does not."""
-    from .checks import RETRY_FAILED, RETRY_FAILED_OTHER, RETRY_PASSED
-    from .core.ids import short
-    from .core.ledger import DECIDERS
-    from .core.lookup import checked
+    from ..core.ids import short
+    from ..core.ledger import DECIDERS
+    from ..core.lookup import checked
+    from .verify import RETRY_FAILED, RETRY_FAILED_OTHER, RETRY_PASSED
 
     if run.environment:
         result = "environment failure"
@@ -184,8 +184,8 @@ def _cached_line(path: Path) -> str | None:
 
 def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> str:
     """The spool lock serializes attempts for this database and writer. Keep the result for duplicate reports."""
-    from . import checks
-    from .core.ledger import Ledger
+    from ..core.ledger import Ledger
+    from . import verify as checks
 
     piece, commit, reporter = data["piece"], data["commit"], data["agent_type"]
     notes = session_notes.notes_dir(data["session_id"])

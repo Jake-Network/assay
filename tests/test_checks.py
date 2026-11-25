@@ -18,7 +18,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, checks, config
+from benchbook import Ledger, config
+from benchbook.checks import verify as checks
 from benchbook.errors import BenchbookError
 from benchbook.packs import load_pack
 from tests.conftest import CONFIG, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
@@ -418,7 +419,7 @@ def test_loading_declarations_imports_nothing_heavy(tmp_path: Path) -> None:
     code = ("import sys; from pathlib import Path; from benchbook import config; c = config.load(Path(sys.argv[1]));"
             "assert list(c.checks) == ['unit', 'value'];"
             "print(sorted(m for m in sys.modules if m.split('.')[0] in ('psycopg', 'typer', 'jsonschema', 'pydantic')"
-            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.checks'))))")
+            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.checks.verify'))))")
     p = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, check=True)
     assert p.stdout.strip() == "[]"
 
@@ -771,7 +772,7 @@ def test_a_retried_request_finishes_from_the_attempt_it_recorded(tmp_path: Path,
                                                                  lead_lg: Ledger) -> None:
     """The first run failed and was recorded under the request's receipt; the retry would pass (the service came
     back). The retry links and reports the stored failure, never its own run."""
-    from benchbook.verify_requests import _result_line
+    from benchbook.checks.verify_requests import _result_line
 
     flag = tmp_path / "service-up"
     repo = service_repo(tmp_path / "repo", flag)
@@ -820,7 +821,8 @@ def test_guard_compares_junit_counts_in_the_current_environment(
 
 def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
         tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
-    from benchbook import hooks, session_notes, verify_requests
+    from benchbook import hooks, session_notes
+    from benchbook.checks import verify_requests
 
     flag = tmp_path / "service-up"
     prepare = json.dumps(f"test -f {shlex.quote(str(flag))}")
@@ -885,7 +887,7 @@ def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no
     """Third boundary pilot: two re-runs failed once on socket timing tests outside the pieces, and became
     refutations and discarded approaches that the lead's own passing check verify could not undo."""
     from benchbook import merge_gate
-    from benchbook.verify_requests import _result_line
+    from benchbook.checks.verify_requests import _result_line
 
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
@@ -917,7 +919,7 @@ def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no
 ])
 def test_a_retry_that_fails_too(tmp_path: Path, vtmp: Path, lead_lg: Ledger, second: str, retry: str,
                                 dead_end: bool) -> None:
-    from benchbook.verify_requests import _result_line
+    from benchbook.checks.verify_requests import _result_line
 
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once", second)
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})

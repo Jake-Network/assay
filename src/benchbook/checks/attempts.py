@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from . import checks
-from . import config as localcfg
-from .checks import Base, CheckResult, Integrity, Verification
-from .errors import BenchbookError
+from .. import config as localcfg
+from ..errors import BenchbookError
+from . import verify as checks
+from .verify import Base, CheckResult, Integrity, Verification
 
 GUARD_KEYS = ("guard_touched", "guard_files", "checks_changed", "guard_weakened", "guard_weakened_files",
               "guard_added_files", "tests_before", "tests_after", "fewer_tests_checks")
@@ -122,16 +122,16 @@ def build(event: str, data: dict[str, Any]) -> LocalRun:
 def record_spooled(event: str, data: dict[str, Any], project: str, receipt_id: UUID) -> str:
     """The spool processor's step for an attempt entry: 'recorded:e:<id>'. Raises like any ledger write; the spool
     keeps transient failures queued and moves permanent ones to dead/."""
-    from .config import default_agent
-    from .core.ids import short
-    from .core.ledger import Ledger
+    from ..config import default_agent
+    from ..core.ids import short
+    from ..core.ledger import Ledger
 
     run = build(event, data)
     agent = data.get("agent") or None
     # Without a name the attempt is the harness's (the hook's), or under BENCHBOOK_TOKEN the token's agent.
     lg = Ledger.open(project=project, agent=agent or default_agent("hook"), role=None if agent else "harness")
     if lg.token is not None:
-        from .hooks import remember_writer
+        from ..hooks import remember_writer
 
         remember_writer(lg.project_id, lg.agent)
     if "completion" not in lg.pack.claim_kinds:
@@ -154,7 +154,7 @@ def live_piece(project: str, piece: str) -> bool:
     test for "this branch is a piece" when only the branch name says so. A plain connection, as check_states."""
     import psycopg
 
-    from .db.conn import database_url
+    from ..db.conn import database_url
 
     with psycopg.connect(database_url(), connect_timeout=CONNECT_TIMEOUT, autocommit=True) as conn:
         conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
@@ -172,7 +172,7 @@ def check_states(project: str, piece: str, sha: str,
     answer within the hook's timeout or fail open."""
     import psycopg
 
-    from .db.conn import database_url
+    from ..db.conn import database_url
 
     with psycopg.connect(database_url(), connect_timeout=CONNECT_TIMEOUT, autocommit=True) as conn:
         conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")

@@ -68,10 +68,10 @@ def main(legacy: bool = False) -> None:
     if argv[:2] == ["check", "run"]:
         # A check's own run pays this start-up (the wrapper's budget is 300 ms); --help and other options go
         # through the CLI and end in the same check_run.run().
-        from .check_run import parse_fast_args
+        from .checks.run import parse_fast_args
 
         if (fast := parse_fast_args(argv[2:])) is not None:
-            from .check_run import run
+            from .checks.run import run
 
             sys.exit(run(*fast))
     if argv in (["--version"], ["-V"]):

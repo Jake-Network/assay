@@ -26,8 +26,8 @@ from uuid import UUID
 from . import signature
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
-    from .core.models import ClaimResult
+    from ..core.ledger import Ledger
+    from ..core.models import ClaimResult
 
 DISCARDED_TAG = "discarded"
 PIECE_TAG = "piece:"
@@ -138,15 +138,15 @@ def quick_notice(project: str, piece: str, sig: str | None, timeout: float = LOO
 
 
 def _quick_priors(project: str, piece: str, el: list[str], timeout: float) -> list[Prior]:
-    from .config import env
+    from ..config import env
 
     url = env("DATABASE_URL")
     if not url:
-        from .db.conn import data_dir
+        from ..db.conn import data_dir
 
         if not (data_dir() / "postmaster.pid").exists():  # the embedded server is not running: do not start it
             return []
-        from .db.conn import database_url
+        from ..db.conn import database_url
 
         url = database_url()
     import psycopg

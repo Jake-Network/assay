@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from benchbook import Ledger, boundary_hooks, doctor, harnesses
-from benchbook.checks import last_line_hash
+from benchbook.checks.verify import last_line_hash
 from benchbook.entry import hook_args
 from benchbook.harnesses import shell_call
 from tests.conftest import make_project

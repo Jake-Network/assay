@@ -90,7 +90,7 @@ def main(event: str, harness: str | None = None) -> None:
         elif event == "agent-result":
             response = data.get("tool_response")
             if not (isinstance(response, dict) and response.get("status") == "async_launched"):
-                from .verify_requests import enqueue  # not for a launch: it has no report, and the import costs
+                from .checks.verify_requests import enqueue  # not for a launch: it has no report, and the import costs
 
                 text = enqueue(data)
             if data.get("hook_event_name") == "SubagentStop":
@@ -158,7 +158,7 @@ def where(data: dict[str, Any]) -> Where | None:
     cfg = config.load(cwd)
     if not cfg.project:
         return None
-    from .check_run import find_repo
+    from .checks.run import find_repo
 
     repo = find_repo(cwd)
     root = repo or (cfg.path.parent.parent if cfg.path is not None else cwd)

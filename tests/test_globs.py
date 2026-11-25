@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from benchbook.globs import (
+from benchbook.checks.globs import (
     GLOBSTAR,
     compile_glob,
     escape,

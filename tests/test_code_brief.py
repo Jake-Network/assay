@@ -11,13 +11,14 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, checks, pieces
-from benchbook.attempts import build
+from benchbook import Ledger, pieces
+from benchbook.checks import verify as checks
+from benchbook.checks.attempts import build
+from benchbook.checks.failures import DISCARDED_DOMAIN, discarded_hash
 from benchbook.core.brief import compile_brief
 from benchbook.core.ids import short
 from benchbook.core.tokens import estimate_tokens
 from benchbook.errors import ValidationFailed
-from benchbook.failures import DISCARDED_DOMAIN, discarded_hash
 from benchbook.packs import load_pack
 from benchbook.packs.code.brief import FOOTER, UNCHANGED, rerun_reason, validity
 from tests.conftest import make_project
@@ -136,7 +137,7 @@ def test_under_a_token_the_claim_is_the_tokens_agent(db_url: str, code: str) -> 
 
 def test_a_claim_that_cannot_be_written_never_loses_the_attempt(db_url: str, code: str,
                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
-    from benchbook import failures
+    from benchbook.checks import failures
 
     def broken(*a: Any, **k: Any) -> Any:
         raise RuntimeError("database went away")
@@ -606,7 +607,8 @@ def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, re
 def _integration(tmp_path: Path, db_url: str, code: str) -> tuple[Path, Ledger, dict[str, str], str]:
     """The second boundary pilot's shape: pieces pa and pb verified on their branches, merged into the integration
     branch work, then a commit there that changes pa's file only; the brief as --here gives it on work."""
-    from benchbook import failures, findings
+    from benchbook import findings
+    from benchbook.checks import failures
     from benchbook.packs.code.brief import changed_scope
     from tests.conftest import CONFIG, make_repo, piece
 

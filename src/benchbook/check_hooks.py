@@ -228,7 +228,7 @@ def rough_signature(text: str) -> str | None:
     """The hook's signature input, from the Bash error text alone (signature.detail): the TypeScript errors when
     there are any, else a hash of the normalised last error line. checks.failure_signature turns it and the exit
     code into the attempt's signature at replay."""
-    from .signature import detail
+    from .checks.signature import detail
 
     return detail(text)
 
@@ -345,7 +345,7 @@ def bash_result(harness: str = "claude-code") -> int:
 
 
 def _record(call: ShellCall, found: Match) -> None:
-    from .check_run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
+    from .checks.run import find_repo, git_state, head_branch, resolve_piece, spool_attempt
     from .hooks import _spool_dir
 
     project = found.project
@@ -437,7 +437,7 @@ def _allow(why: str) -> int:
 
 
 def _gate(data: dict[str, Any]) -> int:
-    from .check_run import find_repo, git_state, head_branch, resolve_piece
+    from .checks.run import find_repo, git_state, head_branch, resolve_piece
 
     cwd = Path(data.get("cwd") or os.getcwd())
     cfg = config.load(cwd)
@@ -457,7 +457,7 @@ def _gate(data: dict[str, Any]) -> int:
     state = git_state(repo)
     if state is None or state.sha is None:
         return _allow(f"no commit at HEAD in {repo}")
-    from .attempts import check_states, live_piece
+    from .checks.attempts import check_states, live_piece
     from .packs import load_pack
 
     # A branch is a piece only when `piece start` made it one (or BENCHBOOK_PIECE says so): where nothing is

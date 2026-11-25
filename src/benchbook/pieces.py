@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import psycopg
 
-from . import globs
+from .checks import globs
 from .core.ids import short
 from .errors import BenchbookError, LeaseLost, ValidationFailed
 
