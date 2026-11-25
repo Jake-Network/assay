@@ -203,3 +203,26 @@ any rerun before paying for it.
   registered claude-sonnet-5-5; in `30-C-2-try1` the lead ran 28 workers instead of 90. Both stayed under the USD 5
   cap, both are reported with these conditions, and neither is treated as a like-for-like width-30 sample. The H5
   verdict does not rest on them: the gate already fails on peak lead context at width 8.
+
+- **2026-11-25, second boundary pilot.** Written before any call of this run, after the pilot's report and the fixes it
+  led to; the owner chose the scope, the CLI version and the budget. Scope: boltons only (`tasks-boltons.json`,
+  sha256 aa7b7d0b38a87309bdf112e27317b2760968536c1e396c41a3ea995ad332b64d, unchanged), arms A, C and F in that
+  order, one repetition each, each in its own `--out` (`boundary-pilot2-boltons-<arm>-try<k>`); toolz is not run.
+  Claude Code **2.1.332**, the version installed now, and every trial runs with `--claude-version 2.1.332`, which
+  stops a trial before its first paid call if `claude --version` differs. Budget: USD 10 in total across this run's
+  trials, stopped ones included; each trial gets what is left as `--total-budget-usd`, and an arm is not run when
+  less than USD 3.5 is left. Per-call caps (USD 3 work, 0.5 probe), turn, time and compact-window limits, the model,
+  the arms' instructions (F's still equal to B's), the tasks, the oracles and the probe scoring (exact match) are as
+  registered. Arm F runs benchbook at the commit that adds this amendment (branch `lead-guards`): since `937f5ea`
+  it adds PR #5 (re-run verdicts delivered to the lead only), PR #6 (spool lanes; `parallel_baseline` stays off),
+  PR #8 (adding a name to a Python test import is no longer a weakening; the brief lists re-runs nobody decided; one
+  "re-running" line per report), PR #9 (the runner copies every call's session transcripts and checks the CLI
+  version) and the `lead-guards` changes (a lead's `git merge` of a reported commit waits up to 30 s for its
+  verdict and is held once when the verdict is not clean; a code project's new session starts with a four-line
+  lead guide, also when the ledger is empty; `benchbook discard` and `benchbook finding add`). The runner and the
+  oracles are the same for A and C. The machine's Claude Code also loads plugins named `cc-plugin-*` that
+  `--setting-sources ""` does not exclude (seen in the live hook check of 2026-11-25); they load in every arm
+  alike. The report gives directions only, as for the pilot, set beside the pilot's numbers; it adds the
+  containment scoring of the probes as a sensitivity (as the pilot's report did), and, for F, where and when each
+  verdict line reached the lead and every merge the gate held, read from the copied transcripts. A trial stopped by
+  the five-hour usage limit is kept, reported and repeated after the reset, as in the pilot.
