@@ -127,15 +127,18 @@ def enqueue(data: dict[str, Any]) -> str:
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
     """role: the re-running agent's; when nothing decided the claim, the line says why the rest of it does not."""
-    from .checks import RETRY
+    from .checks import RETRY_FAILED, RETRY_FAILED_OTHER, RETRY_PASSED
     from .ids import short
     from .ledger import DECIDERS
     from .lookup import checked
 
     if run.environment:
         result = "environment failure"
-    elif record.retried_from is not None or run.retry == RETRY:  # not "re-run passed", which clears a merge
-        result = f"re-run failed ({(record.retried_signature or 'a check')[:120]}), then passed on a retry"
+    elif run.retry == RETRY_PASSED:  # not "re-run passed", which clears a merge
+        result = f"re-run failed ({(run.first_signature or 'a check')[:120]}), then passed on a retry"
+    elif run.retry in (RETRY_FAILED, RETRY_FAILED_OTHER):
+        result = "re-run failed, and again on a retry" + (
+            " with a different failure" if run.retry == RETRY_FAILED_OTHER else "")
     else:
         result = "re-run passed" if run.all_passed and run.complete else "re-run failed"
     guard = ("tests weakened or check declarations changed; needs review"
@@ -151,8 +154,9 @@ def _result_line(run: Verification, record: Recorded, oracle: str | None = None,
         elif not run.complete:
             verdict += " (not every declared check ran)"
     ref = short("claim", record.claim_id) if record.claim_id else short("experiment", record.experiment_id)
-    if record.retried_from is not None:
-        ref += f"; failed run {short('experiment', record.retried_from)}"
+    if run.retry_of is not None:  # the gate's hold message names the runs to invalidate
+        ref += (f"; failed run {short('experiment', run.retry_of)}" if run.retry == RETRY_PASSED else
+                f"; runs {short('experiment', run.retry_of)}, {short('experiment', record.experiment_id)}")
     return (f"benchbook: {run.piece} {run.commit[:7]}: {result} ({run.total} checks, "
             f"{run.duration_ms / 1000:.1f}s), {guard}, checked: {verdict} ({ref})")
 

@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from . import config as localcfg
 from . import failures, signature
@@ -184,9 +184,11 @@ class Verification:
     # The failure signature of an attempt already in the ledger (a retried request finishing from the stored run):
     # its results keep only the statuses, so the signature is the recorded one.
     recorded_signature: str | None = None
-    # verify(retry=True): RETRIED_PASSED on a failed run whose immediate retry passed, RETRY on that retry,
-    # RETRIED_FAILED on a failed run whose retry failed too (stored as metrics.retry)
+    # verify(retry=True): RETRYING on a failed first run, RETRY_* on its retry (metrics.retry), which also names the
+    # first run (metrics.retry_of) and how it failed (metrics.first_signature)
     retry: str | None = None
+    retry_of: UUID | None = None
+    first_signature: str | None = None
 
     def signature(self) -> str | None:
         return self.recorded_signature if self.recorded_signature is not None else failure_signature(self.results)
@@ -254,6 +256,8 @@ class Verification:
             **({"environment": True} if self.environment is not None else {}),
             **({"baseline_signature": self.baseline_signature} if self.baseline_signature else {}),
             **({"retry": self.retry} if self.retry else {}),
+            **({"retry_of": str(self.retry_of)} if self.retry_of else {}),
+            **({"first_signature": self.first_signature} if self.first_signature else {}),
         }
 
     def notes(self) -> str:
@@ -304,9 +308,6 @@ class Recorded:
     discarded_id: UUID | None = None  # the discarded-approach claim this failed attempt is evidence for
     discarded_new: bool = False
     discarded_error: str | None = None  # why that claim could not be written (the attempt is recorded)
-    # verify(retry=True), when the run failed and its retry passed: the failed attempt and its signature
-    retried_from: UUID | None = None
-    retried_signature: str | None = None
 
 
 # ---------------------------------------------------------------------------------------------------- git
@@ -353,9 +354,12 @@ def config_at(repo: Path, sha: str) -> tuple[dict[str, Any], str] | None:
 MAX_SCOPE_PATHS = 20
 # A completion's payload.files: more changed files than this and the brief compares its directory prefixes instead.
 MAX_FILES = 200
-RETRIED_PASSED = "failed, then passed on a retry"
-RETRY = "a retry after a failed run"
-RETRIED_FAILED = "failed again on a retry"
+# metrics.retry (verify(retry=True)): RETRYING on the failed first run, recorded before its retry runs; one of the
+# others on the retry, which carries metrics.retry_of (the first run) and metrics.first_signature
+RETRYING = "failed; retried"
+RETRY_PASSED = "passed on a retry after a failed run"
+RETRY_FAILED = "failed again on a retry"
+RETRY_FAILED_OTHER = "failed again on a retry, differently"
 
 
 def _parent(prefix: str) -> str:
@@ -980,12 +984,10 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     for (what `pr pieces --claims` found); it must be about this piece at this commit, and its reporter is the
     implementer (reported_by, when also given, must name the same agent).
 
-    retry: when every declared check ran and one failed (no environment failure, no weakened test), run them all
-    once more in a fresh worktree. A retry that passes records both attempts, the failed one without a discarded
-    approach, and decides on the retry: the runs disagree (inconclusive), which a lead settles by invalidating a
-    run it finds broken. One that fails too is noted on the failed attempt and recorded no further. The hook's
-    automatic re-run retries (verify_requests.process); in the third boundary pilot two of its four re-runs failed
-    once on socket timing tests outside the pieces, which became refutations and discarded approaches."""
+    retry: when every declared check ran and one failed (no environment failure, no weakened test), record that run
+    without a discarded approach and run them all once more in a fresh worktree (_retry). The hook's automatic re-run
+    retries (verify_requests.process); in the third boundary pilot two of its four re-runs failed once on socket
+    timing tests outside the pieces, which became refutations and discarded approaches."""
     if not PIECE.fullmatch(piece):
         raise BenchbookError("piece: 1-100 characters without spaces")
     if "completion" not in lg.pack.claim_kinds:
@@ -1031,10 +1033,18 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         v.files = files
         sig = v.signature()
         seen = [p for p in failures.earlier(lg, piece, sig) if p.id != receipt_id] if sig else []
-        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
+        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id,
+                      discard=v.retry in (None, RETRY_FAILED))
         rec.seen_before = seen
         rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
         return v, rec
+    first_id = uuid5(receipt_id, "first run") if receipt_id is not None else None
+    if retry and first_id is not None and (stored := _stored_attempt(lg, first_id, piece, sha)) is not None:
+        # The failed first run of an earlier try of this request, recorded before its retry ran (an interruption or
+        # a crash during the retry): run the retry now.
+        v = _from_stored(stored, piece, sha, b, scope)
+        v.files = files
+        return _retry(lg, v, repo, check_env(), reported_by, report, trace_ref, found, first_id, receipt_id, decide)
     integ = integrity(repo, b, sha, moved)
     t0 = time.monotonic()
     prepared = Prepared()
@@ -1068,22 +1078,7 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
     if (retry and interrupted is None and v.run_status == "ok" and v.complete and not v.all_passed
             and not integ.guard_weakened and not integ.checks_changed):
-        t1 = time.monotonic()
-        again, interrupted = run_checks(repo, sha, [b.checks[n] for n in names], env, b.prep, Prepared())
-        if interrupted is None and again and all(r.status == "ok" for r in again):
-            v.retry = RETRIED_PASSED
-            first = _record(lg, v, reported_by, report, trace_ref, found, discard=False)
-            v2 = Verification(piece, sha, b, integ, again, int((time.monotonic() - t1) * 1000), None,
-                              declared=list(b.checks), paths=scope, files=files, retry=RETRY)
-            rec = _record(lg, v2, reported_by, report, trace_ref, found or first.claim_id, receipt_id=receipt_id)
-            rec.retried_from, rec.retried_signature, rec.seen_before = first.experiment_id, sig, seen
-            rec.outcome = _decide(lg, v2, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
-            return v2, rec
-        if interrupted is None:
-            v.retry = RETRIED_FAILED
-        else:  # the first run is complete and recorded as it is; the interruption is raised after that
-            _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
-            raise interrupted
+        return _retry(lg, v, repo, env, reported_by, report, trace_ref, found, first_id, receipt_id, decide, seen)
     if interrupted is not None:
         try:
             _record(lg, v, reported_by, report, trace_ref, found)
@@ -1094,6 +1089,45 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     rec.seen_before = seen
     rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
     return v, rec
+
+
+def _retry(lg: Ledger, v: Verification, repo: Path, env: dict[str, str], reported_by: str | None,
+           report: Report | None, trace_ref: dict[str, Any] | None, found: UUID | None, first_id: UUID | None,
+           receipt_id: UUID | None, decide: bool,
+           seen: list[failures.Prior] | None = None) -> tuple[Verification, Recorded]:
+    """verify(retry=True) after a complete run v failed. v is recorded first, under first_id (derived from the
+    request's receipt, so a later try finds it and only retries) and without a discarded approach; then every
+    declared check runs again in a fresh worktree and the retry is recorded under the receipt, naming v.
+
+    - The retry passes: the runs disagree, and _decide makes the claim inconclusive. A lead who finds the failure
+      is not the piece's invalidates v, and its own check verify then decides from the passing runs.
+    - It fails the same way: the retry leaves the discarded approach v did not, and nothing is decided.
+    - It fails differently: no discarded approach either, since neither failure repeated.
+    - It could not run (its prepare step failed) or was interrupted: v stands as it would without a retry (a
+      discarded approach, no retry recorded); an interruption is raised, and a later try of the request retries."""
+    v.retry = RETRYING
+    first = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=first_id, discard=False)
+    prep = Prepared()
+    t0 = time.monotonic()
+    again, interrupted = run_checks(repo, v.commit, [v.base.checks[n] for n in v.declared], env, v.base.prep, prep)
+    if interrupted is not None:
+        raise interrupted
+    no_decision = Outcome(None, "recorded without a decision (--no-decide)")
+    if prep.error is not None or not again or any(r.status == "not_run" for r in again):
+        _discard(lg, v, first)
+        first.seen_before = seen or []
+        first.outcome = _decide(lg, v, first) if decide else no_decision
+        return v, first
+    sig = v.signature()
+    v2 = Verification(v.piece, v.commit, v.base, v.integrity, again, int((time.monotonic() - t0) * 1000), None,
+                      declared=list(v.declared), paths=v.paths, files=v.files, prepared=prep,
+                      retry_of=first.experiment_id, first_signature=sig)
+    v2.retry = (RETRY_PASSED if v2.all_passed else RETRY_FAILED if v2.signature() == sig else RETRY_FAILED_OTHER)
+    rec = _record(lg, v2, reported_by, report, trace_ref, found, receipt_id=receipt_id,
+                  discard=v2.retry == RETRY_FAILED)
+    rec.seen_before = seen or []
+    rec.outcome = _decide(lg, v2, rec) if decide else no_decision
+    return v2, rec
 
 
 _STORED = ("SELECT author, config, metrics, run_status, code_ref, duration_ms FROM benchbook.experiments"
@@ -1137,7 +1171,16 @@ def _from_stored(row: dict[str, Any], piece: str, commit: str, b: Base, scope: l
                         declared=list(m.get("checks_declared") or []), environment=environment,
                         baseline_signature=m.get("baseline_signature"), paths=scope,
                         recorded_signature=m.get("failure_signature"),
-                        retry=m.get("retry") if isinstance(m.get("retry"), str) else None)
+                        retry=m.get("retry") if isinstance(m.get("retry"), str) else None,
+                        retry_of=_uuid(m.get("retry_of")),
+                        first_signature=m.get("first_signature") if isinstance(m.get("first_signature"), str) else None)
+
+
+def _uuid(value: Any) -> UUID | None:
+    try:
+        return UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _signal_name(e: BaseException | None) -> str | None:

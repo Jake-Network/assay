@@ -861,12 +861,23 @@ def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
 
 
 
-def flaky_repo(root: Path, marker: Path) -> Path:
-    """One check that fails the first time it runs and passes after (MARKER remembers the first run)."""
+
+def flaky_repo(root: Path, marker: Path, second: str = "exit 0") -> Path:
+    """One check that fails the first time it runs and then runs SECOND (MARKER remembers the first run)."""
     m = shlex.quote(str(marker))
-    cmd = f"sh -c 'test -e {m} || {{ touch {m}; exit 1; }}'"
+    cmd = f"sh -c 'if test -e {m}; then {second}; else touch {m}; echo first-run; exit 1; fi'"
     return make_repo(root, f'project = "ignored"\n\n[checks.flaky]\ncmd = {json.dumps(cmd)}\n\n'
                            '[guard]\nbase = "main"\n')
+
+
+def attempts_of(lg: Ledger, sha: str) -> list[dict[str, Any]]:
+    return lg.sql_internal("SELECT id, metrics FROM benchbook.experiments WHERE project_id = %s AND code_ref = %s"
+                           " ORDER BY created_at, id", (lg.project_id, sha))
+
+
+def discarded_claims(lg: Ledger) -> list[dict[str, Any]]:
+    return lg.sql_internal("SELECT id FROM benchbook.claims WHERE project_id = %s AND 'discarded' = ANY(tags)",
+                           (lg.project_id,))
 
 
 def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no_dead_end(
@@ -878,34 +889,89 @@ def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no
 
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True)
-    assert v.all_passed and v.retry == checks.RETRY and rec.retried_from is not None
+    receipt = uuid.uuid4()
+    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert v.all_passed and v.retry == checks.RETRY_PASSED and v.retry_of is not None
+    assert rec.experiment_id == receipt and v.retry_of == uuid.uuid5(receipt, "first run")
     assert rec.outcome is not None and rec.outcome.decision == "inconclusive", rec.outcome
     assert [link["relation"] for link in links_to(lead_lg, rec.claim_id)] == ["refutes", "supports"]
-    assert row(lead_lg, "experiments", rec.retried_from)["metrics"]["retry"] == checks.RETRIED_PASSED
-    assert rec.discarded_id is None and not lead_lg.sql_internal(
-        "SELECT 1 FROM benchbook.claims WHERE project_id = %s AND 'discarded' = ANY(tags)", (lead_lg.project_id,))
+    assert row(lead_lg, "experiments", v.retry_of)["metrics"]["retry"] == checks.RETRYING
+    assert rec.discarded_id is None and not discarded_claims(lead_lg)
     line = _result_line(v, rec, None, lead_lg.role)
     assert "then passed on a retry" in line and "attempts disagree" in line and "failed run e:" in line
     assert not merge_gate.clean(line)
+    # A second try of the same request finishes from the stored retry and still names the failed run.
+    v_again, again = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert again.experiment_id == receipt and v_again.retry_of == v.retry_of
+    assert "failed run e:" in _result_line(v_again, again, None, lead_lg.role)
+    assert len(attempts_of(lead_lg, sha)) == 2
     # The lead finds the failed run broken, invalidates it, and its own re-run decides.
-    lead_lg.decide(rec.retried_from, "invalidated", "human", "flaky check outside the piece")
-    _, mine = checks.verify(lead_lg.as_agent("lead"), "p", sha, repo=repo, reported_by="impl")
+    lead_lg.decide(v.retry_of, "invalidated", "human", "flaky check outside the piece")
+    _, mine = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl")
     assert mine.outcome is not None and mine.outcome.decision == "verified", mine.outcome
 
 
-def test_a_check_that_fails_again_on_the_retry_refutes_once(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
-    repo = service_repo(tmp_path / "repo", tmp_path / "never")
+@pytest.mark.parametrize(("second", "retry", "dead_end"), [
+    ("echo first-run; exit 1", checks.RETRY_FAILED, True),  # the same failure twice: a dead end
+    ("echo other; exit 2", checks.RETRY_FAILED_OTHER, False),  # failed differently: neither failure repeated
+])
+def test_a_retry_that_fails_too(tmp_path: Path, vtmp: Path, lead_lg: Ledger, second: str, retry: str,
+                                dead_end: bool) -> None:
+    from benchbook.verify_requests import _result_line
+
+    repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once", second)
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True)
-    assert not v.all_passed and v.retry == checks.RETRIED_FAILED and rec.retried_from is None
-    assert rec.relation == "refutes" and rec.discarded_id is not None
+    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=uuid.uuid4())
+    assert not v.all_passed and v.retry == retry and v.retry_of is not None
+    assert [link["relation"] for link in links_to(lead_lg, rec.claim_id)] == ["refutes", "refutes"]
+    assert (rec.discarded_id is not None) is dead_end and bool(discarded_claims(lead_lg)) is dead_end
+    assert rec.outcome is not None and rec.outcome.decision is None
+    line = _result_line(v, rec, None, lead_lg.role)
+    assert "and again on a retry" in line and ("with a different failure" in line) is (not dead_end)
+    assert "; runs e:" in line
+
+
+def test_an_interrupted_retry_is_run_again_by_the_next_try(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """The failed first run is recorded before its retry runs, under an id the next try of the request finds."""
+    repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
+    sha = piece(repo, "p", {"impl.txt": "fixed\n"})
+    receipt, real, calls = uuid.uuid4(), checks.run_checks, []
+
+    def stopped_on_the_retry(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        results, interrupted = real(*args, **kwargs)
+        return (results, KeyboardInterrupt()) if len(calls) == 2 else (results, interrupted)
+
+    monkeypatch.setattr(checks, "run_checks", stopped_on_the_retry)
+    with pytest.raises(KeyboardInterrupt):
+        checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert not discarded_claims(lead_lg) and len(attempts_of(lead_lg, sha)) == 1
+    monkeypatch.setattr(checks, "run_checks", real)
+    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
+    assert v.retry == checks.RETRY_PASSED and rec.experiment_id == receipt
+    assert len(attempts_of(lead_lg, sha)) == 2  # the first run was not run again
+
+
+def test_a_retry_that_could_not_run_leaves_the_failure_as_it_was(tmp_path: Path, vtmp: Path, lead_lg: Ledger,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
+    sha = piece(repo, "p", {"impl.txt": "fixed\n"})
+    real, calls = checks.run_checks, []
+
+    def no_retry(repo: Path, commit: str, specs: Any, *args: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 2:  # the retry's prepare step failed: nothing ran
+            return [checks.CheckResult(s.name, "not_run") for s in specs], None
+        return real(repo, commit, specs, *args)
+
+    monkeypatch.setattr(checks, "run_checks", no_retry)
+    v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=uuid.uuid4())
+    assert not v.all_passed and v.retry == checks.RETRYING and rec.discarded_id is not None
     assert [link["relation"] for link in links_to(lead_lg, rec.claim_id)] == ["refutes"]
-    assert row(lead_lg, "experiments", rec.experiment_id)["metrics"]["retry"] == checks.RETRIED_FAILED
 
 
 def test_check_verify_without_retry_runs_once(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
-    marker = tmp_path / "ran-once"
-    repo = flaky_repo(tmp_path / "repo", marker)
+    repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     v, rec = checks.verify(lead_lg, "p", piece(repo, "p", {"impl.txt": "fixed\n"}), repo=repo, reported_by="impl")
     assert not v.all_passed and v.retry is None and rec.relation == "refutes" and rec.discarded_id is not None

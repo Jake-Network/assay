@@ -772,3 +772,10 @@ by hand, not a live session). Four are fixed; the fourth is not.
   brief would list as a dead end of the piece. Only the hook's re-run retries, since a failure there costs the lead
   a held merge; `check verify` by hand reports what it saw. The cost is one more run of the checks for every real
   failure.
+- **The failed run is recorded before its retry runs**, under an id derived from the request's receipt, and the
+  retry under the receipt itself, naming the failed run in its metrics. The first version recorded both after the
+  retry, the failed one without the receipt: a crash between the two writes left a refutation no later try would
+  find, an interrupted retry recorded the failed run as an ordinary failure with a dead end, and a later try that
+  finished from the stored retry lost which run had failed, so the merge gate gave the wrong advice (review of
+  0e64b10). Now every later try of the request finds where it stopped. A retry that fails on a different test leaves
+  no dead end: neither failure repeated.
