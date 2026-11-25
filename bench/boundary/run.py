@@ -29,6 +29,8 @@ from .tasks import Phase, Task, input_tasks, inspect
 REGISTRATION = Path(__file__).with_name("PREREGISTRATION.md")
 MIN_CLAUDE_VERSION = (2, 1, 277)
 USD_TOLERANCE = 1e-9
+# A call's own usage in a result event (Claude Code 2.1.332), whether or not a resume restored the session's totals.
+OWN_USAGE = "model_usage_since_last_result"
 WORK_SCOPE = ("Work only in the task checkout and use the arm's provided mechanism for prior context. "
               "Leave the benchmark's evaluator, run logs, and oracle receipts to the harness.")
 
@@ -90,14 +92,38 @@ def read_call(events: list[tuple[int, dict[str, Any]]], session: str) -> dict[st
                 if lead and (usage := real._usage(msg.get("usage"))) is not None]
     if not real._number(costs) or costs < 0 or not counts or None in counts or not contexts:
         raise real.BenchRunError("Claude invocation lacks full cost, session usage, or lead context evidence")
-    return {"cost_usd": costs, "tokens": sum(sum(n) for n in counts if n is not None),
-            "lead_context_max": max(contexts)}
+    receipt = {"cost_usd": costs, "tokens": sum(sum(n) for n in counts if n is not None),
+               "lead_context_max": max(contexts)}
+    if OWN_USAGE in result:
+        own = usage_totals(result[OWN_USAGE])
+        if own is None:
+            raise real.BenchRunError(f"Claude invocation has an unreadable {OWN_USAGE}")
+        receipt["own"] = own
+    return receipt
+
+
+def usage_totals(rows: Any) -> tuple[float, int] | None:
+    """Cost and tokens summed over a per-model usage map, or None when any row lacks them."""
+    if not isinstance(rows, dict) or not rows:
+        return None
+    costs = [row.get("costUSD") if isinstance(row, dict) else None for row in rows.values()]
+    counts = [real._class_counts(row, real.MODEL_USAGE_KEYS) for row in rows.values()]
+    if not all(real._number(c) and c >= 0 for c in costs) or None in counts:
+        return None
+    return sum(costs), sum(sum(n) for n in counts if n is not None)
 
 
 def own_spend(receipt: dict[str, Any], before: tuple[float, int] | None) -> dict[str, Any]:
-    """A call's own cost and tokens from its receipt, which for a resumed session covers the whole session so far
-    (before: the session's previous receipt). The session totals are kept beside them."""
+    """A call's own cost and tokens, with the session totals beside them (before: the session's previous totals).
+
+    A receipt that reports the call's own usage (OWN_USAGE) is read from that: a resumed session's totals cover the
+    whole session only when Claude Code restored the earlier ones, and on 2026-11-25 one resume did not. Otherwise
+    the receipt covers the whole session so far, and the call's own spend is the difference from `before`."""
     cost, tokens = before or (0.0, 0)
+    if (own := receipt.get("own")) is not None:
+        rest = {key: value for key, value in receipt.items() if key != "own"}
+        return {**rest, "cost_usd": own[0], "tokens": own[1],
+                "session_cost_usd": cost + own[0], "session_tokens": tokens + own[1]}
     if receipt["cost_usd"] < cost - USD_TOLERANCE or receipt["tokens"] < tokens:
         raise real.BenchRunError("a resumed session reported less spend than its previous receipt")
     return {**receipt, "cost_usd": max(receipt["cost_usd"] - cost, 0.0), "tokens": receipt["tokens"] - tokens,

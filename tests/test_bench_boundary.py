@@ -94,6 +94,47 @@ def test_a_resumed_call_counts_only_its_own_spend(tmp_path: Path, session_cost: 
     assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == session_cost
 
 
+@pytest.mark.parametrize("restored", [True, False])
+def test_a_resumed_call_reads_its_own_usage_whether_or_not_the_session_totals_were_restored(
+    tmp_path: Path, restored: bool,
+) -> None:
+    """Third boundary pilot: a resume reported only its own spend (0.0623 after 0.0602), which the difference rule
+    rejected as less than the previous receipt. The call's own usage is in model_usage_since_last_result."""
+    own = [(0.0602, 54000), (0.0623, 27113)]
+    totals = [own[0], (own[0][0] + own[1][0], own[0][1] + own[1][1]) if restored else own[1]]
+    calls = iter(zip(totals, own, strict=True))
+
+    def execute(prepared: real.PreparedRun, target: Path, _wall: int) -> None:
+        (cost, tokens), (own_cost, own_tokens) = next(calls)
+        events = [{"type": "assistant", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+                  {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                   "modelUsage": {"m": {"inputTokens": tokens, "outputTokens": 0, "costUSD": cost}},
+                   run.OWN_USAGE: {"m": {"inputTokens": own_tokens, "outputTokens": 0, "costUSD": own_cost}}}]
+        (target / "lead.stream.jsonl").write_text(
+            "".join(json.dumps({**e, "session_id": prepared.session_id}) + "\n" for e in events), encoding="utf-8")
+        (target / "lead.timestamps").write_text("1\n2\n", encoding="utf-8")
+
+    args = argparse.Namespace(probe_budget_usd=0.5, max_budget_usd=3.0, total_budget_usd=10.0, model="m",
+                              claude_mem_plugin=None, probe_turns=1, max_turns=1, wall_clock=1)
+    batch = run.Batch(args, tmp_path, execute)
+    batch.capture("A", tmp_path, {}, tmp_path / "first", "work", "s-1", resume=False, probe=False)
+    batch.capture("A", tmp_path, {}, tmp_path / "second", "probe", "s-1", resume=True, probe=True)
+    second = json.loads((tmp_path / "second" / "metrics.json").read_text(encoding="utf-8"))
+    assert (second["cost_usd"], second["tokens"]) == (0.0623, 27113)
+    assert second["session_cost_usd"] == pytest.approx(0.1225) and second["session_tokens"] == 81113
+    assert json.loads((tmp_path / "spend.json").read_text())["counted_usd"] == pytest.approx(0.1225)
+
+
+def test_an_unreadable_own_usage_is_a_missing_receipt() -> None:
+    usage = {"input_tokens": 10, "output_tokens": 1}
+    events = [(1, {"type": "assistant", "session_id": "s", "message": {"usage": usage}}),
+              (2, {"type": "result", "subtype": "success", "is_error": False, "session_id": "s",
+                   "total_cost_usd": 0.1, "modelUsage": {"m": {"inputTokens": 5, "costUSD": 0.1}},
+                   run.OWN_USAGE: {"m": {"inputTokens": 5}}})]
+    with pytest.raises(real.BenchRunError, match="unreadable"):
+        run.read_call(events, "s")
+
+
 def test_every_call_copies_its_session_transcripts(tmp_path: Path) -> None:
     """Arm F's verdicts reach the lead through PostToolUse hooks, which the stream does not show: each call keeps the
     session's transcripts, the lead's and its subagents', in its own folder."""
