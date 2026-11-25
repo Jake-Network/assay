@@ -239,3 +239,16 @@ any rerun before paying for it.
   second pilot. The report gives directions only, set beside both earlier pilots, with the containment scoring as a
   sensitivity, and for F says which of the second pilot's six misses each fix was meant to remove and what F
   answered this time.
+- **2026-11-25, third boundary pilot, A's first trial stopped on a receipt.** Written before any further call. A's
+  first trial (`boundary-pilot3-boltons-A-try1`) stopped at its second call, the phase-1 resume probe, which
+  reported only its own spend (USD 0.0623 after the work call's 0.0602): Claude Code had not restored the session's
+  earlier totals, as it had on every resume of both earlier pilots, and the runner stopped on "a resumed session
+  reported less spend than its previous receipt". USD 0.56 is counted (0.06 plus the probe's full 0.5 cap, as for a
+  missing receipt). The rule above that a resumed call's receipt reports the whole session's spend changes: when the
+  result event carries `model_usage_since_last_result` (Claude Code 2.1.332), the call's own cost and tokens are
+  read from it and the session total is the sum of the calls; receipts without it keep the difference rule (commit
+  `e592049`; replaying the second pilot's A and F streams gives each call's recorded cost and tokens exactly). The
+  driver's usage-limit check, which also matched this registration's own text in the trial directory, now reads only
+  the call streams and the log. A runs again as `try2` from the commit that adds this amendment, then C and F as
+  planned, all under the same USD 10 total, which counts try1's USD 0.56. try1 is kept and reported and is not a
+  completed trial. benchbook's code for F is unchanged from the first amendment of this run.
