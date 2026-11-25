@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- Worker instructions (MCP server instructions, the worker subagents, AGENTS.md) ask for a short final summary with
+  record ids instead of at most 3 sentences; the 1000-character limit on a task summary is unchanged. The Claude Code
+  plugins are 0.2.2 (`benchbook`) and 0.2.1 (`benchbook-mcp`) for it.
 - The hook spool has two lanes with a processor each: re-runs (`verify-request`) and everything else. A check run or
   Bash-hook attempt queued while re-runs wait is recorded within about a second instead of after all of them (168 s
   with eight queued re-runs, `scripts/measure_rerun_queue.py`). Before each re-run the verify lane records what the

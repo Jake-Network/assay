@@ -101,7 +101,7 @@ Details: [bench/results/2026-11-25-boundary-pilot/](bench/results/2026-11-25-bou
 
 benchbook started as a lab notebook for agents that run experiments, and that mode is unchanged. Workers record each
 experiment the moment it finishes (failures too). They check what was already tried before running anything, and
-hand the lead a 3-sentence summary with record ids. The lead reads a budgeted brief built by SQL (best result,
+hand the lead a short summary with record ids. The lead reads a budgeted brief built by SQL (best result,
 verified claims, what not to repeat) instead of transcripts.
 
 ```bash

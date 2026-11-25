@@ -1,9 +1,9 @@
 # Working on benchbook
 
 benchbook keeps a Postgres ledger beside a repository for coding agents. Its code mode records claims ("done", "tests
-pass") and verifies them by an independent re-run (`packs/code`); its experiment mode records experiments and claims
-for agent swarms and hands the lead a budgeted brief (`packs/core`, `packs/ml-research`). README.md explains the
-product, DECISIONS.md why things are the way they are, CHANGELOG.md what changed.
+pass") and verifies them by an independent re-run (`src/benchbook/packs/code`); its experiment mode records experiments
+and claims for agent swarms and hands the lead a budgeted brief (`src/benchbook/packs/core`,
+`src/benchbook/packs/ml-research`). README.md explains the product, DECISIONS.md why things are the way they are, CHANGELOG.md what changed.
 
 ## Checks
 
@@ -24,8 +24,9 @@ product, DECISIONS.md why things are the way they are, CHANGELOG.md what changed
 - The pre-rename names (`assay`, `ASSAY_*`, `.assay`, `assay-worker`, the `assay_*` MCP tools,
   `assay:auto-captured`) are kept on purpose so installs from before the rename keep working; they are not leftovers.
   Accept old names wherever they were persisted, write only new ones (DECISIONS.md, "Name").
-- A schema change is a new Alembic revision: `db/alembic/versions/NNNN_<name>.py` running one plain
-  `db/alembic/sql/NNNN_<name>.sql`. Migrations are forward-only; never edit a revision or SQL file that is on main.
+- A schema change is a new Alembic revision: `src/benchbook/db/alembic/versions/NNNN_<name>.py` running one plain
+  `src/benchbook/db/alembic/sql/NNNN_<name>.sql`. Migrations are forward-only; never edit a revision or SQL file that
+  is on main.
 - Files that change together: README.md and README.ko.md; the autoresearch template in
   `integrations/autoresearch/template/` and its packaged copy under `src/benchbook/integrations/autoresearch/`
   (`tests/test_docs.py` compares them). A hook that reads a new field of a harness's input quotes that harness's
