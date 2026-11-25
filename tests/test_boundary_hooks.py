@@ -271,6 +271,48 @@ FROM generate_series(1, 2000) AS i""", {"p": code})
     assert len(text) <= 6000 and "## Open out-of-scope findings (" in text
 
 
+def test_a_rerun_that_decided_nothing_is_in_every_brief_with_why(db_url: str, code: str, env: Path,
+                                                                  capsys: pytest.CaptureFixture[str],
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary pilot: a piece whose re-run passed but whose commit changed a test was in no section of the
+    brief, so a new session's lead could not know it waited for a person. It is listed after the verified pieces with
+    the reason, in session start, pre-compact and brief --here; so is a re-run that failed. A verified piece is not."""
+    from benchbook import Ledger, checks
+    from tests.test_code_brief import SCRIPT
+    from tests.test_mutations import FIXED, NO_ASSERT
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    lead = Ledger.open(project=code, agent="lead", role="orchestrator", database_url=db_url)
+    shas = {"weak": piece(repo, "weak", {**FIXED, "tests/test_impl.py": NO_ASSERT}),
+            "good": piece(repo, "good", FIXED), "bad": piece(repo, "bad", {**FIXED, "value.txt": "no\n"})}
+    ids = {}
+    for name, sha in shas.items():
+        _, rec = checks.verify(lead, name, sha, repo=repo, reported_by="impl")
+        ids[name] = short("claim", rec.claim_id)
+    weak = (f"- weak at {shas['weak'][:12]} ({ids['weak']}, re-run AGE: passed, needs review (tests weakened: "
+            "tests/test_impl.py))")
+    bad = f"- bad at {shas['bad'][:12]} ({ids['bad']}, re-run AGE: failed (value))"
+
+    def aged(lines: list[str]) -> list[str]:  # the age moves with this machine's clock steps (54.6 s)
+        return sorted(re.sub(r", re-run [^:]+:", ", re-run AGE:", line) for line in lines)
+
+    text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
+    sections = text.split("\n## ")
+    assert sections[1].startswith("Last verified commit per piece (1 of 1)\n- good at ")
+    lines = sections[2].splitlines()
+    assert lines[0] == "Re-run, not decided (2 of 2)" and aged(lines[1:]) == sorted([weak, bad])
+    assert ids["good"] not in sections[2] and sections[3].startswith("Reported done, not re-run (0 of 0)")
+    out = run("pre-compact", fixture("pre_compact.json", repo), capsys, monkeypatch)
+    assert ids["weak"] in out and ids["bad"] in out
+
+    git(repo, "checkout", "-q", "weak")
+    cli_env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "XDG_STATE_HOME": str(env / "state")}
+    p = subprocess.run([SCRIPT, "--agent", "reader", "brief", "--here"], capture_output=True, text=True, cwd=repo,
+                       timeout=120, env=cli_env)
+    assert p.returncode == 0, p.stderr
+    assert weak in aged(p.stdout.splitlines()) and "## Re-run, not decided (" in p.stdout
+
+
 # ------------------------------------------------------------------------------------------- pre-compact
 
 def test_pre_compact_gives_one_paragraph_of_ids(recorded: dict[str, Any], env: Path,
@@ -554,9 +596,9 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
     data["tool_response"]["content"][0]["text"] = f"private report text\npiece: media-upload\nDONE {sha[:9]}"
     assert not run("agent-result", fixture("post_tool_use_agent_async.json", repo), capsys, monkeypatch)
     monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
-    for _ in range(2):
-        out = run("agent-result", data, capsys, monkeypatch)
-        assert "re-running the checks of media-upload" in context(out, "PostToolUse")
+    out = run("agent-result", data, capsys, monkeypatch)
+    assert "re-running the checks of media-upload" in context(out, "PostToolUse")
+    assert not run("agent-result", data, capsys, monkeypatch)  # the line once; the request again (a new report)
     spool = hooks._spool_dir()
     assert len(list(spool.glob("*.json"))) == 2
     assert all("private report text" not in path.read_text() for path in spool.glob("*.json"))
@@ -582,6 +624,118 @@ def test_agent_report_replays_and_delivers_once(case: str, expected: str, code: 
             assert expected in result and short("claim", claim["id"]) in result
         else:
             assert not out
+
+
+@pytest.mark.parametrize("stop_first", [True, False], ids=["subagent-stop-first", "post-tool-use-first"])
+def test_a_foreground_report_seen_by_both_hooks_tells_the_lead_once(stop_first: bool, code: str, env: Path,
+                                                                    capsys: pytest.CaptureFixture[str],
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary pilot (2.1.331): one report came as SubagentStop and as PostToolUse:Agent, and the lead got
+    "re-running the checks" twice. Either order gives the line once; SubagentStop first queues the re-run once."""
+    from benchbook import hooks
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    post = fixture("post_tool_use_agent.json", repo)
+    post["tool_response"]["content"][0]["text"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["session_id"] = post["session_id"]
+    stop["last_assistant_message"] = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    given = []
+    for data in ([stop, post] if stop_first else [post, stop]):
+        if out := run("agent-result", data, capsys, monkeypatch):
+            given.append(context(out, "PostToolUse"))
+    notification = fixture("user_prompt_submit_task_notification.json", repo)
+    notification["session_id"] = post["session_id"]
+    if out := run("notes", notification, capsys, monkeypatch):
+        given.append(context(out, "UserPromptSubmit"))
+    line = f"benchbook: re-running the checks of media-upload at {sha[:7]} in the background"
+    assert "\n".join(given).count(line) == 1, given
+    requests = list(hooks._spool_dir().glob("*.json"))
+    assert len(requests) == (1 if stop_first else 2)  # PostToolUse first cannot tell SubagentStop's report is its own
+    assert hooks.replay_now(hooks._spool_dir()).recorded == len(requests)
+    if stop_first:  # the lead merges before reading the verdict: the merge gate hands it over
+        from benchbook import merge_gate
+
+        gate = merge_gate.decide({"session_id": post["session_id"], "cwd": str(repo), "tool_name": "Bash",
+                                  "tool_input": {"command": "git merge --no-ff media-upload"}}, wait=1)
+        assert gate is not None
+        assert gate["hookSpecificOutput"]["additionalContext"].startswith(f"benchbook: media-upload {sha[:7]}: re-run "
+                                                                          "passed")
+        assert not run("notes", notification, capsys, monkeypatch)
+        return
+    verdict = context(run("notes", notification, capsys, monkeypatch), "UserPromptSubmit")
+    assert verdict.count(f"benchbook: media-upload {sha[:7]}: re-run passed") == 1 and line not in verdict
+    assert not run("notes", notification, capsys, monkeypatch)
+
+
+@pytest.mark.parametrize("failed_note", [False, True], ids=["spool-write-failed", "note-write-failed"])
+def test_enqueue_failure_leaves_an_honest_notice_and_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                              failed_note: bool) -> None:
+    from benchbook import hooks, session_notes
+    from benchbook.verify_requests import enqueue
+
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    repo = make_repo(tmp_path / "repo")
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    post = fixture("post_tool_use_agent.json", repo)
+    report = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    post["tool_response"]["content"][0]["text"] = report
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["session_id"] = post["session_id"]
+    stop["last_assistant_message"] = report
+    spool = hooks._spool_dir()
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(hooks, "start_processor", lambda path, lane: launches.append((path, lane)))
+
+    def fail(*args: Any) -> None:
+        raise OSError("injected write failure")
+
+    target, method = (session_notes, "write_note") if failed_note else (hooks, "_write_spool")
+    with monkeypatch.context() as patch:
+        patch.setattr(target, method, fail)
+        with pytest.raises(OSError, match="injected write failure"):
+            enqueue(stop)
+
+    assert session_notes.deliver(post["session_id"]) == ""
+    assert len(list(spool.glob("*.json"))) == int(failed_note)
+    assert launches == ([(spool, hooks.VERIFY)] if failed_note else [])
+    assert f"re-running the checks of media-upload at {sha[:7]}" in enqueue(post)
+    assert len(list(spool.glob("*.json"))) == int(failed_note) + 1
+    assert launches[-1] == (spool, hooks.VERIFY)
+
+
+@pytest.mark.parametrize("change", ["text", "reporter"])
+def test_pending_notice_does_not_suppress_another_report_for_the_same_commit(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
+    from benchbook import hooks, session_notes
+    from benchbook.verify_requests import enqueue
+
+    monkeypatch.setenv("BENCHBOOK_PROJECT", "review")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(hooks, "start_processor", lambda *args: None)
+    repo = make_repo(tmp_path / "repo")
+    sha = piece(repo, "media-upload", {"impl.txt": "fixed\n"})
+    first = f"Implemented.\npiece: media-upload\nDONE {sha[:9]}"
+    same = fixture("post_tool_use_agent.json", repo)
+    same["tool_response"]["content"][0]["text"] = f"  {first}\n"
+    stop = fixture("subagent_stop_background.json", repo)
+    stop["session_id"] = same["session_id"]
+    stop["last_assistant_message"] = first
+    different = fixture("post_tool_use_agent.json", repo)
+    different["tool_response"]["content"][0]["text"] = first
+    if change == "text":
+        different["tool_response"]["content"][0]["text"] = f"Checked again.\n{first}"
+    else:
+        different["tool_input"]["subagent_type"] = "another-worker"
+
+    assert not enqueue(stop)
+    assert f"re-running the checks of media-upload at {sha[:7]}" in enqueue(different)
+    assert not enqueue(same)  # its SubagentStop already queued it even though the notice is delivered
+    assert not session_notes.deliver(same["session_id"])
+    assert len(list(hooks._spool_dir().glob("*.json"))) == 2
 
 
 # ------------------------------------------------------------------------------------------- who decides a re-run
@@ -665,3 +819,52 @@ def test_under_a_token_the_re_run_is_the_tokens_agent(role: str, checked: str, c
     assert author["author"] == "tok-agent"
     assert not lg.sql_internal("SELECT 1 FROM benchbook.agents WHERE project_id = %s AND id = %s",
                                (code, checks.default_rerunner()))
+
+
+# ------------------------------------------------------------------------------------------- the lead's own records
+
+def test_a_code_projects_session_start_guides_the_lead_even_with_an_empty_ledger(
+        db_url: str, code: str, env: Path, capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Arm F's lead in the boundary pilot had no skill: it never asked its workers for findings and recorded no dead
+    end. A new (not resumed) session in a code project now starts with how to."""
+    cfg = (CONFIG.replace('project = "ignored"', f'project = "{code}"')
+           + '\n[report]\nout_of_scope_heading = "Out of scope"\n')
+    repo = make_repo(env / "repo", cfg)
+    text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
+    assert text.startswith("benchbook records this repository's checks and reports.")
+    assert "under a `## Out of scope` heading" in text and "benchbook --agent lead discard <piece>" in text
+    assert "# benchbook brief" not in text  # the ledger is empty: the guide alone
+    resumed = {**fixture("session_start_startup.json", repo), "source": "resume"}
+    assert not run("session-start", resumed, capsys, monkeypatch)
+    w = boundary_hooks.where(fixture("session_start_startup.json", repo))
+    assert w is not None and "waits for it" in text  # the merge gate is the Claude Code plugin's alone
+    assert "waits for it" not in boundary_hooks.lead_guide({"source": "startup"}, w, "codex")
+
+
+def test_the_leads_dead_ends_and_findings_reach_the_brief(db_url: str, code: str, env: Path,
+                                                          capsys: pytest.CaptureFixture[str],
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_code_brief import SCRIPT
+
+    repo = make_repo(env / "repo", CONFIG.replace('project = "ignored"', f'project = "{code}"'))
+    cli_env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url, "XDG_STATE_HOME": str(env / "state")}
+
+    def cli(*args: str) -> str:
+        p = subprocess.run([SCRIPT, "--agent", "lead", *args], capture_output=True, text=True, cwd=repo,
+                           timeout=120, env=cli_env)
+        assert p.returncode == 0, p.stderr
+        return p.stdout
+
+    assert "recorded" in cli("discard", "camel-to-kebab", "--approach", "regex-split",
+                             "--why", "re.split drops the acronym boundary in HTTPServer")
+    assert "already recorded" in cli("discard", "camel-to-kebab", "--approach", "regex-split",
+                                     "--why", "re.split drops the acronym boundary in  HTTPServer")
+    assert "recorded" in cli("finding", "add", "strutils.slugify keeps a trailing dash", "--file",
+                             "boltons/strutils.py")
+    text = context(run("session-start", fixture("session_start_startup.json", repo), capsys, monkeypatch))
+    discarded = text.split("## Discarded approaches")[1].split("\n## ")[0]
+    assert "regex-split on camel-to-kebab: noted: re.split drops the acronym boundary in HTTPServer" in discarded
+    assert "×1" in discarded
+    findings = text.split("## Open out-of-scope findings")[1].split("\n## ")[0]
+    assert "strutils.slugify keeps a trailing dash" in findings and "boltons/strutils.py" in findings

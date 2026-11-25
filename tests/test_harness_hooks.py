@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, doctor, harnesses
+from benchbook import Ledger, boundary_hooks, doctor, harnesses
 from benchbook.checks import last_line_hash
 from benchbook.entry import hook_args
 from benchbook.harnesses import shell_call
@@ -327,8 +327,11 @@ def test_same_boundary_brief_and_one_shot_notes(harness: str, gate_repo: Path, t
     start = load(f"{harness}/session_start.json", gate_repo)
     got = run_hook("session-start", harness, start, env, tmp_path)
     assert got.returncode == 0 and got.stderr == ""
-    head, body = _context(got.stdout, harness, "SessionStart").split("\n", 1)
-    expected_head, expected_body = expected.split("\n", 1)
+    def brief(text: str) -> str:  # the lead guide differs by harness and by source (none on resume)
+        return text.split("\n\n", 1)[1] if text.startswith(boundary_hooks.GUIDE_HEAD) else text
+
+    head, body = brief(_context(got.stdout, harness, "SessionStart")).split("\n", 1)
+    expected_head, expected_body = brief(expected).split("\n", 1)
     assert head.rsplit(" · ", 1)[0] == expected_head.rsplit(" · ", 1)[0]
     assert body == expected_body
 

@@ -1,0 +1,1384 @@
+{
+  "dry": false,
+  "trials": [
+    {
+      "task": "boltons",
+      "arm": "A",
+      "run": 1,
+      "wall_seconds": 93.89552541001467,
+      "calls": [
+        {
+          "cost_usd": 0.0606931,
+          "tokens": 43913,
+          "lead_context_max": 11982,
+          "session_cost_usd": 0.0606931,
+          "session_tokens": 43913,
+          "seconds": 25.95567877800204,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.0329792,
+          "tokens": 12996,
+          "lead_context_max": 12762,
+          "session_cost_usd": 0.0936723,
+          "session_tokens": 56909,
+          "seconds": 3.1809809770202264,
+          "kind": "probe"
+        },
+        {
+          "cost_usd": 0.030683199999999997,
+          "tokens": 57920,
+          "lead_context_max": 15030,
+          "session_cost_usd": 0.1243555,
+          "session_tokens": 114829,
+          "seconds": 19.86818030604627,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.0453667,
+          "tokens": 54259,
+          "lead_context_max": 18714,
+          "session_cost_usd": 0.1697222,
+          "session_tokens": 169088,
+          "seconds": 19.77197481202893,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.0533393,
+          "tokens": 19722,
+          "lead_context_max": 19473,
+          "session_cost_usd": 0.2230615,
+          "session_tokens": 188810,
+          "seconds": 3.2331836730008945,
+          "kind": "probe"
+        },
+        {
+          "cost_usd": 0.0317394,
+          "tokens": 84379,
+          "lead_context_max": 21593,
+          "session_cost_usd": 0.2548009,
+          "session_tokens": 273189,
+          "seconds": 18.816423178999685,
+          "kind": "work"
+        }
+      ],
+      "phases": [
+        {
+          "expected": {
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "fresh": "yes",
+            "stale": "yes",
+            "verified": "boltons-p1-run-length"
+          },
+          "false_done": 0,
+          "head": "d723515fd63b6e94537c48cada10512635a55b3f",
+          "hidden": {
+            "boltons-p1-run-length": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_run_length_basic": [
+                true,
+                null
+              ],
+              "test_run_length_iterator": [
+                true,
+                null
+              ],
+              "test_run_length_key_first_item": [
+                true,
+                null
+              ],
+              "test_run_length_unhashable": [
+                true,
+                null
+              ]
+            },
+            "boltons-p1-split-camel": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_split_camel_examples": [
+                true,
+                null
+              ],
+              "test_split_camel_leading_lower": [
+                true,
+                null
+              ],
+              "test_split_camel_separators": [
+                true,
+                null
+              ]
+            }
+          },
+          "merged": 2,
+          "merged_pieces": [
+            "boltons-p1-split-camel",
+            "boltons-p1-run-length"
+          ],
+          "misflagged_fresh": 0,
+          "previous": "3ac227a17938275ada7ac8995f7a596513a3e4f5",
+          "repeated": 0,
+          "repeated_signatures": [],
+          "trusted_stale": 0,
+          "weakened": 0,
+          "weakened_files": [],
+          "compactions": 0,
+          "injection": {
+            "before": "d723515fd63b6e94537c48cada10512635a55b3f",
+            "head": "afe44a9c8ec21717ecb46b8894c62d45de149b85",
+            "path": "boltons/strutils.py"
+          },
+          "action": {
+            "decision": {
+              "boltons-p1-run-length": "ready",
+              "boltons-p1-split-camel": "ready"
+            },
+            "false_done": 0,
+            "head": "45c2fc45ffa1f328bcef54e2caf26bd04f802059",
+            "hidden": {
+              "boltons-p1-run-length": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_run_length_basic": [
+                  true,
+                  null
+                ],
+                "test_run_length_iterator": [
+                  true,
+                  null
+                ],
+                "test_run_length_key_first_item": [
+                  true,
+                  null
+                ],
+                "test_run_length_unhashable": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p1-split-camel": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_split_camel_examples": [
+                  true,
+                  null
+                ],
+                "test_split_camel_leading_lower": [
+                  true,
+                  null
+                ],
+                "test_split_camel_separators": [
+                  true,
+                  null
+                ]
+              }
+            },
+            "merged": 0,
+            "misflagged_fresh": 0,
+            "release_missing": false,
+            "repeated": 0,
+            "repeated_signatures": [],
+            "stale_still_broken": [],
+            "trusted_stale": 0,
+            "weakened": 0
+          }
+        },
+        {
+          "expected": {
+            "discarded": "test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "fresh": "yes",
+            "stale": "yes",
+            "verified": "boltons-p2-camel-to-kebab"
+          },
+          "false_done": 0,
+          "head": "f016ddb5299b740781c6d635fdcda31a0494bc78",
+          "hidden": {
+            "boltons-p1-run-length": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_run_length_basic": [
+                true,
+                null
+              ],
+              "test_run_length_iterator": [
+                true,
+                null
+              ],
+              "test_run_length_key_first_item": [
+                true,
+                null
+              ],
+              "test_run_length_unhashable": [
+                true,
+                null
+              ]
+            },
+            "boltons-p1-split-camel": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_split_camel_examples": [
+                true,
+                null
+              ],
+              "test_split_camel_leading_lower": [
+                true,
+                null
+              ],
+              "test_split_camel_separators": [
+                true,
+                null
+              ]
+            },
+            "boltons-p2-camel-to-kebab": {
+              "test_camel_to_kebab_acronym": [
+                true,
+                null
+              ],
+              "test_camel_to_kebab_basic": [
+                true,
+                null
+              ],
+              "test_present": [
+                true,
+                null
+              ]
+            },
+            "boltons-p2-weighted-median": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_weighted_median_basic": [
+                true,
+                null
+              ],
+              "test_weighted_median_half_tie_lower": [
+                true,
+                null
+              ],
+              "test_weighted_median_invalid": [
+                true,
+                null
+              ],
+              "test_weighted_median_iterables": [
+                true,
+                null
+              ],
+              "test_weighted_median_zero_weights_ignored": [
+                true,
+                null
+              ]
+            }
+          },
+          "merged": 2,
+          "merged_pieces": [
+            "boltons-p2-weighted-median",
+            "boltons-p2-camel-to-kebab"
+          ],
+          "misflagged_fresh": 0,
+          "previous": "afe44a9c8ec21717ecb46b8894c62d45de149b85",
+          "repeated": 0,
+          "repeated_signatures": [],
+          "trusted_stale": 0,
+          "weakened": 0,
+          "weakened_files": [],
+          "compactions": 0,
+          "injection": {
+            "before": "f016ddb5299b740781c6d635fdcda31a0494bc78",
+            "head": "cf3c4e0c10488685e35958c8ff9c389bafe94fb7",
+            "path": "boltons/mathutils.py"
+          },
+          "action": {
+            "decision": {
+              "boltons-p2-camel-to-kebab": "ready",
+              "boltons-p2-weighted-median": "ready"
+            },
+            "false_done": 0,
+            "head": "b4f0d856546907a52ae523970662e8282397aa21",
+            "hidden": {
+              "boltons-p1-run-length": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_run_length_basic": [
+                  true,
+                  null
+                ],
+                "test_run_length_iterator": [
+                  true,
+                  null
+                ],
+                "test_run_length_key_first_item": [
+                  true,
+                  null
+                ],
+                "test_run_length_unhashable": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p1-split-camel": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_split_camel_examples": [
+                  true,
+                  null
+                ],
+                "test_split_camel_leading_lower": [
+                  true,
+                  null
+                ],
+                "test_split_camel_separators": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p2-camel-to-kebab": {
+                "test_camel_to_kebab_acronym": [
+                  true,
+                  null
+                ],
+                "test_camel_to_kebab_basic": [
+                  true,
+                  null
+                ],
+                "test_present": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p2-weighted-median": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_basic": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_half_tie_lower": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_invalid": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_iterables": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_zero_weights_ignored": [
+                  true,
+                  null
+                ]
+              }
+            },
+            "merged": 0,
+            "misflagged_fresh": 0,
+            "release_missing": false,
+            "repeated": 0,
+            "repeated_signatures": [],
+            "stale_still_broken": [],
+            "trusted_stale": 0,
+            "weakened": 0
+          }
+        }
+      ],
+      "probes": [
+        {
+          "boundary": "resumed session",
+          "expected": {
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "fresh": "yes",
+            "stale": "no",
+            "verified": "boltons-p1-run-length"
+          },
+          "answers": {
+            "verified": "boltons-p1-run-length",
+            "discarded": "The `re.findall(r\"[A-Z][a-z]*\", text)` implementation of split_camel was discarded because it drops a leading lowercase word. Failure signature: test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "stale": "no",
+            "fresh": "yes"
+          },
+          "correct": {
+            "verified": true,
+            "discarded": false,
+            "finding": true,
+            "stale": true,
+            "fresh": true
+          }
+        },
+        {
+          "boundary": "resumed session",
+          "expected": {
+            "discarded": "test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "fresh": "yes",
+            "stale": "no",
+            "verified": "boltons-p2-camel-to-kebab"
+          },
+          "answers": {
+            "verified": "boltons-p2-camel-to-kebab",
+            "discarded": "The `re.sub(r\"([A-Z])\", r\"-\\1\", text).lower()` implementation of camel_to_kebab was discarded because it splits acronyms into single letters. Failure signature: test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "stale": "yes",
+            "fresh": "yes"
+          },
+          "correct": {
+            "verified": true,
+            "discarded": false,
+            "finding": true,
+            "stale": false,
+            "fresh": true
+          }
+        }
+      ]
+    },
+    {
+      "task": "boltons",
+      "arm": "C",
+      "run": 1,
+      "wall_seconds": 200.82720090600196,
+      "calls": [
+        {
+          "cost_usd": 0.17360290000000003,
+          "tokens": 151616,
+          "lead_context_max": 15741,
+          "session_cost_usd": 0.17360290000000003,
+          "session_tokens": 151616,
+          "seconds": 59.55805151897948,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.0388536,
+          "tokens": 16634,
+          "lead_context_max": 8678,
+          "session_cost_usd": 0.0388536,
+          "session_tokens": 16634,
+          "seconds": 6.19904126500478,
+          "kind": "probe"
+        },
+        {
+          "cost_usd": 0.0661259,
+          "tokens": 50679,
+          "lead_context_max": 13113,
+          "session_cost_usd": 0.1049795,
+          "session_tokens": 67313,
+          "seconds": 26.864727815031074,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.15863419999999998,
+          "tokens": 290414,
+          "lead_context_max": 22627,
+          "session_cost_usd": 0.26361369999999995,
+          "session_tokens": 357727,
+          "seconds": 71.77660036401358,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.021397,
+          "tokens": 17736,
+          "lead_context_max": 9256,
+          "session_cost_usd": 0.021397,
+          "session_tokens": 17736,
+          "seconds": 8.355984013003763,
+          "kind": "probe"
+        },
+        {
+          "cost_usd": 0.05899630000000001,
+          "tokens": 98072,
+          "lead_context_max": 15171,
+          "session_cost_usd": 0.0803933,
+          "session_tokens": 115808,
+          "seconds": 24.903719752037432,
+          "kind": "work"
+        }
+      ],
+      "phases": [
+        {
+          "expected": {
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "fresh": "yes",
+            "stale": "yes",
+            "verified": "boltons-p1-run-length"
+          },
+          "false_done": 0,
+          "head": "ca0938a6769a52e8615645c6c9a1c232de770ebd",
+          "hidden": {
+            "boltons-p1-run-length": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_run_length_basic": [
+                true,
+                null
+              ],
+              "test_run_length_iterator": [
+                true,
+                null
+              ],
+              "test_run_length_key_first_item": [
+                true,
+                null
+              ],
+              "test_run_length_unhashable": [
+                true,
+                null
+              ]
+            },
+            "boltons-p1-split-camel": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_split_camel_examples": [
+                true,
+                null
+              ],
+              "test_split_camel_leading_lower": [
+                true,
+                null
+              ],
+              "test_split_camel_separators": [
+                true,
+                null
+              ]
+            }
+          },
+          "merged": 2,
+          "merged_pieces": [
+            "boltons-p1-split-camel",
+            "boltons-p1-run-length"
+          ],
+          "misflagged_fresh": 0,
+          "previous": "3ac227a17938275ada7ac8995f7a596513a3e4f5",
+          "repeated": 0,
+          "repeated_signatures": [],
+          "trusted_stale": 0,
+          "weakened": 0,
+          "weakened_files": [],
+          "compactions": 0,
+          "injection": {
+            "before": "ca0938a6769a52e8615645c6c9a1c232de770ebd",
+            "head": "a8b16968705e99faf05a25b6774fb197e4f5c8a3",
+            "path": "boltons/strutils.py"
+          },
+          "action": {
+            "decision": {
+              "boltons-p1-run-length": "ready",
+              "boltons-p1-split-camel": "ready"
+            },
+            "false_done": 0,
+            "head": "656bc80e55d9eacf037ca5e95aedabd87006de2e",
+            "hidden": {
+              "boltons-p1-run-length": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_run_length_basic": [
+                  true,
+                  null
+                ],
+                "test_run_length_iterator": [
+                  true,
+                  null
+                ],
+                "test_run_length_key_first_item": [
+                  true,
+                  null
+                ],
+                "test_run_length_unhashable": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p1-split-camel": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_split_camel_examples": [
+                  true,
+                  null
+                ],
+                "test_split_camel_leading_lower": [
+                  true,
+                  null
+                ],
+                "test_split_camel_separators": [
+                  true,
+                  null
+                ]
+              }
+            },
+            "merged": 0,
+            "misflagged_fresh": 0,
+            "release_missing": false,
+            "repeated": 0,
+            "repeated_signatures": [],
+            "stale_still_broken": [],
+            "trusted_stale": 0,
+            "weakened": 0
+          }
+        },
+        {
+          "expected": {
+            "discarded": "test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "fresh": "yes",
+            "stale": "yes",
+            "verified": "boltons-p2-camel-to-kebab"
+          },
+          "false_done": 0,
+          "head": "fc935a633ede4e1768c1b001b073e1328da3f179",
+          "hidden": {
+            "boltons-p1-run-length": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_run_length_basic": [
+                true,
+                null
+              ],
+              "test_run_length_iterator": [
+                true,
+                null
+              ],
+              "test_run_length_key_first_item": [
+                true,
+                null
+              ],
+              "test_run_length_unhashable": [
+                true,
+                null
+              ]
+            },
+            "boltons-p1-split-camel": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_split_camel_examples": [
+                true,
+                null
+              ],
+              "test_split_camel_leading_lower": [
+                true,
+                null
+              ],
+              "test_split_camel_separators": [
+                true,
+                null
+              ]
+            },
+            "boltons-p2-camel-to-kebab": {
+              "test_camel_to_kebab_acronym": [
+                true,
+                null
+              ],
+              "test_camel_to_kebab_basic": [
+                true,
+                null
+              ],
+              "test_present": [
+                true,
+                null
+              ]
+            },
+            "boltons-p2-weighted-median": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_weighted_median_basic": [
+                true,
+                null
+              ],
+              "test_weighted_median_half_tie_lower": [
+                true,
+                null
+              ],
+              "test_weighted_median_invalid": [
+                true,
+                null
+              ],
+              "test_weighted_median_iterables": [
+                true,
+                null
+              ],
+              "test_weighted_median_zero_weights_ignored": [
+                true,
+                null
+              ]
+            }
+          },
+          "merged": 2,
+          "merged_pieces": [
+            "boltons-p2-weighted-median",
+            "boltons-p2-camel-to-kebab"
+          ],
+          "misflagged_fresh": 0,
+          "previous": "a8b16968705e99faf05a25b6774fb197e4f5c8a3",
+          "repeated": 0,
+          "repeated_signatures": [],
+          "trusted_stale": 0,
+          "weakened": 0,
+          "weakened_files": [],
+          "compactions": 0,
+          "injection": {
+            "before": "fc935a633ede4e1768c1b001b073e1328da3f179",
+            "head": "f37dc8b474012d8ea865d8f69f73e9f1bc7a096e",
+            "path": "boltons/mathutils.py"
+          },
+          "action": {
+            "decision": {
+              "boltons-p2-camel-to-kebab": "ready",
+              "boltons-p2-weighted-median": "ready"
+            },
+            "false_done": 0,
+            "head": "b3ebfb3a8cec493284a460d4d11b89c4e2f54726",
+            "hidden": {
+              "boltons-p1-run-length": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_run_length_basic": [
+                  true,
+                  null
+                ],
+                "test_run_length_iterator": [
+                  true,
+                  null
+                ],
+                "test_run_length_key_first_item": [
+                  true,
+                  null
+                ],
+                "test_run_length_unhashable": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p1-split-camel": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_split_camel_examples": [
+                  true,
+                  null
+                ],
+                "test_split_camel_leading_lower": [
+                  true,
+                  null
+                ],
+                "test_split_camel_separators": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p2-camel-to-kebab": {
+                "test_camel_to_kebab_acronym": [
+                  true,
+                  null
+                ],
+                "test_camel_to_kebab_basic": [
+                  true,
+                  null
+                ],
+                "test_present": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p2-weighted-median": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_basic": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_half_tie_lower": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_invalid": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_iterables": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_zero_weights_ignored": [
+                  true,
+                  null
+                ]
+              }
+            },
+            "merged": 0,
+            "misflagged_fresh": 0,
+            "release_missing": false,
+            "repeated": 0,
+            "repeated_signatures": [],
+            "stale_still_broken": [],
+            "trusted_stale": 0,
+            "weakened": 0
+          }
+        }
+      ],
+      "probes": [
+        {
+          "boundary": "fresh session",
+          "expected": {
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "fresh": "yes",
+            "stale": "no",
+            "verified": "boltons-p1-run-length"
+          },
+          "answers": {
+            "verified": "boltons-p1-run-length (the last piece listed in claude-progress.txt as verified, along with split-camel, in Session 1)",
+            "discarded": "unknown. The progress file and feature list record no discarded failed approach and no failure signature.",
+            "finding": "boltons-under2camel-digits",
+            "stale": "no",
+            "fresh": "yes"
+          },
+          "correct": {
+            "verified": false,
+            "discarded": false,
+            "finding": true,
+            "stale": true,
+            "fresh": true
+          }
+        },
+        {
+          "boundary": "fresh session",
+          "expected": {
+            "discarded": "test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "fresh": "yes",
+            "stale": "no",
+            "verified": "boltons-p2-camel-to-kebab"
+          },
+          "answers": {
+            "verified": "boltons-p2-camel-to-kebab",
+            "discarded": "re.sub([A-Z]) approach for camel_to_kebab; failure signature test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "stale": "yes",
+            "fresh": "yes"
+          },
+          "correct": {
+            "verified": true,
+            "discarded": false,
+            "finding": true,
+            "stale": false,
+            "fresh": true
+          }
+        }
+      ]
+    },
+    {
+      "task": "boltons",
+      "arm": "F",
+      "run": 1,
+      "wall_seconds": 236.61314789397875,
+      "calls": [
+        {
+          "cost_usd": 0.1815431,
+          "tokens": 270549,
+          "lead_context_max": 19912,
+          "session_cost_usd": 0.1815431,
+          "session_tokens": 270549,
+          "seconds": 67.63799925200874,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.0273048,
+          "tokens": 9634,
+          "lead_context_max": 8484,
+          "session_cost_usd": 0.0273048,
+          "session_tokens": 9634,
+          "seconds": 10.025288295990322,
+          "kind": "probe"
+        },
+        {
+          "cost_usd": 0.0658264,
+          "tokens": 89392,
+          "lead_context_max": 16511,
+          "session_cost_usd": 0.0931312,
+          "session_tokens": 99026,
+          "seconds": 21.880492164986208,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.17906740000000002,
+          "tokens": 392977,
+          "lead_context_max": 27445,
+          "session_cost_usd": 0.2721986,
+          "session_tokens": 492003,
+          "seconds": 98.61335467902245,
+          "kind": "work"
+        },
+        {
+          "cost_usd": 0.0206089,
+          "tokens": 9815,
+          "lead_context_max": 8796,
+          "session_cost_usd": 0.0206089,
+          "session_tokens": 9815,
+          "seconds": 9.616622125031427,
+          "kind": "probe"
+        },
+        {
+          "cost_usd": 0.07599410000000001,
+          "tokens": 118590,
+          "lead_context_max": 19214,
+          "session_cost_usd": 0.09660300000000001,
+          "session_tokens": 128405,
+          "seconds": 22.73432910401607,
+          "kind": "work"
+        }
+      ],
+      "phases": [
+        {
+          "expected": {
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "fresh": "yes",
+            "stale": "yes",
+            "verified": "boltons-p1-run-length"
+          },
+          "false_done": 0,
+          "head": "ebc4e140fe5ab449330cd708bef9d75137281513",
+          "hidden": {
+            "boltons-p1-run-length": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_run_length_basic": [
+                true,
+                null
+              ],
+              "test_run_length_iterator": [
+                true,
+                null
+              ],
+              "test_run_length_key_first_item": [
+                true,
+                null
+              ],
+              "test_run_length_unhashable": [
+                true,
+                null
+              ]
+            },
+            "boltons-p1-split-camel": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_split_camel_examples": [
+                true,
+                null
+              ],
+              "test_split_camel_leading_lower": [
+                true,
+                null
+              ],
+              "test_split_camel_separators": [
+                true,
+                null
+              ]
+            }
+          },
+          "merged": 2,
+          "merged_pieces": [
+            "boltons-p1-split-camel",
+            "boltons-p1-run-length"
+          ],
+          "misflagged_fresh": 0,
+          "previous": "3ac227a17938275ada7ac8995f7a596513a3e4f5",
+          "repeated": 0,
+          "repeated_signatures": [],
+          "trusted_stale": 0,
+          "weakened": 0,
+          "weakened_files": [],
+          "compactions": 0,
+          "injection": {
+            "before": "ebc4e140fe5ab449330cd708bef9d75137281513",
+            "head": "55a3f2579cb838d8eeef7d80291e09fc96b76d0d",
+            "path": "boltons/strutils.py"
+          },
+          "action": {
+            "decision": {
+              "boltons-p1-run-length": "ready",
+              "boltons-p1-split-camel": "ready"
+            },
+            "false_done": 0,
+            "head": "656cde6618d117dff6b7ce86d39acde5e00b8a11",
+            "hidden": {
+              "boltons-p1-run-length": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_run_length_basic": [
+                  true,
+                  null
+                ],
+                "test_run_length_iterator": [
+                  true,
+                  null
+                ],
+                "test_run_length_key_first_item": [
+                  true,
+                  null
+                ],
+                "test_run_length_unhashable": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p1-split-camel": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_split_camel_examples": [
+                  true,
+                  null
+                ],
+                "test_split_camel_leading_lower": [
+                  true,
+                  null
+                ],
+                "test_split_camel_separators": [
+                  true,
+                  null
+                ]
+              }
+            },
+            "merged": 0,
+            "misflagged_fresh": 0,
+            "release_missing": false,
+            "repeated": 0,
+            "repeated_signatures": [],
+            "stale_still_broken": [],
+            "trusted_stale": 0,
+            "weakened": 0
+          }
+        },
+        {
+          "expected": {
+            "discarded": "test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "fresh": "yes",
+            "stale": "yes",
+            "verified": "boltons-p2-camel-to-kebab"
+          },
+          "false_done": 0,
+          "head": "be8c923b82e4363d49e7a49b37dff630ee7b4523",
+          "hidden": {
+            "boltons-p1-run-length": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_run_length_basic": [
+                true,
+                null
+              ],
+              "test_run_length_iterator": [
+                true,
+                null
+              ],
+              "test_run_length_key_first_item": [
+                true,
+                null
+              ],
+              "test_run_length_unhashable": [
+                true,
+                null
+              ]
+            },
+            "boltons-p1-split-camel": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_split_camel_examples": [
+                true,
+                null
+              ],
+              "test_split_camel_leading_lower": [
+                true,
+                null
+              ],
+              "test_split_camel_separators": [
+                true,
+                null
+              ]
+            },
+            "boltons-p2-camel-to-kebab": {
+              "test_camel_to_kebab_acronym": [
+                true,
+                null
+              ],
+              "test_camel_to_kebab_basic": [
+                true,
+                null
+              ],
+              "test_present": [
+                true,
+                null
+              ]
+            },
+            "boltons-p2-weighted-median": {
+              "test_present": [
+                true,
+                null
+              ],
+              "test_weighted_median_basic": [
+                true,
+                null
+              ],
+              "test_weighted_median_half_tie_lower": [
+                true,
+                null
+              ],
+              "test_weighted_median_invalid": [
+                true,
+                null
+              ],
+              "test_weighted_median_iterables": [
+                true,
+                null
+              ],
+              "test_weighted_median_zero_weights_ignored": [
+                true,
+                null
+              ]
+            }
+          },
+          "merged": 2,
+          "merged_pieces": [
+            "boltons-p2-weighted-median",
+            "boltons-p2-camel-to-kebab"
+          ],
+          "misflagged_fresh": 0,
+          "previous": "55a3f2579cb838d8eeef7d80291e09fc96b76d0d",
+          "repeated": 0,
+          "repeated_signatures": [],
+          "trusted_stale": 0,
+          "weakened": 0,
+          "weakened_files": [],
+          "compactions": 0,
+          "injection": {
+            "before": "be8c923b82e4363d49e7a49b37dff630ee7b4523",
+            "head": "6550056b50c41781e00838d74f265955afd44856",
+            "path": "boltons/mathutils.py"
+          },
+          "action": {
+            "decision": {
+              "boltons-p2-camel-to-kebab": "ready",
+              "boltons-p2-weighted-median": "ready"
+            },
+            "false_done": 0,
+            "head": "9eafad3d1ee202c0b372342d77554b48200a8525",
+            "hidden": {
+              "boltons-p1-run-length": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_run_length_basic": [
+                  true,
+                  null
+                ],
+                "test_run_length_iterator": [
+                  true,
+                  null
+                ],
+                "test_run_length_key_first_item": [
+                  true,
+                  null
+                ],
+                "test_run_length_unhashable": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p1-split-camel": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_split_camel_examples": [
+                  true,
+                  null
+                ],
+                "test_split_camel_leading_lower": [
+                  true,
+                  null
+                ],
+                "test_split_camel_separators": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p2-camel-to-kebab": {
+                "test_camel_to_kebab_acronym": [
+                  true,
+                  null
+                ],
+                "test_camel_to_kebab_basic": [
+                  true,
+                  null
+                ],
+                "test_present": [
+                  true,
+                  null
+                ]
+              },
+              "boltons-p2-weighted-median": {
+                "test_present": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_basic": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_half_tie_lower": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_invalid": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_iterables": [
+                  true,
+                  null
+                ],
+                "test_weighted_median_zero_weights_ignored": [
+                  true,
+                  null
+                ]
+              }
+            },
+            "merged": 0,
+            "misflagged_fresh": 0,
+            "release_missing": false,
+            "repeated": 0,
+            "repeated_signatures": [],
+            "stale_still_broken": [],
+            "trusted_stale": 0,
+            "weakened": 0
+          }
+        }
+      ],
+      "probes": [
+        {
+          "boundary": "fresh session",
+          "expected": {
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "boltons-under2camel-digits",
+            "fresh": "yes",
+            "stale": "no",
+            "verified": "boltons-p1-run-length"
+          },
+          "answers": {
+            "verified": "boltons-p1-run-length",
+            "discarded": "test_split_camel_leading_lower:AssertionError",
+            "finding": "c:4e77ca90",
+            "stale": "no",
+            "fresh": "no"
+          },
+          "correct": {
+            "verified": true,
+            "discarded": true,
+            "finding": false,
+            "stale": true,
+            "fresh": false
+          }
+        },
+        {
+          "boundary": "fresh session",
+          "expected": {
+            "discarded": "test_camel_to_kebab_acronym:AssertionError",
+            "finding": "boltons-clamp-nan",
+            "fresh": "yes",
+            "stale": "no",
+            "verified": "boltons-p2-camel-to-kebab"
+          },
+          "answers": {
+            "verified": "boltons-p2-weighted-median",
+            "discarded": "tests:tests.test_socketutils::test_socketutils_netstring:Timeout (c:373e48cb, on boltons-p2-camel-to-kebab, no approach named)",
+            "finding": "c:4e77ca90",
+            "stale": "no",
+            "fresh": "no"
+          },
+          "correct": {
+            "verified": false,
+            "discarded": false,
+            "finding": false,
+            "stale": true,
+            "fresh": false
+          }
+        }
+      ]
+    }
+  ],
+  "fan_in": [],
+  "compact_window": 100000,
+  "arms": [
+    "A",
+    "C",
+    "F"
+  ],
+  "claude_version": "2.1.332 (Claude Code)",
+  "model": "claude-sonnet-5-5",
+  "repetitions": 1,
+  "max_budget_usd": 3.0,
+  "probe_budget_usd": 0.5,
+  "total_budget_usd": {
+    "A": 9.4398,
+    "C": 9.185,
+    "F": 8.6674
+  },
+  "wall_clock": 30,
+  "max_turns": 80,
+  "probe_turns": 8,
+  "oracle_hashes": {
+    "boltons": "af75fd32ffa069d371b70c306a128748dc8aa4139992a226b9c1dc4b4fc519b5"
+  }
+}

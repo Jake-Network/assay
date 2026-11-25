@@ -25,7 +25,7 @@ line), and the piece is its branch name, a `piece: <name>` line or a `Benchbook-
 
 | when | what benchbook does |
 |---|---|
-| a session starts, resumes or is compacted | gives the brief for what this branch changed (at most 1,500 tokens): verified pieces and how they were checked, "reported done, not re-run", discarded approaches, open findings, occupied paths. It is also written to `.benchbook/STATE.md` |
+| a session starts, resumes or is compacted | gives the brief for what this branch changed (at most 1,500 tokens): verified pieces and how they were checked, re-runs nobody decided and why, "reported done, not re-run", discarded approaches, open findings, occupied paths. It is also written to `.benchbook/STATE.md` |
 | right before compaction | asks the summary to keep the record ids and statuses verbatim |
 | a subagent reports `DONE <sha>` | re-runs the declared checks on that commit in a clean worktree, in the background, as `rerun@<host>` (an orchestrator, so a pass decides `verified`) |
 | the next prompt, Bash call or agent result | delivers the outcome once: `benchbook: media-upload a1b2c3d: re-run passed (2 checks, 14.2s), tests not weakened, checked: re-run (c:7f3a91c2)` |
@@ -101,7 +101,7 @@ Details: [bench/results/2026-11-25-boundary-pilot/](bench/results/2026-11-25-bou
 
 benchbook started as a lab notebook for agents that run experiments, and that mode is unchanged. Workers record each
 experiment the moment it finishes (failures too). They check what was already tried before running anything, and
-hand the lead a 3-sentence summary with record ids. The lead reads a budgeted brief built by SQL (best result,
+hand the lead a short summary with record ids. The lead reads a budgeted brief built by SQL (best result,
 verified claims, what not to repeat) instead of transcripts.
 
 ```bash

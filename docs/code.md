@@ -75,7 +75,9 @@ happens to come first. A completion that needs human review includes that inform
   the last would take about 30 re-runs; pieces rarely finish together, but a lead should not wait for every verdict
   before merging the first ones.
 - Merge a piece after its verdict line (`re-run passed`, `tests not weakened`, `checked: re-run`), not after its
-  report.
+  report. With the Claude Code plugin a lead's `git merge` of a reported commit waits up to 30 s for the verdict:
+  a clean one lets the merge run and comes with it, anything else holds the merge once with the verdict as the
+  reason (docs/claude-code.md, "the merge gate").
 
 In the integration step, for each piece an implementer reported done:
 
@@ -365,6 +367,34 @@ used `verifier@<host>`, and whichever ran first decided whether the other could 
 passed and still decided nothing, its line says why after `checked: none`, for example
 `checked: none (recorded by a worker agent; a lead decides)`.
 
+The automatic re-run also retries a failure once. When every declared check ran, one failed, nothing guarded was
+weakened and `[checks]` did not change, the failed run is recorded first (`metrics.retry`: `failed; retried`), with
+no discarded approach and under an id derived from the request's receipt, so a request interrupted during the retry
+only retries the next time. Then every declared check runs again in a fresh worktree. If guarded files changed,
+the retry's own JUnit counts are compared with the merge-base. The retry is recorded under the receipt with
+`metrics.retry_of` (the failed run) and `metrics.first_signature`:
+
+| the retry | `metrics.retry` | line | decision, dead end |
+|---|---|---|---|
+| passes | `passed on a retry after a failed run` | `re-run failed (<signature>), then passed on a retry ... attempts disagree (c:…; failed run e:…)` | **inconclusive** (the runs disagree); none |
+| fails the same way | `failed again on a retry` | `re-run failed, and again on a retry ... (c:…; runs e:…, e:…)` | none decided; the retry leaves the discarded approach |
+| fails differently | `failed again on a retry, differently` | `... and again on a retry with a different failure ...` | none decided; no dead end, since neither failure repeated |
+| cannot run (its prepare step failed) | `retry could not run` | `re-run failed` | the original failure is the only check evidence and leaves the dead end. Processing the same receipt again returns that result |
+
+A passing retry that ran fewer tests requires a person's review.
+
+A lead who finds a failure is not the piece's (a flaky test, the machine) invalidates the failed run and runs
+`check verify` itself, which then decides from the passing runs:
+
+```bash
+benchbook --agent lead decide e:<failed run> invalidated --oracle human --rationale "flaky socket test, not the piece"
+benchbook --agent lead check verify <piece> <sha> --reported-by <worker>
+```
+
+In the third boundary pilot two of four re-runs failed once on socket timing tests outside the pieces; each became a
+refutation and a dead end in the brief, and the lead's own passing `check verify` (without `--reported-by`) decided
+nothing. `check verify` run by hand does not retry.
+
 `--json` adds `decision` (`verified`, `inconclusive` or null), `decision_reason`, `needs_person`, `evidence`
 and `decisions`. The exit code still says only whether every check passed.
 
@@ -476,7 +506,8 @@ A piece usually adds tests. `check verify` splits the guarded files a commit cha
 | change | metrics | a person decides? |
 | --- | --- | --- |
 | a new file, or lines added to a file with none deleted or changed | `guard_added_files` | no |
-| lines deleted or changed, a file deleted, a binary change | `guard_weakened_files` | yes |
+| names added to an import in a Python file: every deleted line is inside an import statement (`get_path)` → `get_path,` + `run_length)`, `from x import a` → `from x import a, b`) and the file still imports every name, module and alias it did | `guard_added_files` | no |
+| any other line deleted or changed (an imported name removed, renamed or re-aliased; an import changed in a file that is not Python or does not parse), a file deleted, a binary change | `guard_weakened_files` | yes |
 | an added line with a skip marker (`pytest.mark.skip`, `pytest.mark.xfail`, `pytest.skip(`, `unittest.skip`, `it.skip(`, `describe.skip(`, `test.skip(`, `xit(`, `t.Skip(`, `#[ignore]`, `@Disabled`, `@Ignore`) | `guard_weakened_files` | yes |
 | any change to a `conftest.py` (an autouse fixture or hook can weaken every test) | `guard_weakened_files` | yes |
 | a JUnit check ran fewer testcases than it did at the merge-base (each check against its own count) | `fewer_tests_checks`, `tests_before`, `tests_after` (sums) | yes |
@@ -618,6 +649,12 @@ author     the attempt's recorder: the verifier, or the agent of check run / the
            token's agent under BENCHBOOK_TOKEN)
 ```
 
+**A dead end known without a failed run.** `benchbook discard <piece> --approach NAME --why "..." [--commit SHA]`
+records the same claim for an approach the lead (or any agent) knows failed, such as one a worker described in a
+message or a prompt ruled out: signature `noted: <why>`, payload `noted_by` instead of `first_attempt`, and a source
+row for the note (`benchbook-note:sha256:...`) as its supporting evidence. The brief lists it with the others. The
+boundary pilot asked a new session for dead ends that lived only in task prompts; none had been recorded.
+
 **One claim per (piece, signature, approach).** The key is `sha256("benchbook:discarded\0" + piece + "\0" +
 signature + "\0" + approach)` (approach "" when none), stored as the claim's `statement_hash`, so it does not change
 between releases and does not include the author. A later failure with the same key, from anyone, links its attempt
@@ -666,24 +703,34 @@ It shows, in this order:
 1. **Last verified commit per piece**: the newest `verified` completion of each piece in scope, with how it was
    checked (`checked: re-run`, `checked: person`, ...; the oracle of its last decision named by pack.toml
    `[brief.labels]`).
-2. **Reported done, not re-run**: completions still `proposed` with no supporting and no refuting evidence, newest
+2. **Re-run, not decided** (only when there is one): the newest completion of each piece that a re-run supported or
+   refuted and nobody decided, unless a later completion of the piece is verified; most recently re-run first. Each
+   line says why: `passed, needs review (tests weakened: <files>)`, `(fewer tests in <check>)` or `([checks]
+   changed)` (a person decides, see [the guard](#added-tests-and-weakened-tests)), `failed (<checks>)`, `runs disagree
+   (inconclusive)`, or `passed, not decided` (the run did not count, such as a worker's own run). Without it a
+   piece whose re-run passed and went to a person was in no section.
+3. **Reported done, not re-run**: completions still `proposed` with no supporting and no refuting evidence, newest
    first, each `checked: none`. A report is not a check; this section keeps the two apart.
-3. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
+4. **Discarded approaches, do not repeat**: the claims above for the pieces in scope, each with its approach, piece,
    signature, first attempt and number of failed attempts; most recently failed first.
-4. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
+5. **Open out-of-scope findings**: [findings](#out-of-scope-findings) still `proposed` or `inconclusive`, matched by
    tag or by `file:` prefix; most reported first.
-5. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
+6. **Occupied paths**: live pieces ([path occupancy](#path-occupancy)) with their holder, time left, tags and paths.
 
 The footer names `benchbook get <id>` for one record's details (at most 400 tokens).
 
 **Changed since the check.** With `--here` (and from the boundary hooks) the brief compares each verified line with
-the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are those the piece's newest task
-occupies (`piece start`), else the directories its completion recorded. A line whose paths changed ends in
+the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are the files the commit changed
+since its merge-base (`payload.files`, recorded by `check verify` when there are at most 200), else those the
+piece's newest task occupies (`piece start`), else the directories its completion recorded. Directories are too
+coarse on an integration branch: in the second boundary pilot two pieces shared `boltons/` and `tests/`, so each
+merge marked the other piece changed. A line whose paths changed ends in
 `· changed since (2 commits)` (the commits since that touch those paths); one whose commit this checkout lacks ends
 in `· commit not in this checkout`; one whose commit exists but is not in HEAD's history (a piece's branch read from
 the base, or from the lead's branch before the merge) ends in `· not merged into this branch`, since its paths
-differ without any commit having changed them; an unchanged line has no mark. A squash-merged piece has no mark while
-its paths match, and `not merged into this branch` once a later commit changes them. A discarded approach whose
+differ without any commit having changed them; an unchanged line ends in `· applies at HEAD`.
+Before the third boundary pilot an unchanged line had no mark, and a new session's lead read the bare line as "HEAD
+moved, so the verification no longer applies". A squash-merged piece reads `applies at HEAD` while its paths match, and `not merged into this branch` once a later commit changes them. A discarded approach whose
 failing test file (the part of the signature before `::`) changed since the commit it failed at, in HEAD's history,
 ends in `· test changed since` and
 moves to the end of its section: the failure may no longer hold. Only the lines shown are compared (at most 8 per
@@ -701,8 +748,11 @@ piece never started with `piece start` is found by path, and a `piece:<name>` ta
 **`--here`** computes the scope from the checkout: the directories the current branch changed since its merge-base
 with the base ref (`[guard] base`, else `origin/main`) plus the working tree's changes and untracked files, each
 file reduced to its directory and the deepest lifted to their parent until at most 20 remain, as `file:` tags, plus
-`piece:<branch>`. On the base branch itself the scope is empty and the brief covers the whole project. The boundary
-hooks use the same scope. Without `--tags` the brief covers the whole project. With several tags
+`piece:<branch>`. On the base branch itself the scope is empty and the brief covers the whole project. The brief then
+adds `piece:<piece>` for every piece with a completion at a commit in HEAD's last 5,000 commits (one `git rev-list`,
+2 seconds), and its Scope line ends `+ N pieces merged into HEAD`: on an integration branch the records of the
+pieces merged into it (a worker's finding, a lead's `benchbook discard`, both tagged `piece:<piece>`) belong to it,
+and in the second boundary pilot they were outside the scope. The boundary hooks use the same scope. Without `--tags` the brief covers the whole project. With several tags
 the sections hold the union.
 
 **Budget.** At most 8 items per section (pack.toml `[brief]`), each line cut to a fixed length; then items are
@@ -929,7 +979,11 @@ benchbook finding accept c:1a2b3c4d --issue https://github.com/org/repo/issues/1
 benchbook decide c:1a2b3c4d refuted --oracle human --rationale "intended: uploads retry forever by design" --as human
 ```
 
-`benchbook finding accept` exists because no other command creates a source: it adds the issue URL as a source
+`benchbook finding add "..." [--file PATH] [--piece P]` records a finding the lead found itself (or one a worker
+gave in a message) as a one-item "Out of scope" report, with the same key and dedup as a report's, and a
+`finding noted by <agent>` source.
+
+`benchbook finding accept` exists because no other command links a follow-up issue: it adds the issue URL as a source
 (title "follow-up issue"), links it `cites` to the finding, and decides `supported` with that source as the
 decision's evidence and the rationale `accepted, follow-up <url>` unless `--rationale` says otherwise. It refuses a
 claim without the `out-of-scope` tag and a finding that is already decided, before anything is written. An agent

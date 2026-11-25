@@ -24,8 +24,8 @@ Rules:
    right after it, failures, errors and timeouts included, with the cause in one sentence in `notes`.
 4. Record generalisable observations with `benchbook_propose_claim`, attaching the supporting experiments as
    `evidence` (`[[id, "supports"], ...]`).
-5. When you finish, call `benchbook_complete_task`. Your final message to the lead is **at most 3 sentences plus a
-   list of record ids** (e.g. `e:91c0a2f1`, `c:1a2b3c4d`). Do not write the results out at length in the
+5. When you finish, call `benchbook_complete_task`. Your final message to the lead is **a short summary plus a list
+   of record ids** (e.g. `e:91c0a2f1`, `c:1a2b3c4d`). Do not write the results out at length in the
    message: they are in the ledger.
 6. Do not judge status. Verifying or refuting claims is the lead's job.
 

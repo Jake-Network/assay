@@ -203,3 +203,64 @@ any rerun before paying for it.
   registered claude-sonnet-5-5; in `30-C-2-try1` the lead ran 28 workers instead of 90. Both stayed under the USD 5
   cap, both are reported with these conditions, and neither is treated as a like-for-like width-30 sample. The H5
   verdict does not rest on them: the gate already fails on peak lead context at width 8.
+
+- **2026-11-25, second boundary pilot.** Written before any call of this run, after the pilot's report and the fixes it
+  led to; the owner chose the scope, the CLI version and the budget. Scope: boltons only (`tasks-boltons.json`,
+  sha256 aa7b7d0b38a87309bdf112e27317b2760968536c1e396c41a3ea995ad332b64d, unchanged), arms A, C and F in that
+  order, one repetition each, each in its own `--out` (`boundary-pilot2-boltons-<arm>-try<k>`); toolz is not run.
+  Claude Code **2.1.332**, the version installed now, and every trial runs with `--claude-version 2.1.332`, which
+  stops a trial before its first paid call if `claude --version` differs. Budget: USD 10 in total across this run's
+  trials, stopped ones included; each trial gets what is left as `--total-budget-usd`, and an arm is not run when
+  less than USD 3.5 is left. Per-call caps (USD 3 work, 0.5 probe), turn, time and compact-window limits, the model,
+  the arms' instructions (F's still equal to B's), the tasks, the oracles and the probe scoring (exact match) are as
+  registered. Arm F runs benchbook at the commit that adds this amendment (branch `lead-guards`): since `937f5ea`
+  it adds PR #5 (re-run verdicts delivered to the lead only), PR #6 (spool lanes; `parallel_baseline` stays off),
+  PR #8 (adding a name to a Python test import is no longer a weakening; the brief lists re-runs nobody decided; one
+  "re-running" line per report), PR #9 (the runner copies every call's session transcripts and checks the CLI
+  version) and the `lead-guards` changes (a lead's `git merge` of a reported commit waits up to 30 s for its
+  verdict and is held once when the verdict is not clean; a code project's new session starts with a four-line
+  lead guide, also when the ledger is empty; `benchbook discard` and `benchbook finding add`). The runner and the
+  oracles are the same for A and C. The machine's Claude Code also loads plugins named `cc-plugin-*` that
+  `--setting-sources ""` does not exclude (seen in the live hook check of 2026-11-25); they load in every arm
+  alike. The report gives directions only, as for the pilot, set beside the pilot's numbers; it adds the
+  containment scoring of the probes as a sensitivity (as the pilot's report did), and, for F, where and when each
+  verdict line reached the lead and every merge the gate held, read from the copied transcripts. A trial stopped by
+  the five-hour usage limit is kept, reported and repeated after the reset, as in the pilot.
+- **2026-11-25, third boundary pilot.** Written before any call of this run, after the second pilot's report; the
+  owner decided to measure again the two fixes that report led to. Everything the second pilot's amendment fixes
+  holds, except the following. Outputs go to `boundary-pilot3-boltons-<arm>-try<k>`; arms A, C and F run again
+  in that order, one repetition each, under their own USD 10 total with the same USD 3.5 floor per arm. Arm F runs
+  benchbook at the commit that adds this amendment (branch `boundary-pilot-3`), which since the second pilot's
+  `4ba17cf` adds: `check verify` records the files the verified commit changed, and the brief marks a verified
+  piece "changed since" only when one of those files changed (before: any change under the directories the commit
+  touched); a checkout's brief also covers every piece with a completion at a commit in HEAD's history, so the
+  records of pieces merged into an integration branch are in its `--here` scope; and the lead guide's merge-gate
+  line is given only under Claude Code (no change for this run). A and C run the same runner and oracles as in the
+  second pilot. The report gives directions only, set beside both earlier pilots, with the containment scoring as a
+  sensitivity, and for F says which of the second pilot's six misses each fix was meant to remove and what F
+  answered this time.
+- **2026-11-25, third boundary pilot, A's first trial stopped on a receipt.** Written before any further call. A's
+  first trial (`boundary-pilot3-boltons-A-try1`) stopped at its second call, the phase-1 resume probe, which
+  reported only its own spend (USD 0.0623 after the work call's 0.0602): Claude Code had not restored the session's
+  earlier totals, as it had on every resume of both earlier pilots, and the runner stopped on "a resumed session
+  reported less spend than its previous receipt". USD 0.56 is counted (0.06 plus the probe's full 0.5 cap, as for a
+  missing receipt). The rule above that a resumed call's receipt reports the whole session's spend changes: when the
+  result event carries `model_usage_since_last_result` (Claude Code 2.1.332), the call's own cost and tokens are
+  read from it and the session total is the sum of the calls; receipts without it keep the difference rule (commit
+  `e592049`; replaying the second pilot's A and F streams gives each call's recorded cost and tokens exactly). The
+  driver's usage-limit check, which also matched this registration's own text in the trial directory, now reads only
+  the call streams and the log. A runs again as `try2` from the commit that adds this amendment, then C and F as
+  planned, all under the same USD 10 total, which counts try1's USD 0.56. try1 is kept and reported and is not a
+  completed trial. benchbook's code for F is unchanged from the first amendment of this run.
+- **2026-11-25, fourth boundary pilot.** Written before any call of this run, after the third pilot's report; the
+  owner decided to measure the fixes that report led to. Everything the second and third pilots' amendments fix holds
+  (the task, arms A, C and F in that order, one repetition each, Claude Code 2.1.332, the limits, the runner as of
+  `5931db1`), except the following. Outputs go to `boundary-pilot4-boltons-<arm>-try<k>`, under their own USD 10
+  total with the same USD 3.5 floor per arm. Arm F runs benchbook at the commit that adds this amendment (branch
+  `pilot3-fixes`), which since the third pilot adds: a verified line whose files are the same at HEAD ends in
+  `applies at HEAD`; the hook's automatic re-run records a failed run and runs every check once more, and a retry
+  that passes decides inconclusive with no discarded approach; and a merge the gate holds names the commands the lead
+  can run for that verdict (invalidating a failed run, `check verify --reported-by`). The report gives directions
+  only, set beside the three earlier pilots, with the containment scoring as a sensitivity, and for F says which of
+  the third pilot's six misses each fix was meant to remove, what F answered, and every retry and held merge, read
+  from the copied transcripts.

@@ -18,7 +18,7 @@ from benchbook.errors import ValidationFailed
 from benchbook.failures import DISCARDED_DOMAIN, discarded_hash
 from benchbook.ids import short
 from benchbook.packs import load_pack
-from benchbook.packs.code.brief import FOOTER
+from benchbook.packs.code.brief import FOOTER, UNCHANGED, rerun_reason, validity
 from benchbook.tokens import estimate_tokens
 from tests.conftest import make_project
 from tests.writer import token_ledger
@@ -474,7 +474,8 @@ def test_only_the_piece_changed_since_its_check_is_marked(db_url: str, code: str
     out = compile_brief(lg, None, 2000, log=False, repo=repo)
     base = changed["base"][:12]
     assert _line(out, f"media-upload at {base}").endswith("checked: person) · changed since (2 commits)")
-    assert _line(out, f"auth-refresh at {base}").endswith("checked: person)")  # unchanged: no mark
+    # unchanged: said so, since the third boundary pilot's lead read no mark as "HEAD moved, so it no longer applies"
+    assert _line(out, f"auth-refresh at {base}").endswith("checked: person) · applies at HEAD")
     assert _line(out, "old-import at 999999999999").endswith(" · commit not in this checkout")
     discarded = out.split("## Discarded approaches", 1)[1].split("\n## ", 1)[0].splitlines()[1:3]
     assert short("claim", changed["d_keep"]) in discarded[0] and not discarded[0].endswith("since")
@@ -565,3 +566,100 @@ FROM generate_series(1, 10000) AS i""", {"p": code})
             out = compile_brief(lg, None, budget, log=False, tags=tags, repo=repo, max_chars=6000)
             assert len(out) <= 6000 and out.endswith(FOOTER) and out.startswith("# benchbook brief")
             assert "## Last verified commit per piece" in out and "## Reported done, not re-run (" in out
+
+
+@pytest.mark.parametrize("guard", [True, False], ids=["legacy-guard", "explicit-modern-guard"])
+def test_rerun_reason_reads_older_guard_metrics(guard: bool) -> None:
+    metrics = {"checks_total": 1, "checks_passed": 1, "guard_touched": True, "guard_files": ["tests/test_api.py"]}
+    if guard:
+        assert rerun_reason("proposed", [metrics]) == "passed, needs review (tests weakened: tests/test_api.py)"
+    else:
+        metrics["guard_weakened"] = False
+        assert rerun_reason("proposed", [metrics]).startswith("passed, not decided")
+
+
+
+def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, repo: Path) -> None:
+    """30 pieces whose re-run decided nothing: the section shows the newest 8 and counts all 30 (pack.toml [brief]),
+    and the budget and the 6,000-character limit trim it like any other section."""
+    lg = agent(db_url, code, "impl-a")
+    run = attempt(agent(db_url, code, "verifier", "harness"), "p", status="ok")
+    for i in range(30):
+        c = lg.propose_claim("completion", f"piece-{i:02} is complete", payload={"piece": f"piece-{i:02}",
+                             "commit": f"{i:040x}"}, tags=[f"piece:piece-{i:02}"])
+        with lg._conn() as conn:
+            conn.execute("INSERT INTO benchbook.links (project_id, src_type, src_id, relation, dst_type, dst_id,"
+                         " author) VALUES (%s, 'experiment', %s, 'supports', 'claim', %s, 'verifier')",
+                         (code, run.experiment_id, c.id))
+    out = compile_brief(lg, None, 2000, log=False)
+    [section] = [s for s in out.split("\n## ") if s.startswith("Re-run, not decided")]
+    lines = section.splitlines()
+    assert lines[0] == "Re-run, not decided (8 of 30)" and len([x for x in lines if x.startswith("- ")]) == 8
+    assert lines[1].startswith("- piece-") and "no matching check attempt" in lines[1]
+    for budget, chars in ((300, None), (20000, 1200)):
+        small = compile_brief(lg, None, budget, log=False, repo=repo, max_chars=chars)
+        assert estimate_tokens(small) <= budget * 105 // 100 and (chars is None or len(small) <= chars)
+        assert small.endswith(FOOTER)
+
+
+
+def _integration(tmp_path: Path, db_url: str, code: str) -> tuple[Path, Ledger, dict[str, str], str]:
+    """The second boundary pilot's shape: pieces pa and pb verified on their branches, merged into the integration
+    branch work, then a commit there that changes pa's file only; the brief as --here gives it on work."""
+    from benchbook import failures, findings
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import CONFIG, make_repo, piece
+
+    repo = make_repo(tmp_path / "repo", CONFIG)
+    shas = {"pa": piece(repo, "pa", {"impl.txt": "fixed\n", "src/a.py": "a = 1\n"}),
+            "pb": piece(repo, "pb", {"impl.txt": "fixed\n", "src/b.py": "b = 1\n"})}
+    lead = agent(db_url, code, "lead", "orchestrator")
+    for name, sha in shas.items():
+        _, rec = checks.verify(lead, name, sha, repo=repo, reported_by="impl")
+        assert rec.outcome is not None and rec.outcome.decision == "verified", rec.outcome
+    git(repo, "checkout", "-q", "-b", "work", "main")
+    for name in shas:
+        git(repo, "merge", "-q", "--no-ff", "-m", f"merge {name}", name)
+    (repo / "src" / "a.py").write_text("a = 2\n")
+    git(repo, "commit", "-q", "-am", "change a")
+    failures.record_noted(lead, "pb", "regex-split", "drops the acronym boundary")
+    findings.record_noted(agent(db_url, code, "impl"), "the cache keeps stale entries", [], piece="pb")
+    return repo, lead, shas, compile_brief(lead, None, 2000, log=False, tags=changed_scope(repo), repo=repo)
+
+
+def test_validity_compares_and_counts_literal_paths(repo: Path) -> None:
+    route = "app/[id]/route.ts"
+    sibling = "app/i/route.ts"
+    for name in (route, sibling):
+        path = repo / name
+        path.parent.mkdir(parents=True)
+        path.write_text("initial\n")
+    git(repo, "add", "--all")
+    git(repo, "commit", "-qm", "routes")
+    base = git(repo, "rev-parse", "HEAD")
+
+    (repo / sibling).write_text("sibling changed\n")
+    git(repo, "commit", "-qam", "change sibling route")
+    assert validity(repo, base, [route]) == UNCHANGED
+    assert validity(repo, base, ["app/*/route.ts"], literal=False) == "changed since (1 commit)"
+
+    (repo / route).write_text("dynamic route changed\n")
+    git(repo, "commit", "-qam", "change dynamic route")
+    assert validity(repo, base, [route]) == "changed since (1 commit)"
+
+
+def test_only_the_piece_whose_files_changed_is_marked_on_an_integration_branch(tmp_path: Path, db_url: str,
+                                                                               code: str) -> None:
+    """In the pilot both pieces' paths were src/ and tests/, so pb's merge and any later commit marked pa too."""
+    _, _, shas, out = _integration(tmp_path, db_url, code)
+    assert _line(out, f"pa at {shas['pa'][:12]}").endswith("· changed since (1 commit)")
+    assert "changed since" not in _line(out, f"pb at {shas['pb'][:12]}")
+
+
+def test_records_of_pieces_merged_into_head_are_in_the_here_brief(tmp_path: Path, db_url: str, code: str) -> None:
+    """A noted dead end and a worker's finding tagged piece:pb, with no file: tag, were outside the work branch's
+    --here scope (piece:work and file: prefixes)."""
+    _, _, _, out = _integration(tmp_path, db_url, code)
+    assert out.splitlines()[2].endswith("+ 2 pieces merged into HEAD")
+    assert "regex-split on pb: noted: drops the acronym boundary" in out
+    assert "the cache keeps stale entries" in out

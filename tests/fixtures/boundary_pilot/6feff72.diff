@@ -1,0 +1,63 @@
+diff --git a/tests/test_iterutils.py b/tests/test_iterutils.py
+index e3d0695..8642b96 100644
+--- a/tests/test_iterutils.py
++++ b/tests/test_iterutils.py
+@@ -13,7 +13,8 @@ from boltons.iterutils import (first,
+                                research,
+                                default_enter,
+                                default_exit,
+-                               get_path)
++                               get_path,
++                               run_length)
+ from boltons.namedutils import namedtuple
+ 
+ CUR_PATH = os.path.abspath(__file__)
+@@ -780,3 +781,11 @@ def test_frange_xfrange_zero_step():
+         frange(10, step=0)
+     with pytest.raises(ValueError):
+         list(xfrange(10, step=0))
++
++
++def test_run_length():
++    assert run_length([]) == []
++    assert run_length([1, 1, 2, 1]) == [(1, 2), (2, 1), (1, 1)]
++    assert run_length([[1], [1], [2]]) == [([1], 2), ([2], 1)]
++    assert run_length(c for c in 'aaab') == [('a', 3), ('b', 1)]
++    assert run_length('aAbB', key=str.lower) == [('a', 2), ('b', 2)]
+diff --git a/tests/test_strutils.py b/tests/test_strutils.py
+index 1c7e45a..361ba58 100644
+--- a/tests/test_strutils.py
++++ b/tests/test_strutils.py
+@@ -443,3 +443,32 @@ def test_args2cmd_sep():
+     assert strutils.args2cmd(['aa', 'bb']) == 'aa bb'
+     assert strutils.args2cmd(['aa', 'bb'], sep='|') == 'aa|bb'
+     assert strutils.args2cmd(['a a', 'bb'], sep='|') == '"a a"|bb'
++
++
++def test_split_camel():
++    sc = strutils.split_camel
++    assert sc('') == []
++    assert sc('parseHTTPResponse') == ['parse', 'HTTP', 'Response']
++    assert sc('HTTPServer2Go') == ['HTTP', 'Server', '2', 'Go']
++    assert sc('camelCase') == ['camel', 'Case']
++    assert sc('PascalCase') == ['Pascal', 'Case']
++    assert sc('lower') == ['lower']
++    assert sc('HTTP') == ['HTTP']
++    assert sc('snake_case-and x.y') == ['snake', 'case', 'and', 'x', 'y']
++    assert sc('__') == []
++    assert sc('abc123def') == ['abc', '123', 'def']
++
++
++def test_camel_to_kebab_basic():
++    assert strutils.camel_to_kebab('camelCase') == 'camel-case'
++    assert strutils.camel_to_kebab('PascalCase') == 'pascal-case'
++    assert strutils.camel_to_kebab('word') == 'word'
++
++
++def test_camel_to_kebab_empty():
++    assert strutils.camel_to_kebab('') == ''
++
++
++def test_camel_to_kebab_acronym():
++    assert strutils.camel_to_kebab('parseHTTPResponse') == 'parse-http-response'
++    assert strutils.camel_to_kebab('HTTPServer2Go') == 'http-server-2-go'

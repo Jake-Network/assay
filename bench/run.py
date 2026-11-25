@@ -16,6 +16,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from .real import version_arg
 from .report import write_report
 
 
@@ -46,6 +47,9 @@ def main() -> None:
     ap.add_argument("--max-turns", type=int, default=80)
     ap.add_argument("--wall-clock", type=int, default=60, help="real: minutes per run")
     ap.add_argument("--execute", action="store_true", help="real: actually run claude -p")
+    ap.add_argument("--claude-version", type=version_arg,
+                    help="real: stop before any paid call unless claude --version is this (X.Y.Z)")
+    ap.add_argument("--claude-bin", help="real: the Claude Code binary to run (default: claude on PATH)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     modes = args.configs.split(",")
@@ -56,6 +60,13 @@ def main() -> None:
     if not math.isfinite(args.max_budget_usd) or args.max_budget_usd <= 0:
         ap.error("--max-budget-usd must be a positive finite amount")
 
+    if args.execute and not args.dry:
+        from .real import pin_claude
+
+        try:
+            args.claude_code = pin_claude(args)  # recorded with the conditions
+        except ValueError as exc:
+            ap.exit(1, f"{exc}\n")
     out = Path(args.out or f"bench/out/{time.strftime('%Y%m%d-%H%M%S')}{'-dry' if args.dry else ''}").resolve()
     try:
         out.mkdir(parents=True, exist_ok=False)

@@ -21,7 +21,7 @@ claude plugin install benchbook@benchbook benchbook-mcp@benchbook   # hooks; MCP
 4. In Claude Code: `/benchbook-mcp:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
 
 Expected: tasks appear on the Tasks page and get claimed by `worker-1..4`; experiments and the best-so-far curve
-update live; each worker's final message is <= 3 sentences plus ids; after round 1 the lead reads
+update live; each worker's final message is a short summary plus ids; after round 1 the lead reads
 `benchbook_status`/`benchbook_brief` rather than quoting worker messages; the final report lists best, verified claims,
 experiment count, duplicates blocked and the viewer URL.
 
@@ -64,8 +64,13 @@ table, with the Claude Code version, into docs/claude-code.md "Boundary hooks: w
 
 ```bash
 uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5
-uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5 --execute
+uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5 --execute --claude-version 2.1.330
 ```
+
+`--claude-version X.Y.Z` (in `bench.run`, `bench.boundary.run` and `bench.code.run`) stops a run before its first
+paid call when `claude --version` says otherwise; without it `--execute` only warns. The installed CLI updates
+itself between runs (2.1.330 to 2.1.331 on 2026-11-24, during the H5 sweep), so pass the registered version, and
+`--claude-bin ~/.local/share/claude/versions/2.1.330` to run that build whatever `claude` on PATH has become.
 
 The first command creates local command previews and does not start Claude or initialize a ledger. The second
 uses the same Claude dollar cap, worker count, model, turn limit and wall-clock limit for each run. With the

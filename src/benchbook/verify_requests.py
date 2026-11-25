@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from . import boundary_hooks, config, hooks, session_notes
+from . import boundary_hooks, config, hooks, merge_gate, session_notes
 from .check_run import PIECE
 from .pr import TRAILER
 
@@ -80,35 +82,74 @@ def enqueue(data: dict[str, Any]) -> str:
     reporter = hooks._agent_type(data) or "unknown"
     if len(reporter) > 100 or not reporter.isprintable():
         return ""
-    spool = hooks._spool_dir()
-    spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-    request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
-               "repo": str(where.repo), "report_sha256": hashlib.sha256(report.encode()).hexdigest()}
-    hooks._write_spool(spool, {"event": "verify-request", "project": where.project, "accepted": True, "data": request})
-    hooks._log_notices()
-    hooks.start_processor(spool, hooks.VERIFY)
     line = f"benchbook: re-running the checks of {piece} at {commit[:7]} in the background"
-    if data.get("hook_event_name") == "SubagentStop":
-        # SubagentStop gives the lead no context: leave the line for the next hook that does (the task-notification's
-        # UserPromptSubmit follows right after).
-        notes = session_notes.notes_dir(session)
-        if notes is not None:
-            notes.mkdir(parents=True, exist_ok=True, mode=0o700)
-            name = "queued-" + hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest() + ".txt"
-            if not (notes / name).exists() and not (notes / session_notes.DELIVERED / name).exists():
-                session_notes.write_note(notes / name, line)
-        return ""
-    return line
+    notes = session_notes.notes_dir(session)
+    assert notes is not None  # checked above
+    notes.mkdir(parents=True, exist_ok=True, mode=0o700)
+    key = hashlib.sha256(json.dumps([where.project, piece, commit]).encode()).hexdigest()
+    name = f"queued-{key}.txt"
+    queued, said = notes / name, notes / session_notes.DELIVERED / name
+    stop = data.get("hook_event_name") == "SubagentStop"
+    spool = None
+    # Keep one display notice per commit, but only suppress a foreground request if SubagentStop queued this
+    # report for this writer. Another report of the same commit may need a fresh run after an environment failure.
+    report_hash = hashlib.sha256(report.encode()).hexdigest()
+    try:
+        with hooks._lock(notes, blocking=True):
+            target_spool = hooks._spool_dir()
+            proof_key = hashlib.sha256(json.dumps([name, target_spool.name, reporter, report.strip()]).encode())
+            proof = notes / f"queued-{proof_key.hexdigest()}.request"
+            if stop or not proof.is_file() or not target_spool.is_dir():
+                target_spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+                request = {"piece": piece, "commit": commit, "agent_type": reporter, "session_id": session,
+                           "repo": str(where.repo), "report_sha256": report_hash}
+                hooks._write_spool(target_spool, {"event": "verify-request", "project": where.project, "accepted": True,
+                                                 "data": request})
+                spool = target_spool
+                # A report-specific environment verdict belongs to this accepted request only.
+                report_key = hashlib.sha256(json.dumps([key, session, reporter, report_hash]).encode()).hexdigest()
+                merge_gate.mark(notes, commit, piece, [f"verify-{key}.txt", f"verify-{report_key}.txt"], reporter)
+            else:
+                spool = target_spool  # recover if the paired hook exited before launching the processor
+
+            if stop:
+                session_notes.write_note(proof, "queued")
+                if not queued.exists() and not said.exists():
+                    session_notes.write_note(queued, line)
+                return ""
+
+            proof.unlink(missing_ok=True)
+            if queued.exists():
+                said.parent.mkdir(exist_ok=True)
+                with suppress(FileNotFoundError):  # another lead hook may have delivered it
+                    os.replace(queued, said)
+                    return line
+                return ""
+            if not said.exists():
+                said.parent.mkdir(exist_ok=True)
+                session_notes.write_note(said, line)
+                return line
+            return ""
+    finally:
+        if spool is not None:  # a note write can fail after the request has already been queued
+            hooks._log_notices()
+            hooks.start_processor(spool, hooks.VERIFY)
 
 
 def _result_line(run: Verification, record: Recorded, oracle: str | None = None, role: str | None = None) -> str:
     """role: the re-running agent's; when nothing decided the claim, the line says why the rest of it does not."""
+    from .checks import RETRY_FAILED, RETRY_FAILED_OTHER, RETRY_PASSED
     from .ids import short
     from .ledger import DECIDERS
     from .lookup import checked
 
     if run.environment:
         result = "environment failure"
+    elif run.retry == RETRY_PASSED:  # not "re-run passed", which clears a merge
+        result = f"re-run failed ({(run.first_signature or 'a check')[:120]}), then passed on a retry"
+    elif run.retry in (RETRY_FAILED, RETRY_FAILED_OTHER):
+        result = "re-run failed, and again on a retry" + (
+            " with a different failure" if run.retry == RETRY_FAILED_OTHER else "")
     else:
         result = "re-run passed" if run.all_passed and run.complete else "re-run failed"
     guard = ("tests weakened or check declarations changed; needs review"
@@ -124,6 +165,9 @@ def _result_line(run: Verification, record: Recorded, oracle: str | None = None,
         elif not run.complete:
             verdict += " (not every declared check ran)"
     ref = short("claim", record.claim_id) if record.claim_id else short("experiment", record.experiment_id)
+    if run.retry_of is not None:  # the gate's hold message names the runs to invalidate
+        ref += (f"; failed run {short('experiment', run.retry_of)}" if run.retry == RETRY_PASSED else
+                f"; runs {short('experiment', run.retry_of)}, {short('experiment', record.experiment_id)}")
     return (f"benchbook: {run.piece} {run.commit[:7]}: {result} ({run.total} checks, "
             f"{run.duration_ms / 1000:.1f}s), {guard}, checked: {verdict} ({ref})")
 
@@ -172,7 +216,7 @@ def process(data: dict[str, Any], project: str, receipt: UUID, spool: Path) -> s
     if line is None:
         run, record = checks.verify(lg, piece, commit, repo=Path(data["repo"]), reported_by=reporter,
                                     trace_ref={"source": "agent-result", "report_sha256": data["report_sha256"]},
-                                    receipt_id=receipt)
+                                    receipt_id=receipt, retry=True)
         oracle = None
         if record.claim_id is not None:
             rows = lg.sql_internal(

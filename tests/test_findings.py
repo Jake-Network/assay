@@ -17,7 +17,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, config, hooks
+from benchbook import Ledger, config, findings, hooks
+from benchbook.brief import compile_brief
 from benchbook.config import write_config
 from benchbook.errors import BenchbookError
 from benchbook.findings import FINDING_DOMAIN, finding_hash, parse
@@ -401,6 +402,35 @@ def test_decisions_from_the_cli_and_the_open_findings_query(ko_repo: Path, lead:
     assert r.returncode == 0, r.stderr
     assert open_in_media() == set()
     assert lead.sql(counts)["rows"] == [{"open": 2, "accepted": 1, "rejected": 1}]
+
+
+def test_add_explicit_files_are_preserved_in_a_file_scoped_brief(ko_repo: Path, lead: Ledger, db_url: str) -> None:
+    files = ["Dockerfile", "app/users/[id]/page.tsx", "test data/case 1.txt"]
+    sentence = "The build container includes debug tools"
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url}
+    env.pop("BENCHBOOK_PROJECT", None)
+    args = [arg for file in files for arg in ("--file", file)]
+    result = subprocess.run([sys.executable, "-m", "benchbook.cli", "--agent", "lead", "finding", "add",
+                             sentence, *args], capture_output=True, text=True, cwd=ko_repo, env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    [finding] = _findings(lead)
+    assert finding["statement"] == sentence and finding["payload"]["file"] == files[0]
+    assert set(finding["tags"]) == {"out-of-scope", *(f"file:{file}" for file in files)}
+    for file in files:
+        assert sentence in compile_brief(lead, None, 2000, log=False, tags=[f"file:{file}"])
+
+
+def test_add_explicit_file_already_in_prose_keeps_the_report_identity(lead: Ledger) -> None:
+    path = "src/loader.py"
+    sentence = f"`{path}` still caches errors"
+    captured = findings.capture(lead, f"## Out of scope\n- {sentence}\n", "Out of scope", source={})
+    noted = findings.record_noted(lead, sentence, [f"./{path}", "Dockerfile"])
+    assert noted.claims == captured.claims
+    assert captured.new == 1 and noted.new == 0
+    [finding] = _findings(lead)
+    assert finding["n_support"] == 2
+    assert sentence in compile_brief(lead, None, 2000, log=False, tags=["file:Dockerfile"])
+    assert sentence not in compile_brief(lead, None, 2000, log=False, tags=["file:Elsewhere"])
 
 
 def test_accept_refuses_before_writing(ko_repo: Path, lead: Ledger, db_url: str) -> None:

@@ -2,6 +2,51 @@
 
 ## Unreleased: code pack
 
+- Worker instructions (MCP server instructions, the worker subagents, AGENTS.md) ask for a short final summary with
+  record ids instead of at most 3 sentences; the 1000-character limit on a task summary is unchanged. The Claude Code
+  plugins are 0.2.2 (`benchbook`) and 0.2.1 (`benchbook-mcp`) for it.
+- A merge the gate holds now says what the lead can run: `check verify ... --reported-by <worker>`, which re-runs
+  and decides, and, for runs that disagree, the `decide ... invalidated` of the failed run first. Before it named only a
+  person's decision.
+- The automatic re-run of a reported commit retries a failed run once. A retry that passes records both runs, leaves
+  no discarded approach and decides inconclusive (the runs disagree), so a lead can invalidate the failed run and
+  verify; one that fails too is recorded as one failed run, as before. In the third boundary pilot two re-runs failed
+  once on flaky socket tests outside the pieces and left refutations and dead ends nobody could undo.
+- A verified line whose files are the same at HEAD now ends in `· applies at HEAD`, not in nothing: in the third boundary pilot a new session's lead read the unmarked line of an unchanged piece as "HEAD
+  moved, so it no longer applies".
+- `brief --here` and the boundary hooks also cover the pieces merged into HEAD (a completion at a commit in HEAD's
+  history): their findings and dead ends, tagged with the piece, were outside an integration branch's scope. In the
+  second boundary pilot this hid the lead's own `benchbook discard` and a worker's finding from the next session.
+- The brief's "changed since" mark compares the files a verified commit changed (recorded as the completion's
+  `payload.files`), not the directories: on an integration branch every piece shared `src/` and `tests/` with the
+  others, so in the second boundary pilot each merge marked every verified piece changed and the lead could not tell
+  the changed piece from the unchanged one. Completions recorded before keep the old comparison.
+- A lead can record what it learns itself: `benchbook discard <piece> --approach NAME --why "..."` (a dead end without
+  a failed check run, listed with the discarded approaches) and `benchbook finding add "..." [--file PATH]` (an
+  out-of-scope finding). In a code project a new session (not a resume) starts with a four-line guide for a lead:
+  ask workers for `DONE <sha>` and an out-of-scope section, merge after the verdict, and these two commands. It is
+  given even when the ledger is empty. In the boundary pilot no finding and no dead end reached a new session: the
+  lead neither asked its workers for findings nor had a way to record its own.
+- The merge gate: with the Claude Code plugin, a lead's `git merge` of a commit a worker reported waits up to 30 s
+  for that commit's re-run verdict. A clean verdict lets the merge run and is handed to the lead with it; a failed
+  or needs-review verdict, or none within 30 s, holds the merge once with the reason, and merging again goes
+  through. A PreToolUse hook with `if: "Bash(git merge *)"` runs it, so other Bash calls pay nothing. In the
+  boundary pilot arm F's lead merged all four pieces before their verdicts. The plugin is 0.2.3: update it.
+- A report that reaches the hooks as both SubagentStop and PostToolUse:Agent (a foreground agent, Claude Code
+  2.1.331) tells the lead "re-running the checks of …" once instead of twice, and when SubagentStop came first the
+  re-run is queued once. PostToolUse takes the line SubagentStop left waiting; a line already given is not repeated.
+- The brief (`--here`, session start, pre-compact) has a section "Re-run, not decided" after the verified pieces:
+  the newest completion per piece that a re-run supported or refuted and nobody decided, with why (`passed, needs
+  review (tests weakened: <files>)`, `fewer tests in <check>`, `[checks] changed`, `failed (<checks>)`, `runs
+  disagree`). In the boundary pilot a piece whose re-run passed and went to a person was in no section, so a new
+  session's lead could not know it waited; a refuted completion showed only as a discarded approach. The section is
+  left out when empty; pack.toml `[brief] rerun` limits it (8).
+- Adding a name to an import in a guarded Python test file (`get_path)` → `get_path,` + `run_length)`, or
+  `from x import a` → `from x import a, b`) no longer counts as weakening the tests: the file is "appended" when
+  every deleted line is inside an import and the file still imports everything it did. In the boundary pilot's arm
+  F this sent three of four passing pieces to a person. Removing, renaming or re-aliasing an imported name, any
+  other rewritten line, a skip marker, a conftest.py change and fewer JUnit tests are still weakenings; non-Python
+  test files keep the old rule.
 - The hook spool has two lanes with a processor each: re-runs (`verify-request`) and everything else. A check run or
   Bash-hook attempt queued while re-runs wait is recorded within about a second instead of after all of them (168 s
   with eight queued re-runs, `scripts/measure_rerun_queue.py`). Before each re-run the verify lane records what the

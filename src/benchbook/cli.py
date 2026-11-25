@@ -489,6 +489,33 @@ _register_exp_run()
 
 # ------------------------------------------------------------------ claims, links, decisions
 
+@app.command("discard")
+def discard(
+    piece: Annotated[str, typer.Argument(help="The piece the approach was for")],
+    approach: Annotated[str, typer.Option(help="A short name for the approach (no spaces)")],
+    why: Annotated[str, typer.Option(help="Why it is a dead end, one sentence")],
+    commit: Annotated[str | None, typer.Option(help="The commit it was tried at, if any")] = None,
+) -> None:
+    """Record a dead end you know without a failed check run (a lead's own, or one a worker told you): the brief
+    lists it under discarded approaches, like an approach whose check failed."""
+    from .errors import ValidationFailed
+    from .failures import APPROACH, record_noted
+    from .ids import short
+
+    problems = []
+    if not APPROACH.fullmatch(approach):
+        problems.append("--approach: 1-100 characters without spaces")
+    if not APPROACH.fullmatch(piece):
+        problems.append("piece: 1-100 characters without spaces")
+    if not why.strip() or len(why) > 1000:
+        problems.append("--why: 1-1000 characters")
+    if problems:
+        raise ValidationFailed(problems)
+    r = record_noted(ledger(), piece, approach, why, commit)
+    emit({"ok": True, "id": short("claim", r.id), "new": r.duplicate_of is None},
+         f"{short('claim', r.id)} {'recorded' if r.duplicate_of is None else 'already recorded'}")
+
+
 @claim_app.command("add")
 def claim_add(kind: str, statement: str,
               supports: Annotated[str | None, typer.Option(help="ids this claim is supported by")] = None,

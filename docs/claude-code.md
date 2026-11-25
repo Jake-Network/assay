@@ -53,7 +53,7 @@ The hook plugin (`integrations/claude-code/`, `benchbook@benchbook`) contains:
 | file | what |
 |---|---|
 | `bin/benchbook-hook` | the shim every hook runs: `benchbook hook EVENT` from PATH (`assay hook` when only that is there); without either it notes one line in `${CLAUDE_PLUGIN_DATA}/missing-cli`, which `benchbook doctor` reports, and exits 0 |
-| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
+| `hooks/hooks.json` | `SubagentStop` (every subagent; `BENCHBOOK_HOOK_AGENTS` picks which are captured) and `PostToolUse(SubagentHandback)` -> `benchbook hook ...`; `PreToolUse(Bash)` with `if: "Bash(git merge *)"` -> `benchbook hook bash-start` (the merge gate); `PostToolUse(Bash)` and `PostToolUseFailure(Bash)` -> `benchbook hook bash-result`; `TaskCompleted` -> `benchbook hook task-completed` (see below) |
 
 Every command in hooks.json is `"${CLAUDE_PLUGIN_ROOT}/bin/benchbook-hook" EVENT`, so the plugin calls only a file of
 its own (the directory's submission checklist asks for that).
@@ -90,8 +90,8 @@ why the manual worker file is separate.
 3. It launches K `benchbook-worker` subagents with a two-sentence prompt: their agent name and "take a task".
 4. Workers: `benchbook_next_task` -> `benchbook_brief` -> for each evaluation one Bash command,
    `benchbook --agent worker-<n> exp run --config '<json>' --seed <n> -- <command>`, which checks the ledger, runs
-   the command and records the result -> claims with evidence -> `benchbook_complete_task`; final message <= 3
-   sentences + ids. Without a shell they call `benchbook_check_tried` before and `benchbook_record_experiment`
+   the command and records the result -> claims with evidence -> `benchbook_complete_task`; final message a short
+   summary + ids. Without a shell they call `benchbook_check_tried` before and `benchbook_record_experiment`
    after each evaluation instead (the MCP tools stay). One command instead of three tool calls saves a turn per
    attempt; see [the SDK page](sdk.md#check-run-and-record-in-one-command) for its output and exit codes.
 5. The lead reads `benchbook_status` and `benchbook_brief` (and `benchbook_sql`), decides claims, plans the next round.
@@ -143,6 +143,30 @@ In a project with `[checks]` in `.benchbook/config.toml` (the code pack, docs/co
 implementers' check runs in the ledger and hold a piece's task open until its HEAD passes. The plugin installs them;
 the manual copy (`manual/settings.hooks.json`) has the same entries. Neither needs the agent to type a benchbook
 command.
+
+### `benchbook hook bash-start` (PreToolUse on Bash, `git merge` only): the merge gate
+
+The manifest runs it only for `Bash(git merge *)` (the hook's `if`, so other Bash calls pay no start-up). When the
+lead (not a subagent) merges a ref whose commit a report queued a re-run for in this session, it waits up to 30 s
+for that re-run's verdict note. A clean verdict (`re-run passed`, `tests not weakened`) lets the merge run and is
+given to the lead as the call's `additionalContext`; any other verdict, or none within 30 s, denies the call once
+with the verdict or the wait as the reason. Merging the same commit again goes through. The pending marks are
+`pending/<sha>.json` in the session's notes directory (`verify_requests.enqueue` writes them, with the reporting
+agent's type). In the boundary pilot every merge of arm F's lead came before its verdict.
+
+The reason ends with what the lead can run, by verdict:
+
+| verdict | the hold message |
+|---|---|
+| none within 30 s | wait for the line (a failed run is retried, which takes longer); if none comes, `benchbook --agent lead check verify <piece> <sha> --reported-by <reporter>`, which re-runs and decides |
+| `re-run failed (...), then passed on a retry` (docs/code.md) | if the failure is not the piece's, `benchbook --agent lead decide e:<failed run> invalidated --oracle human --rationale "..."` and then that `check verify`; otherwise a person decides |
+| `re-run failed, and again on a retry with a different failure` | if neither failure is the piece's, invalidate both runs and run that `check verify`; otherwise the implementer fixes it, or a person decides |
+| `re-run failed, and again on a retry` | the implementer fixes it and reports a new commit, or a person decides |
+| `re-run failed` (no retry: the retry could not run, or a verdict from before it) | the implementer fixes it; if the failure is not the piece's, invalidate the failed run and run that `check verify`; or a person decides |
+| `tests weakened ... needs review` | a person decides (`benchbook decide <claim> verified\|refuted --oracle human --as human --evidence <attempt ids> --rationale "..."`) |
+
+In the third boundary pilot the message offered only a person's decision; the lead ran `check verify` without
+`--reported-by`, which recorded a pass against no claim and decided nothing.
 
 ### `benchbook hook bash-result` (PostToolUse and PostToolUseFailure on Bash)
 
@@ -274,7 +298,7 @@ The `benchbook` plugin also gives the model what the ledger says at the points w
 | `benchbook hook session-start` | SessionStart (every source: startup, resume, clear, compact) | the brief scoped by what this branch changed (`brief --here`), at most 1,500 tokens and 6,000 characters, as `additionalContext`; nothing when every section is empty |
 | `benchbook hook pre-compact` | PreCompact | one paragraph of at most 1,000 characters, "Keep these ids and statuses verbatim in the summary: ...", three lines per section, on plain stdout (instructions for the compaction summary) |
 | `benchbook hook notes` | UserPromptSubmit; PostToolUse of every tool but Bash, Agent and Task (matcher `^(?!(Bash\|Agent\|Task)$)`; those deliver from their own hooks) | notes queued for this session in `<state dir>/notes/<session_id>/` (the automatic re-run, T11), once, under the event that ran; they move to `delivered/`. A hook that fired inside a subagent (`agent_id` in its input) delivers nothing, so the notes wait for the lead |
-| `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; an `async_launched` result queues nothing and delivers what is waiting; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
+| `benchbook hook agent-result` | PostToolUse (Agent or Task), SubagentStop | queues a re-run when a report identifies its commit and piece. On PostToolUse (a foreground report) it says so and delivers any results already waiting for this session; an `async_launched` result queues nothing and delivers what is waiting; on SubagentStop (an agent Claude Code ran in the background, which is every Agent call on 2.1.330) it prints nothing, and the "re-running" line waits as a note for the task notification's UserPromptSubmit. A foreground report can come as both (SubagentStop, then PostToolUse, on 2.1.331): the PostToolUse answer takes the waiting line, so the lead reads it once, and does not queue the re-run again. A SubagentStop with an empty `agent_type` is the compaction summarizer and is skipped |
 
 The detached processor verifies the reported commit using the project's declared checks. Re-runs have a processor
 of their own (the spool's verify lane, `.verify.lock`), so reports and check-run attempts queued meanwhile are
@@ -324,6 +348,9 @@ foreground result), which no default session produced and which stays the docume
 | TaskCompleted on a feature branch (PR #4 issue 1) | the hook decides | `claude -p` offers `TaskCreate`/`TaskUpdate`. With no `piece start` for the branch the update completed (`allowed: feature-plan has no live piece`); after `piece start feature-plan` it was held and the model quoted the hook's message (2.1.330, haiku, manual hooks, 2026-11-23) |
 | A subagent's `DONE <sha>`, before and after `check verify` without `--agent` (PR #4 issue 5) | not documented | in both projects the line was `checked: re-run` and the claim `verified` (oracle `rerun`), decided by `rerun@<host>` (orchestrator); `verifier@<host>` stayed a harness. In one of the two sessions the Agent result itself carried the report as well as SubagentStop: both queued the re-run, which ran and was delivered once (2.1.330, haiku, 2026-11-23) |
 | MCP tool prefix of the `benchbook-mcp` plugin | `mcp__plugin_<plugin>_<server>__`; a hyphen in the plugin name not addressed | `mcp__plugin_benchbook-mcp_benchbook__`: the hyphen stays. The server is still `pending` at `init` and connects during the first turn (2.1.330) |
+| A subagent's hook inputs (scenario 6) | not documented | its Bash PostToolUse carries the lead's `session_id` and an `agent_id`; a lead Read result's `additionalContext` through the notes hook's matcher reaches the model (2.1.332, 2026-11-25) |
+| PreToolUse with `if: "Bash(git merge *)"` (the merge gate, scenario 7) | `if` filters by permission-rule syntax; a deny's `permissionDecisionReason` is shown to Claude; `additionalContext` is added next to the tool result | ran for the two `git merge` calls and not for `git status`; the deny reason reached the model (as `PreToolUse:Bash hook error: <reason>`) and so did the allow's `additionalContext` (2.1.332, haiku, 2026-11-25). In a first run whose deny came first, haiku would not run the next merge, calling it "a way around that block" |
+| Agent results without `run_in_background` (scenario 3, again) | | varies by run on 2.1.332: `completed` then `async_launched` in one run, both `async_launched` in the next (2026-11-25) |
 
 ## Installs from before the rename (assay)
 

@@ -20,6 +20,7 @@ piece that failed the same way (failures.py). Nothing here imports the database 
 passed in."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -35,10 +36,10 @@ import time
 import tomllib
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from . import config as localcfg
 from . import failures, signature
@@ -177,9 +178,16 @@ class Verification:
     prepared: Prepared | None = None
     baseline_signature: str | None = None  # how the failing checks failed at the merge-base (T03)
     paths: list[str] = field(default_factory=list)  # directory prefixes the commit changed since the merge-base (T06)
+    # the files themselves, at most MAX_FILES (none when more): what the brief's "changed since" compares (T10)
+    files: list[str] = field(default_factory=list)
     # The failure signature of an attempt already in the ledger (a retried request finishing from the stored run):
     # its results keep only the statuses, so the signature is the recorded one.
     recorded_signature: str | None = None
+    # verify(retry=True): RETRYING on a failed first run, RETRY_* on its retry (metrics.retry), which also names the
+    # first run (metrics.retry_of) and how it failed (metrics.first_signature)
+    retry: str | None = None
+    retry_of: UUID | None = None
+    first_signature: str | None = None
 
     def signature(self) -> str | None:
         return self.recorded_signature if self.recorded_signature is not None else failure_signature(self.results)
@@ -246,6 +254,9 @@ class Verification:
             **({"prepared": prep} if self.prepared is not None and (prep := self.prepared.metrics()) else {}),
             **({"environment": True} if self.environment is not None else {}),
             **({"baseline_signature": self.baseline_signature} if self.baseline_signature else {}),
+            **({"retry": self.retry} if self.retry else {}),
+            **({"retry_of": str(self.retry_of)} if self.retry_of else {}),
+            **({"first_signature": self.first_signature} if self.first_signature else {}),
         }
 
     def notes(self) -> str:
@@ -264,6 +275,8 @@ class Verification:
             n += f"; interrupted ({self.interrupted}) after {done} of {self.total} checks"
         if self.environment:
             n += f"; environment: {self.environment}; not counted against the piece"
+        if self.retry:
+            n += f"; {self.retry}"
         return n
 
 
@@ -338,6 +351,15 @@ def config_at(repo: Path, sha: str) -> tuple[dict[str, Any], str] | None:
 
 
 MAX_SCOPE_PATHS = 20
+# A completion's payload.files: more changed files than this and the brief compares its directory prefixes instead.
+MAX_FILES = 200
+# metrics.retry (verify(retry=True)): RETRYING on the failed first run, recorded before its retry runs; one of the
+# others on the retry, which carries metrics.retry_of (the first run) and metrics.first_signature
+RETRYING = "failed; retried"
+RETRY_PASSED = "passed on a retry after a failed run"
+RETRY_FAILED = "failed again on a retry"
+RETRY_FAILED_OTHER = "failed again on a retry, differently"
+RETRY_UNAVAILABLE = "retry could not run"
 
 
 def _parent(prefix: str) -> str:
@@ -545,7 +567,8 @@ def classify_guard(repo: Path, merge_base: str, commit: str,
                    files: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
     """T04: (added, appended, weakened) of the changed guarded files. A new file is added and a file with lines added
     and none deleted is appended, unless an added line carries a SKIP_MARKERS entry or the file is a conftest.py;
-    everything else (deleted, rewritten, binary) is weakened."""
+    everything else (deleted, rewritten, binary) is weakened. A Python file whose deleted lines are all in import
+    statements can also count as lines added when the import bindings are preserved (_imports_extended)."""
     if not files:
         return [], [], []
     out = _git(repo, "diff", "--numstat", "--no-renames", "-z", merge_base, commit, "--", *files).stdout
@@ -564,19 +587,111 @@ def classify_guard(repo: Path, merge_base: str, commit: str,
     weakened: list[str] = []
     for f in files:
         st, dels = status.get(f, ""), deleted.get(f)
-        if Path(f).name in ALWAYS_WEAKENING or st not in ("A", "M") or dels is None or (st == "M" and dels > 0):
+        if Path(f).name in ALWAYS_WEAKENING or st not in ("A", "M") or dels is None:
             weakened.append(f)
-        elif _adds_skip(repo, merge_base, commit, f):
+        elif _adds_skip(diff := _diff_u0(repo, merge_base, commit, f)):
+            weakened.append(f)
+        elif st == "M" and dels > 0 and not _imports_extended(repo, merge_base, commit, f, diff):
             weakened.append(f)
         else:
             (added if st == "A" else appended).append(f)
     return added, appended, weakened
 
 
-def _adds_skip(repo: Path, merge_base: str, commit: str, path: str) -> bool:
-    diff = _git(repo, "diff", "-U0", "--no-renames", "--no-color", merge_base, commit, "--", path).stdout
+def _diff_u0(repo: Path, merge_base: str, commit: str, path: str) -> str:
+    return _git(repo, "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", merge_base, commit,
+                "--", path).stdout
+
+
+def _adds_skip(diff: str) -> bool:
     return any(line.startswith("+") and not line.startswith("+++") and any(m in line for m in SKIP_MARKERS)
                for line in diff.splitlines())
+
+
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", re.MULTILINE)
+
+
+def _imports_extended(repo: Path, merge_base: str, commit: str, path: str, diff: str) -> bool:
+    """Allow a Python test to extend module-level imports without changing existing bindings or statement order."""
+    if not path.endswith(".py"):
+        return False
+    deleted = {start + i for m in HUNK.finditer(diff)
+               for start, n in [(int(m.group(1)), 1 if m.group(2) is None else int(m.group(2)))] for i in range(n)}
+    trees = []
+    for ref in (merge_base, commit):
+        shown = _git(repo, "show", f"{ref}:{path}", check=False)
+        if shown.returncode != 0:
+            return False
+        try:
+            trees.append(ast.parse(shown.stdout))
+        except (SyntaxError, ValueError):
+            return False
+    old, new = trees
+    top_level = {node for node in old.body if isinstance(node, (ast.Import, ast.ImportFrom))}
+    in_import: set[int] = set()
+    elsewhere: set[int] = set()
+    for node in ast.walk(old):
+        if node in top_level and isinstance(node, (ast.Import, ast.ImportFrom)):
+            in_import.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        elif isinstance(node, ast.stmt):
+            # A compound statement holds its body's lines: only its header line is its own.
+            own = node.lineno if hasattr(node, "body") else None
+            elsewhere.update([own] if own is not None else range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return bool(deleted and deleted <= in_import and not deleted & elsewhere and _keeps_import_bindings(old, new))
+
+
+def _bound_name(alias: ast.alias) -> str:
+    return alias.asname or alias.name.split(".", 1)[0]
+
+
+def _added_imports(old: ast.stmt | None, new: ast.Import | ast.ImportFrom) -> list[ast.alias] | None:
+    """New names in the same import statement when its old names are still in order."""
+    if not isinstance(old, (ast.Import, ast.ImportFrom)) or type(old) is not type(new):
+        return None
+    if isinstance(old, ast.ImportFrom) and isinstance(new, ast.ImportFrom):
+        if (old.level, old.module) != (new.level, new.module):
+            return None
+    added = []
+    remaining = iter(old.names)
+    expected = next(remaining, None)
+    for alias in new.names:
+        if expected is not None and (alias.name, alias.asname) == (expected.name, expected.asname):
+            expected = next(remaining, None)
+        else:
+            added.append(alias)
+    return added if expected is None else None
+
+
+def _keeps_import_bindings(old: ast.Module, new: ast.Module) -> bool:
+    # References matter as much as declarations: a new import can also shadow a builtin used in an assertion.
+    names: set[str] = set()
+    for node in ast.walk(old):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.alias):
+            names.add(_bound_name(node))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+
+    remaining = iter(old.body)
+    expected = next(remaining, None)
+    for node in new.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            added = _added_imports(expected, node)
+            if added is None:
+                added = node.names
+            else:
+                expected = next(remaining, None)
+            if added and isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                return False
+            for alias in added:
+                name = _bound_name(alias)
+                if name == "*" or name in names:
+                    return False
+                names.add(name)
+        elif expected is not None and ast.dump(node) == ast.dump(expected):
+            expected = next(remaining, None)
+    return expected is None
 
 
 # ---------------------------------------------------------------------------------------------------- running
@@ -905,12 +1020,17 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
            only: Sequence[str] | None = None, reported_by: str | None = None,
            report_file: Path | None = None, trace_ref: dict[str, Any] | None = None,
            decide: bool = True, claim: str | None = None,
-           receipt_id: UUID | None = None) -> tuple[Verification, Recorded]:
+           receipt_id: UUID | None = None, retry: bool = False) -> tuple[Verification, Recorded]:
     """Steps 1 to 4 (the CLI prints step 5). `lg` acts as the verifier. Raises the interruption, after cleaning up
     and recording, when the run was interrupted. trace_ref is stored on the attempt as given (a CI run's URL, say);
     decide=False records without deciding, even with lead authority. claim: the completion claim the run is evidence
     for (what `pr pieces --claims` found); it must be about this piece at this commit, and its reporter is the
-    implementer (reported_by, when also given, must name the same agent)."""
+    implementer (reported_by, when also given, must name the same agent).
+
+    retry: when every declared check ran and one failed (no environment failure, no weakened test), record that run
+    without a discarded approach and run them all once more in a fresh worktree (_retry). The hook's automatic re-run
+    retries (verify_requests.process); in the third boundary pilot two of its four re-runs failed once on socket
+    timing tests outside the pieces, which became refutations and discarded approaches."""
     if not PIECE.fullmatch(piece):
         raise BenchbookError("piece: 1-100 characters without spaces")
     if "completion" not in lg.pack.claim_kinds:
@@ -944,16 +1064,41 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     if b.source == "pin":
         pin = pinned(lg, piece, impl)
         moved = pin is not None and pin_changed(lg, pin, piece, repo, impl)
-    scope = path_prefixes(changed_paths(repo, b.merge_base, sha))
+    changed = changed_paths(repo, b.merge_base, sha)
+    scope = path_prefixes(changed)
+    files = changed if len(changed) <= MAX_FILES else []
     found = None if given is None else given[0]
-    if receipt_id is not None and (stored := _stored_attempt(lg, receipt_id, piece, sha)) is not None:
+    first_id = uuid5(receipt_id, "first run") if receipt_id is not None else None
+    record_id = receipt_id
+    stored = _stored_attempt(lg, receipt_id, piece, sha) if receipt_id is not None else None
+    metrics = stored["metrics"] if stored is not None else None
+    if isinstance(metrics, dict) and metrics.get("retry") == RETRY_UNAVAILABLE:
+        # A terminal prepare failure leaves the original run as the check evidence.
+        assert first_id is not None
+        record_id = first_id
+        stored = _stored_attempt(lg, first_id, piece, sha)
+        if stored is None:
+            raise BenchbookError(f"verification receipt {receipt_id} is missing its first run")
+    elif stored is None and retry and first_id is not None:
+        if first := _stored_attempt(lg, first_id, piece, sha):
+            if _linked_discard(lg, first_id):
+                # An older processor may have finished an unavailable retry before terminal receipts existed.
+                stored, record_id = first, first_id
+            else:
+                v = _from_stored(first, piece, sha, b, scope)
+                v.files = files
+                return _retry(lg, v, repo, check_env(), reported_by, report, trace_ref, found,
+                              first_id, receipt_id, decide)
+    if stored is not None:
         # A retry of a request whose attempt is already in the ledger (the result cache was not written, a later
         # step failed): finish the links and the decision from that attempt, never from a new run, which could
         # disagree with what is stored.
         v = _from_stored(stored, piece, sha, b, scope)
+        v.files = files
         sig = v.signature()
-        seen = [p for p in failures.earlier(lg, piece, sig) if p.id != receipt_id] if sig else []
-        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
+        seen = [p for p in failures.earlier(lg, piece, sig) if p.id != record_id] if sig else []
+        rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=record_id,
+                      discard=record_id != receipt_id or v.retry in (None, RETRY_FAILED))
         rec.seen_before = seen
         rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
         return v, rec
@@ -985,9 +1130,12 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
             signal.signal(signum, handler)
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
-                     paths=scope)
+                     paths=scope, files=files)
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
+    if (retry and interrupted is None and v.run_status == "ok" and v.complete and not v.all_passed
+            and not integ.guard_weakened and not integ.checks_changed):
+        return _retry(lg, v, repo, env, reported_by, report, trace_ref, found, first_id, receipt_id, decide, seen)
     if interrupted is not None:
         try:
             _record(lg, v, reported_by, report, trace_ref, found)
@@ -998,6 +1146,53 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     rec.seen_before = seen
     rec.outcome = _decide(lg, v, rec) if decide else Outcome(None, "recorded without a decision (--no-decide)")
     return v, rec
+
+
+def _retry(lg: Ledger, v: Verification, repo: Path, env: dict[str, str], reported_by: str | None,
+           report: Report | None, trace_ref: dict[str, Any] | None, found: UUID | None, first_id: UUID | None,
+           receipt_id: UUID | None, decide: bool,
+           seen: list[failures.Prior] | None = None) -> tuple[Verification, Recorded]:
+    """verify(retry=True) after a complete run v failed. v is recorded first, under first_id (derived from the
+    request's receipt, so a later try finds it and only retries) and without a discarded approach; then every
+    declared check runs again in a fresh worktree and the retry is recorded under the receipt, naming v.
+
+    - The retry passes: the runs disagree, and _decide makes the claim inconclusive. A lead who finds the failure
+      is not the piece's invalidates v, and its own check verify then decides from the passing runs.
+    - It fails the same way: the retry leaves the discarded approach v did not, and nothing is decided.
+    - It fails differently: no discarded approach either, since neither failure repeated.
+    - It could not run: record the failed preparation under the receipt, then finish v as the only check evidence.
+    - It was interrupted: raise the interruption, so a later try of the request can resume."""
+    v.retry = RETRYING
+    first = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=first_id, discard=False)
+    prep = Prepared()
+    t0 = time.monotonic()
+    again, interrupted = run_checks(repo, v.commit, [v.base.checks[n] for n in v.declared], env, v.base.prep, prep)
+    if interrupted is not None:
+        raise interrupted
+    integ = replace(v.integrity, tests_before=None, tests_after=None, fewer_tests_in=[])
+    unavailable = prep.error is not None or not again or any(r.status == "not_run" for r in again)
+    if not unavailable and integ.guard_files and v.commit != v.base.merge_base:
+        if stopped := count_tests(repo, v.base, again, integ, env):
+            raise stopped
+    sig = v.signature()
+    v2 = Verification(v.piece, v.commit, v.base, integ, again, int((time.monotonic() - t0) * 1000), None,
+                      declared=list(v.declared), paths=v.paths, files=v.files, prepared=prep,
+                      retry_of=first.experiment_id, first_signature=sig)
+    no_decision = Outcome(None, "recorded without a decision (--no-decide)")
+    if unavailable:
+        v2.environment = prep.error or "retry did not run every declared check"
+        v2.retry = RETRY_UNAVAILABLE
+        _record(lg, v2, reported_by, report, trace_ref, found, receipt_id=receipt_id, discard=False)
+        _discard(lg, v, first)
+        first.seen_before = seen or []
+        first.outcome = _decide(lg, v, first) if decide else no_decision
+        return v, first
+    v2.retry = (RETRY_PASSED if v2.all_passed else RETRY_FAILED if v2.signature() == sig else RETRY_FAILED_OTHER)
+    rec = _record(lg, v2, reported_by, report, trace_ref, found, receipt_id=receipt_id,
+                  discard=v2.retry == RETRY_FAILED)
+    rec.seen_before = seen or []
+    rec.outcome = _decide(lg, v2, rec) if decide else no_decision
+    return v2, rec
 
 
 _STORED = ("SELECT author, config, metrics, run_status, code_ref, duration_ms FROM benchbook.experiments"
@@ -1020,6 +1215,13 @@ def _stored_attempt(lg: Ledger, receipt_id: UUID, piece: str, commit: str) -> di
     return row
 
 
+def _linked_discard(lg: Ledger, attempt: UUID) -> bool:
+    return bool(lg.sql_internal(
+        "SELECT 1 FROM benchbook.links l JOIN benchbook.claims c ON c.project_id = l.project_id AND c.id = l.dst_id"
+        " WHERE l.project_id = %s AND l.src_id = %s AND l.src_type = 'experiment' AND l.dst_type = 'claim'"
+        " AND l.relation = 'supports' AND 'discarded' = ANY(c.tags) LIMIT 1", (lg.project_id, attempt)))
+
+
 def _from_stored(row: dict[str, Any], piece: str, commit: str, b: Base, scope: list[str]) -> Verification:
     """The Verification an attempt in the ledger records: statuses, declared checks, guard columns, signature."""
     m = row["metrics"] if isinstance(row["metrics"], dict) else {}
@@ -1040,7 +1242,17 @@ def _from_stored(row: dict[str, Any], piece: str, commit: str, b: Base, scope: l
                         approach=str(approach) if approach else None,
                         declared=list(m.get("checks_declared") or []), environment=environment,
                         baseline_signature=m.get("baseline_signature"), paths=scope,
-                        recorded_signature=m.get("failure_signature"))
+                        recorded_signature=m.get("failure_signature"),
+                        retry=m.get("retry") if isinstance(m.get("retry"), str) else None,
+                        retry_of=_uuid(m.get("retry_of")),
+                        first_signature=m.get("first_signature") if isinstance(m.get("first_signature"), str) else None)
+
+
+def _uuid(value: Any) -> UUID | None:
+    try:
+        return UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _signal_name(e: BaseException | None) -> str | None:
@@ -1051,7 +1263,7 @@ def _signal_name(e: BaseException | None) -> str | None:
 
 def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report | None,
             trace_ref: dict[str, Any] | None = None, given: UUID | None = None, *,
-            receipt_id: UUID | None = None) -> Recorded:
+            receipt_id: UUID | None = None, discard: bool = True) -> Recorded:
     """Step 4. The claim is the implementer's (proposed, never decided here); the attempt and the link are the
     verifier's, so the ledger shows two different agents. given: a claim already checked by given_claim."""
     claim: tuple[UUID, bool] | None = None
@@ -1072,7 +1284,8 @@ def _record(lg: Ledger, v: Verification, reported_by: str | None, report: Report
         if v.run_status == "ok" and (not v.all_passed or v.complete):
             rec.relation = "supports" if v.all_passed else "refutes"
             lg.link(r.id, rec.relation, rec.claim_id)
-    _discard(lg, v, rec)
+    if discard:
+        _discard(lg, v, rec)
     return rec
 
 
@@ -1137,6 +1350,8 @@ def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report
         payload["report"] = {"sha256": report.sha256, "bytes": report.bytes}
     if v.paths:  # T06: the brief finds the claim by the directories the commit changed
         payload["paths"] = list(v.paths)
+    if v.files:  # T10: and compares these files with HEAD for "changed since"
+        payload["files"] = list(v.files)
     proposer = lg
     if lg.token is None:
         proposer = lg.as_agent(reporter)

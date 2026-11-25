@@ -8,6 +8,9 @@
    matched by tag or, for a `file:<prefix>` tag, by path prefix; most reported first.
 3. Occupied paths: live piece intents (v_inflight) with their tags and spec.paths (pieces.py).
 4. The last verified commit of each piece in scope, most recent first.
+5. Completions a re-run looked at and nobody decided (shown only when there is one): the re-run passed but the commit
+   weakened tests or changed [checks] (a person decides), it failed (refutes), or runs disagree (inconclusive).
+6. Completions reported and never re-run.
 
 Scope: a tag matches records carrying it exactly (`mod:media`, `piece:x`); `file:src/app/media/` matches by prefix,
 both the `file:` tags of findings and the paths pieces occupy. A piece is in scope when one of its tasks (benchbook
@@ -40,11 +43,15 @@ if TYPE_CHECKING:
 FOOTER = ("\nDetails: benchbook get <id> (one record, at most 400 tokens). Name your approach when you run a check "
           "(benchbook check run <check> --approach NAME, or BENCHBOOK_APPROACH): a failure seen before is named in the "
           "run's output.\n")
-LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8, "reported": 8}  # pack.toml [brief] overrides
+# pack.toml [brief] overrides
+LIMITS = {"discarded": 8, "findings": 8, "occupied": 8, "verified": 8, "rerun": 8, "reported": 8}
 GIT_TIMEOUT = 2.0  # seconds per git call of the validity check (T10)
 NOT_IN_CHECKOUT = "commit not in this checkout"
 NOT_MERGED = "not merged into this branch"
 NOT_IN_HEAD = (NOT_IN_CHECKOUT, NOT_MERGED)  # marks that say nothing about what changed since the commit
+# A verified piece whose files are the same at HEAD. Without it the third boundary pilot's lead read an unmarked line
+# as "HEAD moved, so the verification no longer applies".
+UNCHANGED = "applies at HEAD"
 _TEST_FILE = re.compile(r"([\w./-]+?)::")
 FETCH = 200  # rows read per section; the section's total counts all of them
 FILE_TAG = "file:"
@@ -106,7 +113,13 @@ FROM benchbook.v_claim_status s
 WHERE s.project_id = %(p)s AND s.kind = 'observation' AND 'out-of-scope' = ANY(s.tags)
   AND s.status IN ('proposed', 'inconclusive')
   AND (%(all)s OR s.tags && %(t)s::text[]
-       OR EXISTS (SELECT 1 FROM unnest(s.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[])))
+       OR EXISTS (SELECT 1 FROM unnest(s.tags) AS x(tag) WHERE x.tag LIKE ANY(%(flikes)s::text[]))
+       OR (cardinality(%(flikes)s::text[]) > 0 AND EXISTS (
+           SELECT 1 FROM benchbook.links l JOIN benchbook.sources src ON src.id = l.src_id
+           CROSS JOIN LATERAL unnest(string_to_array(src.locator, chr(10))) AS x(tag)
+           WHERE l.project_id = s.project_id AND src.project_id = s.project_id AND l.dst_id = s.id
+             AND l.src_type = 'source' AND l.dst_type = 'claim' AND l.relation = 'supports'
+             AND starts_with(src.uri, 'subagent-report:sha256:') AND x.tag LIKE ANY(%(flikes)s::text[]))))
 ORDER BY s.n_support DESC, s.created_at DESC, s.id
 LIMIT %(n)s"""
 OCCUPIED = f"""
@@ -129,6 +142,36 @@ WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'proposed' A
   AND s.n_refute = 0 AND {_COMPLETION_SCOPE}
 ORDER BY s.created_at DESC, s.id
 LIMIT %(n)s"""
+# Completions a re-run looked at that nobody decided, the newest per piece: supporting or refuting evidence, still
+# proposed or inconclusive, and no verified completion of the piece reported since.
+RERUN = f"""
+WITH {PIECES}, open AS (
+  SELECT DISTINCT ON (c.payload ->> 'piece') s.id, s.status, c.payload ->> 'piece' AS piece,
+         c.payload ->> 'commit' AS commit, c.created_at,
+         (SELECT max(l.created_at) FROM benchbook.links l WHERE l.project_id = s.project_id AND l.dst_id = s.id
+            AND l.relation IN ('supports', 'refutes')) AS last_at
+  FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
+  WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status IN ('proposed', 'inconclusive')
+    AND (s.n_support > 0 OR s.n_refute > 0) AND c.payload ? 'piece' AND {_COMPLETION_SCOPE}
+    AND NOT EXISTS (
+      SELECT 1 FROM benchbook.v_claim_status v JOIN benchbook.claims vc ON vc.project_id = v.project_id AND vc.id = v.id
+      WHERE v.project_id = s.project_id AND v.kind = 'completion' AND v.status = 'verified'
+        AND vc.payload ->> 'piece' = c.payload ->> 'piece' AND vc.created_at >= c.created_at)
+  ORDER BY c.payload ->> 'piece', c.created_at DESC, s.id
+)
+SELECT *, count(*) OVER () AS total FROM open ORDER BY last_at DESC NULLS LAST, created_at DESC, id LIMIT %(n)s"""
+# The finished attempts of the shown re-run completions (ledger._attempts): what the reason on each line says.
+RERUN_ATTEMPTS = """
+SELECT config ->> 'piece' AS piece, code_ref AS commit, metrics FROM benchbook.experiments_valid
+WHERE project_id = %s AND run_status = 'ok' AND config ->> 'piece' = ANY(%s) AND code_ref = ANY(%s)
+  AND metrics -> 'worktree_dirty' IS DISTINCT FROM 'true'::jsonb
+ORDER BY created_at, id"""
+# The pieces with a completion reported at a commit HEAD contains (merged_commits), for a checkout's brief.
+MERGED_PIECES = """
+SELECT DISTINCT c.payload ->> 'piece' AS piece FROM benchbook.claims c
+WHERE c.project_id = %s AND c.kind = 'completion' AND c.payload ? 'piece' AND c.payload ->> 'commit' = ANY(%s)
+ORDER BY 1"""
+MERGED_DEPTH = 5000  # commits of HEAD's history read for merged pieces
 # The paths a piece occupies (its newest task's spec.paths): what the validity check compares (T10).
 PIECE_PATHS = """
 SELECT DISTINCT ON (t.spec ->> 'piece') t.spec ->> 'piece' AS piece, t.spec -> 'paths' AS paths
@@ -138,7 +181,7 @@ ORDER BY t.spec ->> 'piece', t.created_at DESC, t.id"""
 VERIFIED = f"""
 WITH {PIECES}, last AS (
   SELECT DISTINCT ON (c.payload ->> 'piece') c.payload ->> 'piece' AS piece, c.payload ->> 'commit' AS commit,
-         c.payload -> 'paths' AS paths, s.last_oracle, s.id, s.decided_at
+         c.payload -> 'paths' AS paths, c.payload -> 'files' AS files, s.last_oracle, s.id, s.decided_at
   FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
   WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'verified'
     AND NOT s.evidence_invalidated AND {_COMPLETION_SCOPE}
@@ -199,21 +242,36 @@ def _git_ok(repo: Path, *args: str) -> int | None:
         return None
 
 
-def validity(repo: Path, commit: str | None, paths: Sequence[str]) -> str | None:
-    """T10: whether what was checked at commit still holds at HEAD for paths. None: unchanged (or unknown, when there
-    is nothing to compare or git did not answer in time); otherwise the mark the brief line carries."""
+def merged_commits(repo: Path) -> list[str]:
+    """The newest MERGED_DEPTH commits of HEAD's history (one git call, GIT_TIMEOUT); [] when git does not answer."""
+    try:
+        p = subprocess.run(["git", "-C", str(repo), "rev-list", f"--max-count={MERGED_DEPTH}", "HEAD"],
+                           capture_output=True, text=True, timeout=GIT_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return p.stdout.split() if p.returncode == 0 else []
+
+
+def validity(repo: Path, commit: str | None, paths: Sequence[str], *, literal: bool = True) -> str | None:
+    """T10: whether what was checked at commit still holds at HEAD for paths: the mark the brief line carries
+    (UNCHANGED when the paths are the same at HEAD), or None when there is nothing to compare or git did not answer
+    in time."""
     if not commit or not paths:
         return None
     if _git_ok(repo, "cat-file", "-e", f"{commit}^{{commit}}") != 0:
         return NOT_IN_CHECKOUT
-    if _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *paths) != 1:
+    pathspecs = [f":(literal){path}" for path in paths] if literal else paths
+    same = _git_ok(repo, "diff", "--quiet", commit, "HEAD", "--", *pathspecs)
+    if same == 0:
+        return UNCHANGED
+    if same != 1:
         return None
     if _git_ok(repo, "merge-base", "--is-ancestor", commit, "HEAD") == 1:
         # The paths differ because HEAD never had this commit (a piece's branch read from the base or the lead's
         # branch before the merge), not because a later commit changed them: rev-list would count 0.
         return NOT_MERGED
     try:
-        n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD", "--", *paths],
+        n = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD", "--", *pathspecs],
                            capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         n = ""
@@ -233,6 +291,41 @@ def test_files(sig: str | None) -> list[str]:
     return out
 
 
+def _names(xs: Any, n: int = 3) -> str:
+    names = [clip(x, 80) for x in xs if isinstance(x, str)] if isinstance(xs, list) else []
+    return ", ".join(names[:n]) + (f" (+{len(names) - n})" if len(names) > n else "")
+
+
+def rerun_reason(status: str, attempts: list[dict[str, Any]]) -> str:
+    """Why a completion a re-run looked at is not decided, from its attempts' metrics (oldest first), as check verify's
+    decision reads them (checks._decide): a guarded test weakened, fewer tests, [checks] changed, runs that disagree,
+    a failed check, or a pass that decided nothing (a worker's run, not every declared check)."""
+    from ...ledger import attempt_summary
+
+    summaries = [attempt_summary(UUID(int=0), "", m) for m in attempts]
+    passed = bool(summaries) and summaries[-1]["passed"]
+    guarded = [a for a in summaries if a["guard_weakened"] is True]
+    weakened = sorted({f for a in guarded for f in a["weakened_files"]})
+    fewer = sorted({c for m in attempts for c in m.get("fewer_tests_checks") or [] if isinstance(c, str)})
+    why = ([f"tests weakened: {_names(weakened)}"] if weakened else []) + (
+        [f"fewer tests in {_names(fewer)}"] if fewer else [])
+    if not why and guarded:
+        why.append("tests weakened")
+    if any(a["checks_changed"] is True for a in summaries):
+        why.append("[checks] changed")
+    if why:
+        return f"{'passed, ' if passed else ''}needs review ({'; '.join(why)})"
+    if not summaries:
+        return "no matching check attempt"
+    if status == "inconclusive":
+        return "runs disagree (inconclusive)"
+    if not passed:
+        ran = attempts[-1].get("checks")
+        failed = [k for k, v in ran.items() if v != "ok"] if isinstance(ran, dict) else []
+        return f"failed ({_names(failed)})" if failed else "failed"
+    return "passed, not decided (a lead's re-run of every declared check decides)"
+
+
 def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *, now: datetime | None = None,
                   log: bool = True, partition: str | None = None, tags: Sequence[str] | None = None,
                   repo: Path | None = None, max_chars: int | None = None) -> str:
@@ -248,8 +341,17 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     scope = Scope.of(tags)
     limits = {**LIMITS, **{k: int(v) for k, v in lg.pack.brief_limits.items() if k in LIMITS}}
     labels = lg.pack.brief_labels
-    params = scope.params(p.id, FETCH)
+    merged: list[str] = []
+    label = scope.label()
     with lg._conn() as conn:
+        if repo is not None and not scope.everything and (heads := merged_commits(repo)):
+            # The pieces whose reported commit HEAD contains: on an integration branch their records (a worker's
+            # findings, a lead's noted dead end, tagged piece:<piece>) belong to this checkout as much as its own
+            # piece's do, and the second boundary pilot's brief left them out.
+            merged = [r["piece"] for r in conn.execute(MERGED_PIECES, (p.id, heads))
+                      if f"piece:{r['piece']}" not in scope.exact]
+            scope = Scope(scope.exact + tuple(f"piece:{m}" for m in merged), scope.prefixes)
+        params = scope.params(p.id, FETCH)
         if now is None:
             now = conn.execute("SELECT now() AS t").fetchone()["t"]
         assert now is not None
@@ -261,6 +363,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         occupied = conn.execute(OCCUPIED, params).fetchall()
         verified = conn.execute(VERIFIED, params).fetchall()
         reported = conn.execute(REPORTED, params).fetchall()
+        rerun = conn.execute(RERUN, params).fetchall()
+        attempts: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        if shown := rerun[: limits["rerun"]]:
+            for r in conn.execute(RERUN_ATTEMPTS, (p.id, [x["piece"] for x in shown], [x["commit"] for x in shown])):
+                attempts.setdefault((r["piece"], r["commit"]), []).append(r["metrics"] or {})
         piece_paths: dict[str, list[str]] = {}
         if repo is not None and verified:
             for r in conn.execute(PIECE_PATHS, (p.id, [v["piece"] for v in verified[: limits["verified"]]])):
@@ -269,21 +376,28 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     marks: dict[Any, str] = {}
     if repo is not None:  # T10: computed when read, never stored; at most one section's lines, 2 s per git call
         for r in verified[: limits["verified"]]:
-            paths = piece_paths.get(r["piece"]) or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
-            if (m := validity(repo, r["commit"], paths)) is not None:
+            # the files the commit changed (recorded since the second boundary pilot), else the piece's declared
+            # paths, else the directories: a directory also holds the other pieces' files, whose merges marked every
+            # piece "changed since" in that pilot
+            files = [str(x) for x in r["files"] or [] if isinstance(x, str)] if isinstance(r["files"], list) else []
+            declared = piece_paths.get(r["piece"])
+            paths = files or declared or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
+            # Task declarations may contain glob patterns; the recorded Git paths and directory prefixes are literal.
+            if (m := validity(repo, r["commit"], paths, literal=bool(files) or not declared)) is not None:
                 marks[r["id"]] = m
         stale = []
         for r in discarded[: limits["discarded"]]:
             pl = r["payload"] or {}
             files = test_files(pl.get("signature"))
-            if files and validity(repo, pl.get("commit"), files) not in (None, *NOT_IN_HEAD):
+            if files and validity(repo, pl.get("commit"), files) not in (None, UNCHANGED, *NOT_IN_HEAD):
                 marks[r["id"]] = "test changed since"
                 stale.append(r)
         if stale:  # an approach whose failing test changed since goes to the end of its section
             discarded = [r for r in discarded if r not in stale] + stale
 
     head = [f"# benchbook brief · {p.id} · {now.astimezone(UTC):%Y-%m-%d %H:%MZ}", f"Goal: {clip(p.goal, 300)}",
-            f"Scope: {clip(scope.label(), 300)}"]
+            f"Scope: {clip(label, 300)}" + (f" + {len(merged)} piece{'' if len(merged) == 1 else 's'} merged into "
+                                             "HEAD" if merged else "")]
     if task is not None:
         t_tags = f" · tags: {clip(', '.join(task['tags']), 200)}" if task["tags"] else ""
         head.append(f'Your task {short("task", task["id"])}: "{clip(task["title"], 200)}"{t_tags}')
@@ -318,6 +432,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
         return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
                 f"verified {age(now, r['decided_at'])}, checked: {checked(r['last_oracle'], labels)}){mark(r)}")
 
+    def rerun_line(r: dict[str, Any]) -> str:
+        when = f"re-run {age(now, r['last_at'])}" if r["last_at"] else "re-run"
+        return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
+                f"{when}: {rerun_reason(r['status'], attempts.get((r['piece'], r['commit']), []))})")
+
     def reported_line(r: dict[str, Any]) -> str:
         return (f"- {clip(r['piece'] or '?', 60)} at {str(r['commit'] or '?')[:12]} ({short('claim', r['id'])}, "
                 f"reported {age(now, r['created_at'])}, checked: {checked(None, labels)})")
@@ -331,6 +450,8 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     sections = [
         section("Last verified commit per piece ({shown} of {total})", verified, verified_line, "verified",
                 "benchbook search --kind claim --status verified"),
+        *([section("Re-run, not decided ({shown} of {total})", rerun, rerun_line, "rerun",
+                   "benchbook search --kind claim --status proposed")] if rerun else []),
         section("Reported done, not re-run ({shown} of {total})", reported, reported_line, "reported",
                 "benchbook search --kind claim --status proposed"),
         section("Discarded approaches, do not repeat ({shown} of {total})", discarded, discarded_line, "discarded",

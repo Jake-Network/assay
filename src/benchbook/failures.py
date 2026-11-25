@@ -178,6 +178,35 @@ def module_tags(lg: Ledger, piece: str) -> list[str]:
     return [t for t in (rows[0]["tags"] if rows else []) if t.startswith(MOD_TAG)]
 
 
+NOTE_URI = "benchbook-note:sha256:"  # the source row of a dead end or finding an agent wrote down itself
+
+
+def note_source(lg: Ledger, text: str, title: str) -> UUID:
+    """A note an agent wrote itself (benchbook discard, benchbook finding add) as a source row keyed by its digest, so
+    the same note twice is one source. It is the evidence a noted record carries instead of a failed attempt or a
+    report."""
+    digest = hashlib.sha256(f"{lg.agent}\0{text}".encode()).hexdigest()
+    rows = lg.sql_internal("SELECT id FROM benchbook.sources WHERE project_id = %s AND uri = %s"
+                           " ORDER BY created_at LIMIT 1", (lg.project_id, NOTE_URI + digest))
+    if rows:
+        return UUID(str(rows[0]["id"]))
+    return lg.add_source(NOTE_URI + digest, title=title[:300], sha256=digest)
+
+
+def record_noted(lg: Ledger, piece: str, approach: str, why: str, commit: str | None = None) -> ClaimResult:
+    """A dead end the lead (or any agent) knows without a failed check run: `benchbook discard`. The same claim as a
+    failed attempt's, with the reason as its signature (`noted: <why>`) and the note as its evidence, so the brief
+    lists it under discarded approaches. The boundary pilot's probes asked for dead ends that lived only in prompts."""
+    sig = "noted: " + " ".join(why.split())[:300]
+    sid = note_source(lg, f"discard\0{piece}\0{approach}\0{sig}", f"dead end noted by {lg.agent}")
+    tags = [DISCARDED_TAG, PIECE_TAG + piece, APPROACH_TAG + approach, *module_tags(lg, piece)]
+    payload: dict[str, Any] = {"piece": piece, "signature": sig, "approach": approach, "noted_by": lg.agent}
+    if commit:
+        payload["commit"] = commit
+    return lg._propose_claim(CLAIM_KIND, statement(piece, sig, approach), payload=payload, tags=tags,
+                             evidence=[(f"s:{sid}", "supports")], _dedup_hash=discarded_hash(piece, sig, approach))
+
+
 def record_discarded(lg: Ledger, attempt_id: UUID, piece: str, sig: str, approach: str | None,
                      commit: str | None, paths: Sequence[str] = ()) -> ClaimResult:
     """The discarded-approach claim of a failed attempt, with the attempt linked supports. Idempotent per key.

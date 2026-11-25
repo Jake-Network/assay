@@ -82,6 +82,10 @@ class RunMetrics:
     usage_check: dict[str, Any] | None = None
     lead_report_tokens: int | None = None
     delivered_worker_reports: int | None = None
+    # Which model the workers ran on (bench.real.model_counts): subagent messages per model, and the lead's Agent
+    # calls per `model` argument. A lead can pass one, and it wins over CLAUDE_CODE_SUBAGENT_MODEL (30-C-1, 2.1.331).
+    subagent_models: dict[str, int] | None = None
+    agent_model_params: dict[str, int] | None = None
 
 
 def load_evals(path: Path) -> list[dict[str, Any]]:
