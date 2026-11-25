@@ -51,7 +51,7 @@ NOT_MERGED = "not merged into this branch"
 NOT_IN_HEAD = (NOT_IN_CHECKOUT, NOT_MERGED)  # marks that say nothing about what changed since the commit
 # A verified piece whose files are the same at HEAD. Without it the third boundary pilot's lead read an unmarked line
 # as "HEAD moved, so the verification no longer applies".
-UNCHANGED = "applies at HEAD (its files unchanged)"
+UNCHANGED = "applies at HEAD"
 _TEST_FILE = re.compile(r"([\w./-]+?)::")
 FETCH = 200  # rows read per section; the section's total counts all of them
 FILE_TAG = "file:"
