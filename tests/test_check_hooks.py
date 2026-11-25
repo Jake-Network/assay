@@ -23,6 +23,9 @@ from tests.conftest import make_project
 from tests.test_check_run import PY, SCRIPT, attempts, cli_env, git, make_checkout, wait_attempts
 
 FX = Path(__file__).parent / "fixtures" / "hooks"
+# The stages of check verify (checks.py before the package layout): none of them belongs on the Bash hook's path.
+VERIFY_STAGES = tuple(f"benchbook.checks.{m}" for m in ("verify", "rerun", "baseline", "guard", "declarations",
+                                                         "gitrepo"))
 ROOT = Path(__file__).resolve().parent.parent
 GATE_CONFIG = """project = "{project}"
 
@@ -214,8 +217,8 @@ def test_the_bash_hook_never_loads_the_database_layer(gate_repo: Path, tmp_path:
             "from benchbook.entry import main\n"
             "try:\n    main()\nexcept SystemExit as e:\n    assert e.code == 0, e.code\n"
             "heavy = [m for m in sys.modules if m.split('.')[0] in ('typer', 'click', 'psycopg', 'jsonschema', "
-            "'pydantic') or m.startswith(('benchbook.cli', 'benchbook.core.ledger', 'benchbook.db', "
-            "'benchbook.checks.verify'))]\n"
+            "'pydantic') or m.startswith(('benchbook.cli', 'benchbook.core.ledger', 'benchbook.db')) "
+            f"or m in {VERIFY_STAGES!r}]\n"
             "assert not heavy, heavy\n")
     p = subprocess.run([sys.executable, "-c", code], cwd=gate_repo, env=cli_env(tmp_path), capture_output=True,
                        text=True, timeout=60)

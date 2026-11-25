@@ -420,7 +420,7 @@ def test_loading_declarations_imports_nothing_heavy(tmp_path: Path) -> None:
     code = ("import sys; from pathlib import Path; from benchbook import config; c = config.load(Path(sys.argv[1]));"
             "assert list(c.checks) == ['unit', 'value'];"
             "print(sorted(m for m in sys.modules if m.split('.')[0] in ('psycopg', 'typer', 'jsonschema', 'pydantic')"
-            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.checks.verify'))))")
+            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.checks'))))")
     p = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, check=True)
     assert p.stdout.strip() == "[]"
 
