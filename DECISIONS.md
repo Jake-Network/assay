@@ -747,3 +747,12 @@ by hand, not a live session). Four are fixed; the fourth is not.
   mistake, and every one costs brief space. Instead two commands write them on purpose, and a code project's
   session start gives a four-line guide even with an empty ledger, since arm F's lead loads no skill and a first
   session gets no brief.
+
+## After the second boundary pilot (2026-11-25)
+
+- **"Changed since" compares files.** `check verify` records the files the commit changed since its merge-base
+  (`payload.files`, at most 200; more and only the directories are kept), and the brief compares those with HEAD
+  before the piece's declared paths and the directories. The declared paths came first before; files go first now
+  because they are what the re-run checked. With `[guard] base` pointing below the integration branch (as in the
+  benchmark) a later phase's piece also lists the earlier phases' files, which is coarser than its own changes but
+  still finer than directories.

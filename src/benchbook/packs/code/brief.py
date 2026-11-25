@@ -166,7 +166,7 @@ ORDER BY t.spec ->> 'piece', t.created_at DESC, t.id"""
 VERIFIED = f"""
 WITH {PIECES}, last AS (
   SELECT DISTINCT ON (c.payload ->> 'piece') c.payload ->> 'piece' AS piece, c.payload ->> 'commit' AS commit,
-         c.payload -> 'paths' AS paths, s.last_oracle, s.id, s.decided_at
+         c.payload -> 'paths' AS paths, c.payload -> 'files' AS files, s.last_oracle, s.id, s.decided_at
   FROM benchbook.v_claim_status s JOIN benchbook.claims c ON c.project_id = s.project_id AND c.id = s.id
   WHERE s.project_id = %(p)s AND s.kind = 'completion' AND s.status = 'verified'
     AND NOT s.evidence_invalidated AND {_COMPLETION_SCOPE}
@@ -334,7 +334,11 @@ def compile_brief(lg: Ledger, task_id: UUID | None, budget_tokens: int = 2000, *
     marks: dict[Any, str] = {}
     if repo is not None:  # T10: computed when read, never stored; at most one section's lines, 2 s per git call
         for r in verified[: limits["verified"]]:
-            paths = piece_paths.get(r["piece"]) or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
+            # the files the commit changed (recorded since the second boundary pilot), else the piece's declared
+            # paths, else the directories: a directory also holds the other pieces' files, whose merges marked every
+            # piece "changed since" in that pilot
+            files = [str(x) for x in r["files"] or [] if isinstance(x, str)] if isinstance(r["files"], list) else []
+            paths = files or piece_paths.get(r["piece"]) or [str(x) for x in r["paths"] or [] if isinstance(x, str)]
             if (m := validity(repo, r["commit"], paths)) is not None:
                 marks[r["id"]] = m
         stale = []

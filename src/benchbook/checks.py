@@ -179,6 +179,8 @@ class Verification:
     prepared: Prepared | None = None
     baseline_signature: str | None = None  # how the failing checks failed at the merge-base (T03)
     paths: list[str] = field(default_factory=list)  # directory prefixes the commit changed since the merge-base (T06)
+    # the files themselves, at most MAX_FILES (none when more): what the brief's "changed since" compares (T10)
+    files: list[str] = field(default_factory=list)
     # The failure signature of an attempt already in the ledger (a retried request finishing from the stored run):
     # its results keep only the statuses, so the signature is the recorded one.
     recorded_signature: str | None = None
@@ -340,6 +342,8 @@ def config_at(repo: Path, sha: str) -> tuple[dict[str, Any], str] | None:
 
 
 MAX_SCOPE_PATHS = 20
+# A completion's payload.files: more changed files than this and the brief compares its directory prefixes instead.
+MAX_FILES = 200
 
 
 def _parent(prefix: str) -> str:
@@ -996,13 +1000,16 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
     if b.source == "pin":
         pin = pinned(lg, piece, impl)
         moved = pin is not None and pin_changed(lg, pin, piece, repo, impl)
-    scope = path_prefixes(changed_paths(repo, b.merge_base, sha))
+    changed = changed_paths(repo, b.merge_base, sha)
+    scope = path_prefixes(changed)
+    files = changed if len(changed) <= MAX_FILES else []
     found = None if given is None else given[0]
     if receipt_id is not None and (stored := _stored_attempt(lg, receipt_id, piece, sha)) is not None:
         # A retry of a request whose attempt is already in the ledger (the result cache was not written, a later
         # step failed): finish the links and the decision from that attempt, never from a new run, which could
         # disagree with what is stored.
         v = _from_stored(stored, piece, sha, b, scope)
+        v.files = files
         sig = v.signature()
         seen = [p for p in failures.earlier(lg, piece, sig) if p.id != receipt_id] if sig else []
         rec = _record(lg, v, reported_by, report, trace_ref, found, receipt_id=receipt_id)
@@ -1037,7 +1044,7 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
             signal.signal(signum, handler)
     v = Verification(piece, sha, b, integ, results, int((time.monotonic() - t0) * 1000), _signal_name(interrupted),
                      declared=list(b.checks), environment=environment, prepared=prepared, baseline_signature=base_sig,
-                     paths=scope)
+                     paths=scope, files=files)
     sig = failure_signature(results) if interrupted is None else None
     seen = failures.earlier(lg, piece, sig) if sig else []  # before recording: this run is not its own match
     if interrupted is not None:
@@ -1189,6 +1196,8 @@ def _completion_claim(lg: Ledger, v: Verification, reporter: str, report: Report
         payload["report"] = {"sha256": report.sha256, "bytes": report.bytes}
     if v.paths:  # T06: the brief finds the claim by the directories the commit changed
         payload["paths"] = list(v.paths)
+    if v.files:  # T10: and compares these files with HEAD for "changed since"
+        payload["files"] = list(v.files)
     proposer = lg
     if lg.token is None:
         proposer = lg.as_agent(reporter)

@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- The brief's "changed since" mark compares the files a verified commit changed (recorded as the completion's
+  `payload.files`), not the directories: on an integration branch every piece shared `src/` and `tests/` with the
+  others, so in the second boundary pilot each merge marked every verified piece changed and the lead could not tell
+  the changed piece from the unchanged one. Completions recorded before keep the old comparison.
 - A lead can record what it learns itself: `benchbook discard <piece> --approach NAME --why "..."` (a dead end without
   a failed check run, listed with the discarded approaches) and `benchbook finding add "..." [--file PATH]` (an
   out-of-scope finding). In a code project a new session (not a resume) starts with a four-line guide for a lead:

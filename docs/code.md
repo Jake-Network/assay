@@ -692,8 +692,11 @@ It shows, in this order:
 The footer names `benchbook get <id>` for one record's details (at most 400 tokens).
 
 **Changed since the check.** With `--here` (and from the boundary hooks) the brief compares each verified line with
-the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are those the piece's newest task
-occupies (`piece start`), else the directories its completion recorded. A line whose paths changed ends in
+the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are the files the commit changed
+since its merge-base (`payload.files`, recorded by `check verify` when there are at most 200), else those the
+piece's newest task occupies (`piece start`), else the directories its completion recorded. Directories are too
+coarse on an integration branch: in the second boundary pilot two pieces shared `boltons/` and `tests/`, so each
+merge marked the other piece changed. A line whose paths changed ends in
 `· changed since (2 commits)` (the commits since that touch those paths); one whose commit this checkout lacks ends
 in `· commit not in this checkout`; one whose commit exists but is not in HEAD's history (a piece's branch read from
 the base, or from the lead's branch before the merge) ends in `· not merged into this branch`, since its paths

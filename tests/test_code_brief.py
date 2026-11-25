@@ -588,3 +588,36 @@ def test_rerun_section_keeps_its_limit_and_the_budget(db_url: str, code: str, re
         small = compile_brief(lg, None, budget, log=False, repo=repo, max_chars=chars)
         assert estimate_tokens(small) <= budget * 105 // 100 and (chars is None or len(small) <= chars)
         assert small.endswith(FOOTER)
+
+
+
+def _integration(tmp_path: Path, db_url: str, code: str) -> tuple[Path, Ledger, dict[str, str], str]:
+    """The second boundary pilot's shape: pieces pa and pb verified on their branches, merged into the integration
+    branch work, then a commit there that changes pa's file only; the brief as --here gives it on work."""
+    from benchbook import failures, findings
+    from benchbook.packs.code.brief import changed_scope
+    from tests.conftest import CONFIG, make_repo, piece
+
+    repo = make_repo(tmp_path / "repo", CONFIG)
+    shas = {"pa": piece(repo, "pa", {"impl.txt": "fixed\n", "src/a.py": "a = 1\n"}),
+            "pb": piece(repo, "pb", {"impl.txt": "fixed\n", "src/b.py": "b = 1\n"})}
+    lead = agent(db_url, code, "lead", "orchestrator")
+    for name, sha in shas.items():
+        _, rec = checks.verify(lead, name, sha, repo=repo, reported_by="impl")
+        assert rec.outcome is not None and rec.outcome.decision == "verified", rec.outcome
+    git(repo, "checkout", "-q", "-b", "work", "main")
+    for name in shas:
+        git(repo, "merge", "-q", "--no-ff", "-m", f"merge {name}", name)
+    (repo / "src" / "a.py").write_text("a = 2\n")
+    git(repo, "commit", "-q", "-am", "change a")
+    failures.record_noted(lead, "pb", "regex-split", "drops the acronym boundary")
+    findings.record_noted(agent(db_url, code, "impl"), "the cache keeps stale entries", [], piece="pb")
+    return repo, lead, shas, compile_brief(lead, None, 2000, log=False, tags=changed_scope(repo), repo=repo)
+
+
+def test_only_the_piece_whose_files_changed_is_marked_on_an_integration_branch(tmp_path: Path, db_url: str,
+                                                                               code: str) -> None:
+    """In the pilot both pieces' paths were src/ and tests/, so pb's merge and any later commit marked pa too."""
+    _, _, shas, out = _integration(tmp_path, db_url, code)
+    assert _line(out, f"pa at {shas['pa'][:12]}").endswith("· changed since (1 commit)")
+    assert "changed since" not in _line(out, f"pb at {shas['pb'][:12]}")
