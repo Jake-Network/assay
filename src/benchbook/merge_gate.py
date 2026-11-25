@@ -164,9 +164,10 @@ def decide(data: dict[str, Any], wait: float = WAIT) -> dict[str, Any] | None:
             session_notes.write_note(path, json.dumps(rec))
             since = int(time.time() - float(rec.get("since") or time.time()))
             return _deny(f"benchbook: held this merge once: the re-run of {piece} at {commit[:7] if commit else ref} "
-                         f"has not reported ({since} s since its report, {wait:g} s waited here). Merge after its "
-                         f"verdict line, or re-run it yourself, which decides: {_verify(piece, commit, rec)}. "
-                         "Merging again goes through without waiting.")
+                         f"has not reported ({since} s since its report, {wait:g} s waited here; a failed run is "
+                         "retried, which takes longer). Merge after its verdict line; if none comes, "
+                         f"{_verify(piece, commit, rec)} re-runs it and decides. Merging again goes through without "
+                         "waiting.")
         line, waiting = found
         _take(notes, names)
         path.unlink(missing_ok=True)
@@ -182,6 +183,7 @@ def decide(data: dict[str, Any], wait: float = WAIT) -> dict[str, Any] | None:
 
 _CLAIM = re.compile(r"\((c:[0-9a-f]+)")
 _FAILED_RUN = re.compile(r"failed run (e:[0-9a-f]+)")
+_RUNS = re.compile(r"runs (e:[0-9a-f]+), (e:[0-9a-f]+)")
 
 
 def _verify(piece: str, commit: str | None, rec: dict[str, Any]) -> str:
@@ -190,22 +192,36 @@ def _verify(piece: str, commit: str | None, rec: dict[str, Any]) -> str:
     return f"`benchbook --agent lead check verify {shlex.quote(piece)} {commit or '<sha>'}{by}`"
 
 
+def _invalidate(run: str) -> str:
+    return f"`benchbook --agent lead decide {run} invalidated --oracle human --rationale \"...\"`"
+
+
 def next_step(line: str, piece: str, commit: str | None, rec: dict[str, Any]) -> str:
     """What the lead can do about a verdict that is not clean, with the commands to run. In the third boundary
     pilot the message offered only a person's decision; the lead ran check verify without --reported-by, which
     recorded a pass and decided nothing."""
     claim = m[1] if (m := _CLAIM.search(line)) else "<claim>"
-    person = f"a person decides (benchbook decide {claim} verified|refuted --oracle human --as human)"
-    if "needs review" in line or "tests weakened" in line:
+    person = (f"a person decides (`benchbook decide {claim} verified|refuted --oracle human --as human --evidence "
+              "<attempt ids> --rationale \"...\"`; `benchbook get " + claim + "` lists the attempts)")
+    if "tests weakened or check declarations changed" in line:
         return f"a test or [checks] changed, so a re-run cannot verify it; {person}."
-    if (failed := _FAILED_RUN.search(line)) is not None:
+    if "then passed on a retry" in line and (failed := _FAILED_RUN.search(line)):
         return (f"the runs disagree. If the failure is not the piece's (a flaky test, the machine), invalidate the "
-                f"failed run and re-run it yourself, which decides: `benchbook --agent lead decide {failed[1]} "
-                f"invalidated --oracle human --rationale \"...\"`, then {_verify(piece, commit, rec)}. Otherwise "
+                f"failed run and re-run it yourself, which decides: {_invalidate(failed[1])}, then "
+                f"{_verify(piece, commit, rec)}. Otherwise {person}.")
+    if "with a different failure" in line and (runs := _RUNS.search(line)):
+        return (f"the two runs failed on different tests. If neither failure is the piece's, invalidate both "
+                f"({_invalidate(runs[1])} and {_invalidate(runs[2])}) and re-run it yourself: "
+                f"{_verify(piece, commit, rec)}. Otherwise the implementer fixes it and reports a new commit, or "
                 f"{person}.")
+    if "again on a retry" in line:
+        return f"it failed twice the same way: the implementer fixes it and reports a new commit, or {person}."
     if "re-run failed" in line:
-        return (f"the re-run failed, and again on a retry: the implementer fixes it and reports a new commit, or "
-                f"{person}.")
+        return (f"the implementer fixes it and reports a new commit. If the failure is not the piece's, invalidate "
+                f"the failed run and re-run it yourself: {_invalidate('<failed run>')}, then "
+                f"{_verify(piece, commit, rec)}. Or {person}.")
+    if "needs review" in line:
+        return f"{person}."
     return f"re-run it yourself, which decides: {_verify(piece, commit, rec)}; or {person}."
 
 

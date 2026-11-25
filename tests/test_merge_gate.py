@@ -76,7 +76,10 @@ def test_a_verdict_that_needs_review_holds_the_merge_once(setup: dict[str, Any])
 FLAKY = ("benchbook: media abc1234: re-run failed (unit:tests/test_net.py::test_timeout:Timeout), then passed on a "
          "retry (2 checks, 1.0s), tests not weakened; attempts disagree, checked: none (c:5f3bebad; failed run "
          "e:73d83ab7)")
-FAILED = ("benchbook: media abc1234: re-run failed (2 checks, 1.0s), tests not weakened, checked: none (c:5f3bebad)")
+TWICE = ("benchbook: media abc1234: re-run failed, and again on a retry (2 checks, 1.0s), tests not weakened, "
+         "checked: none (c:5f3bebad; runs e:11111111, e:22222222)")
+OTHER = TWICE.replace("on a retry (", "on a retry with a different failure (")
+FAILED = "benchbook: media abc1234: re-run failed (2 checks, 1.0s), tests not weakened, checked: none (c:5f3bebad)"
 
 
 @pytest.mark.parametrize(("line", "wanted", "unwanted"), [
@@ -84,7 +87,11 @@ FAILED = ("benchbook: media abc1234: re-run failed (2 checks, 1.0s), tests not w
     (FLAKY, ["benchbook --agent lead decide e:73d83ab7 invalidated --oracle human",
              "benchbook --agent lead check verify media {sha} --reported-by general-purpose",
              "benchbook decide c:5f3bebad verified|refuted"], []),
-    (FAILED, ["again on a retry", "reports a new commit", "benchbook decide c:5f3bebad"], ["check verify"]),
+    (TWICE, ["failed twice the same way", "reports a new commit", "benchbook decide c:5f3bebad"], ["check verify"]),
+    (OTHER, ["decide e:11111111 invalidated", "decide e:22222222 invalidated",
+             "check verify media {sha} --reported-by general-purpose"], []),
+    # a line from before the retry (a cached verdict): either way, with the commands
+    (FAILED, ["reports a new commit", "invalidated --oracle human", "check verify media {sha}"], []),
     (WEAK, ["a re-run cannot verify it", "benchbook decide c:1"], ["check verify"]),
 ])
 def test_a_held_merge_names_what_the_lead_can_run(setup: dict[str, Any], line: str, wanted: list[str],
