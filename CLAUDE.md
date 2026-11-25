@@ -1,7 +1,9 @@
 # Working on benchbook
 
-benchbook records coding-agent claims ("done", "tests pass") in a Postgres ledger and verifies them by independent
-re-run. README.md explains the product, DECISIONS.md why things are the way they are, CHANGELOG.md what changed.
+benchbook keeps a Postgres ledger beside a repository for coding agents. Its code mode records claims ("done", "tests
+pass") and verifies them by an independent re-run (`packs/code`); its experiment mode records experiments and claims
+for agent swarms and hands the lead a budgeted brief (`packs/core`, `packs/ml-research`). README.md explains the
+product, DECISIONS.md why things are the way they are, CHANGELOG.md what changed.
 
 ## Checks
 
@@ -11,6 +13,23 @@ re-run. README.md explains the product, DECISIONS.md why things are the way they
 - Before a commit: `uv run ruff check src tests bench examples scripts`, `uv run mypy src/benchbook`,
   `uv run pytest -q tests/test_docs.py`.
 - A timing- or order-sensitive test that fails once in a full run: re-run it alone before calling it a regression.
+
+## Code that is easy to misread
+
+- Hooks run on every tool call of someone else's session. They never write to stderr, exit 0, and outside a
+  benchbook project leave without touching the database. For a Bash call that is not a declared check,
+  `hook bash-result` returns within 50 ms, imports included (`tests/test_hooks.py`), so keep heavy imports off that
+  path. The one exception is the completion gate, `hook task-completed`, which exits 2 with a stderr message to keep
+  a task open.
+- The pre-rename names (`assay`, `ASSAY_*`, `.assay`, `assay-worker`, the `assay_*` MCP tools,
+  `assay:auto-captured`) are kept on purpose so installs from before the rename keep working; they are not leftovers.
+  Accept old names wherever they were persisted, write only new ones (DECISIONS.md, "Name").
+- A schema change is a new Alembic revision: `db/alembic/versions/NNNN_<name>.py` running one plain
+  `db/alembic/sql/NNNN_<name>.sql`. Migrations are forward-only; never edit a revision or SQL file that is on main.
+- Files that change together: README.md and README.ko.md; the autoresearch template in
+  `integrations/autoresearch/template/` and its packaged copy under `src/benchbook/integrations/autoresearch/`
+  (`tests/test_docs.py` compares them). A hook that reads a new field of a harness's input quotes that harness's
+  documentation for it in docs/harnesses.md.
 
 ## Changes
 
