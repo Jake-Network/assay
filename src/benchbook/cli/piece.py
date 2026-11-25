@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 if TYPE_CHECKING:
-    from .code.pieces import Started
+    from ..code.pieces import Started
 
 piece_app = typer.Typer(no_args_is_help=True, help="Pieces of coding work and the paths they occupy.")
 SHOWN = 20
@@ -31,13 +31,13 @@ def start(
 ) -> None:
     """Occupy PATHS for PIECE. Refused (exit 2) when a live piece holds the same piece or paths that overlap; run it
     again to renew the lease. --check pins the piece's checks before anyone works on it."""
-    from .cli import csv, emit, ledger
-    from .code.pieces import start as run_start
+    from ..code.pieces import start as run_start
+    from .main import csv, emit, ledger
 
     lg = ledger()
     specs = None
     if check:
-        from .checks.verify import parse_check_options
+        from ..checks.verify import parse_check_options
 
         specs = parse_check_options(check)  # a malformed --check fails before the piece is started
     s = run_start(lg, piece, paths or [], Path.cwd(), lease_seconds=lease, tags=csv(tags))
@@ -47,9 +47,9 @@ def start(
         print(f"note: {s.note}", file=sys.stderr)
     out, text = summary(s), render(s)
     if specs:
-        from .checks.verify import pin_checks
-        from .config import load
-        from .core.ids import short
+        from ..checks.verify import pin_checks
+        from ..config import load
+        from ..core.ids import short
 
         cfg = load()
         p, new = pin_checks(lg, piece, specs, cfg.guard_paths, cfg.verify.table())
@@ -66,8 +66,8 @@ def done(
 ) -> None:
     """Release PIECE's paths: its holder marks it done (or failed); a lead releasing another agent's piece cancels
     it."""
-    from .cli import emit, ledger
-    from .code.pieces import done as run_done
+    from ..code.pieces import done as run_done
+    from .main import emit, ledger
 
     t = run_done(ledger(), piece, failed, summary_text)
     emit({"ok": True, "piece": piece, "task": t.short_id, "status": t.status},
@@ -80,8 +80,8 @@ def list_(
     all_paths: Annotated[bool, typer.Option("--all-paths", help="Print every occupied path")] = False,
 ) -> None:
     """Live pieces: who holds which paths, and for how long."""
-    from .cli import csv, emit, ledger
-    from .code.pieces import held
+    from ..code.pieces import held
+    from .main import csv, emit, ledger
 
     rows = held(ledger(read_only=True), csv(tags))
     lines: list[str] = []

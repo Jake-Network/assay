@@ -85,7 +85,7 @@ def main(legacy: bool = False) -> None:
         if line := read_cache():
             print(line)
         sys.exit(0)
-    from .cli import main as cli_main
+    from .cli.main import main as cli_main
 
     cli_main()
 

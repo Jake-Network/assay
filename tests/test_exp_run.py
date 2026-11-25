@@ -14,8 +14,9 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, cli
-from benchbook.exp_run import command_line, parse_output
+from benchbook import Ledger
+from benchbook.cli import main as cli
+from benchbook.cli.exp_run import command_line, parse_output
 from benchbook.hooks import subagent as hooks
 from tests.conftest import make_project
 from tests.test_dedup_mode import notify_project  # noqa: F401 - fixture

@@ -26,8 +26,8 @@ def pieces_cmd(
 ) -> None:
     """One line per piece a commit of BASE..HEAD names in a Benchbook-Piece trailer: piece, commit (tab separated).
     The last commit carrying a piece's trailer is that piece's commit."""
-    from .cli import emit, ledger
-    from .code.pr import completion, pieces
+    from ..code.pr import completion, pieces
+    from .main import emit, ledger
 
     found, skipped = pieces(Path.cwd(), base, head)
     _warn(skipped)
@@ -56,8 +56,8 @@ def summary_cmd(
     """Print the markdown summary of BASE..HEAD's pieces: per piece its state (verified, claimed only, re-run
     disagrees, not reported), the runs of its commit, discarded approaches, open out-of-scope findings and whether
     tests changed. It starts with the marker the comment is found by."""
-    from .cli import emit, ledger
-    from .code.pr import describe, pieces, render
+    from ..code.pr import describe, pieces, render
+    from .main import emit, ledger
 
     found, skipped = pieces(Path.cwd(), base, head)
     _warn(skipped)
@@ -80,8 +80,8 @@ def comment_cmd(
 ) -> None:
     """Create or update the pull request's one benchbook summary comment (the one starting with the marker), with
     the GitHub CLI (gh, authenticated by GH_TOKEN). Extra marked comments by the same author are deleted."""
-    from .cli import die, emit
-    from .code.pr import upsert_comment
+    from ..code.pr import upsert_comment
+    from .main import die, emit
 
     try:
         body = sys.stdin.read() if str(body_file) == "-" else body_file.read_text(encoding="utf-8")

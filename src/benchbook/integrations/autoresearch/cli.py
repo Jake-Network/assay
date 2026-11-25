@@ -19,13 +19,13 @@ RegexOpt = Annotated[str | None, typer.Option("--parse-regex", help="summary lin
 
 
 def _st() -> dict[str, Any]:
-    from ...cli import STATE
+    from ...cli.main import STATE
 
     return STATE
 
 
 def _emit(data: Any, text: str) -> None:
-    from ...cli import emit
+    from ...cli.main import emit
 
     emit(data, text)
 
@@ -38,7 +38,7 @@ def _ctx(hw: str | None = None) -> Any:
 
 
 def _refused(e: Exception) -> None:
-    from ...cli import STATE, emit
+    from ...cli.main import STATE, emit
 
     data = {"ok": False, "refused": True, "error": str(e), **getattr(e, "data", {})}
     if STATE["json"]:

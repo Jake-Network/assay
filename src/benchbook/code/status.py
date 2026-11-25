@@ -51,7 +51,7 @@ def counts(lg: Ledger) -> dict[str, int]:
 
 
 def status(lg: Ledger, root: Path) -> dict[str, Any]:
-    from ..doctor import hook_health
+    from ..cli.doctor import hook_health
 
     current = counts(lg)
     h = hook_health(root)
@@ -73,7 +73,7 @@ def render(s: dict[str, Any]) -> str:
 
 
 def recording_warning(root: Path) -> str:
-    from ..doctor import hook_health
+    from ..cli.doctor import hook_health
 
     h = hook_health(root)
     reasons = []

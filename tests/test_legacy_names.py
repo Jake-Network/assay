@@ -23,7 +23,8 @@ import psycopg
 import pytest
 
 import benchbook
-from benchbook import Ledger, config, doctor
+from benchbook import Ledger, config
+from benchbook.cli import doctor
 from benchbook.core import ledger as ledger_mod
 from benchbook.core.blobs import LEGACY_BLOB_PREFIX, artifact_blob, blob_digest, is_blob_uri
 from benchbook.db import conn as dbconn

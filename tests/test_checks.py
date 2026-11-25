@@ -439,7 +439,7 @@ def test_code_pack() -> None:
 def test_verify_names_an_earlier_attempt_that_failed_the_same_way(repo: Path, vtmp: Path, verifier: Ledger) -> None:
     """check verify shows the same notice as check run, and its failed re-runs leave the same discarded-approach
     claim: one per piece, signature and approach, the second re-run added as evidence."""
-    from benchbook.check_cli import render, summary
+    from benchbook.cli.check import render, summary
 
     a = piece(repo, "bad", {"impl.txt": "almost\n"})
     v1, r1 = checks.verify(verifier, "media", a, repo=repo, reported_by="impl")
@@ -677,7 +677,7 @@ def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_p
     assert rec.relation is None and rec.discarded_id is None and not links_to(lead_lg, rec.claim_id)
     m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
     assert m["environment"] is True and m["baseline_signature"] == m["failure_signature"]
-    from benchbook.check_cli import render
+    from benchbook.cli.check import render
     assert "environment: secret fails the same way at the merge-base" in render(v, rec)
 
 

@@ -48,7 +48,7 @@ def run(
     (130 for Ctrl-C); 2 when the check did not start (no such check, no
     project, no piece, not in a git repository), with the reason on stderr and
     nothing recorded."""
-    from .checks.run import run as run_check
-    from .cli import STATE
+    from ..checks.run import run as run_check
+    from .main import STATE
 
     raise typer.Exit(run_check(name, piece, approach, project=STATE["project"], agent=STATE["agent"]))

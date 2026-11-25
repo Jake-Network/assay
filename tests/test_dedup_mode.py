@@ -13,7 +13,8 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import Ledger, cli, packs
+from benchbook import Ledger, packs
+from benchbook.cli import main as cli
 from benchbook.core import ledger as ledger_module
 from benchbook.db import conn as dbconn
 from benchbook.db import migrate as dbmigrate

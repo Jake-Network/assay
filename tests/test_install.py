@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import doctor, install
 from benchbook.checks import proposals
+from benchbook.cli import doctor, install
 
 ROOT = Path(__file__).resolve().parent.parent
 SHIM = ROOT / "integrations" / "claude-code" / "bin" / "benchbook-hook"

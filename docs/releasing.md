@@ -114,7 +114,7 @@ pre-release only when asked for one or when the project has no final release.
 
 After the first release, the install lines that still say `uv tool install --from git+https://...` can use the
 PyPI name (`uv tool install benchbook`, `uvx benchbook`): `README.md`, `README.ko.md`, `docs/autoresearch.md`,
-`integrations/autoresearch/template/README.md` and the fix line of the PATH check in `src/benchbook/doctor.py`.
+`integrations/autoresearch/template/README.md` and the fix line of the PATH check in `src/benchbook/cli/doctor.py`.
 Change them only once the package is on PyPI, or they point at nothing.
 
 ## Phase 0 exit condition

@@ -10,17 +10,17 @@ from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
-from .agent_cli import agent_app
-from .check_cli import check_app
-from .config import env
-from .core.ids import short
-from .errors import BenchbookError, Conflict, ValidationFailed
-from .finding_cli import finding_app
-from .piece_cli import piece_app
-from .pr_cli import pr_app
+from ..config import env
+from ..core.ids import short
+from ..errors import BenchbookError, Conflict, ValidationFailed
+from .agent import agent_app
+from .check import check_app
+from .finding import finding_app
+from .piece import piece_app
+from .pr import pr_app
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
+    from ..core.ledger import Ledger
 
 app = typer.Typer(add_completion=False, no_args_is_help=True,
                   help="benchbook: your agents' lab notebook. Nothing they find gets lost, repeated, "
@@ -44,7 +44,7 @@ STATE: dict[str, Any] = {"json": False, "project": None, "agent": None}
 
 def _print_version(value: bool) -> None:
     if value:
-        from . import __version__
+        from .. import __version__
 
         print(f"benchbook {__version__}")
         raise typer.Exit()
@@ -68,7 +68,7 @@ def die(msg: str, code: int = 1) -> NoReturn:
 
 
 def emit(data: Any, text: str | None = None) -> None:
-    from .core.ledger import jsonable
+    from ..core.ledger import jsonable
 
     if STATE["json"]:
         print(json.dumps(jsonable(data), ensure_ascii=False, default=str))
@@ -80,8 +80,8 @@ def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
     """Writes need a name: --agent, BENCHBOOK_AGENT or (for decide) --as. Reads that write nothing fall back to
     'human' so a person can look around without naming themselves (I1). With BENCHBOOK_TOKEN the token names the
     agent, so there is no fallback."""
-    from .config import default_agent
-    from .core.ledger import Ledger
+    from ..config import default_agent
+    from ..core.ledger import Ledger
 
     fallback = default_agent("human") if read_only else None
     name = agent or STATE["agent"] or env("AGENT") or fallback
@@ -144,8 +144,8 @@ def init(
     root = _repo_root()
     pid = project or STATE["project"] or re.sub(r"[^a-z0-9_-]+", "-", root.name.lower()).strip("-") or "benchbook"
     schema = load_json(config_schema, "--config-schema")
-    from .core.ledger import Ledger
-    from .packs import load_pack
+    from ..core.ledger import Ledger
+    from ..packs import load_pack
 
     defaults = load_pack(pack).project_defaults  # e.g. code: checks_passed (max), partitioned by piece
     if metric is None and direction is None:
@@ -153,7 +153,7 @@ def init(
     p, created = Ledger.init_project(pid, title=title, goal=goal or "", metric=metric, direction=direction,
                                      epsilon=epsilon, config_schema=schema, pack=pack,
                                      settings=dict(defaults.get("settings", {})) or None)
-    from .config import write_config
+    from ..config import write_config
 
     cfg = write_config(root, p.id)
     extra, out = "", {"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack}
@@ -169,10 +169,10 @@ def init(
 def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:
     """code pack: keep .benchbook/ out of git (info/exclude) and pin the declared checks in the ledger, so a piece
     can be verified without committing anything (T01)."""
-    from .checks.verify import pin_checks
-    from .config import exclude_local_dir, load
-    from .core.ids import short
-    from .core.ledger import Ledger
+    from ..checks.verify import pin_checks
+    from ..config import exclude_local_dir, load
+    from ..core.ids import short
+    from ..core.ledger import Ledger
 
     lines = []
     if exclude_local_dir(root):
@@ -180,7 +180,7 @@ def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False)
         lines.append("  git:    .benchbook/ added to .git/info/exclude (nothing to commit)")
     cfg = load(root)
     if cfg.path is not None and not cfg.checks:
-        from .checks.proposals import propose
+        from ..checks.proposals import propose
 
         prop = propose(root)
         if prop.checks:
@@ -251,7 +251,7 @@ def status() -> None:
     """One-screen project summary."""
     lg = ledger(read_only=True)
     if lg.pack.name == "code":
-        from .code import status as code_status
+        from ..code import status as code_status
 
         s = code_status.status(lg, _repo_root())
         return emit(s, code_status.render(s))
@@ -273,7 +273,7 @@ def status() -> None:
 @app.command()
 def statusline() -> None:
     """Print the latest cached code-project counts for a harness status line."""
-    from .code.status import read_cache
+    from ..code.status import read_cache
 
     line = read_cache(STATE["project"])
     if STATE["json"]:
@@ -292,18 +292,18 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
               "--here", help="code pack: scope by what this branch changed since its base (file:<dir>/ tags and "
                              "piece:<branch>), plus --tags")] = False) -> None:
     """Print the context brief (markdown) for this agent."""
-    from .config import load
+    from ..config import load
 
     scope = csv(tags)
     if here:
-        from .packs.code.brief import changed_scope
+        from ..packs.code.brief import changed_scope
 
         scope = [*changed_scope(_repo_root()), *scope]
     lg = ledger()
     b = lg.brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
                  tags=scope or None, repo=_repo_root() if here else None)
     if lg.pack.name == "code":
-        from .code.status import recording_warning
+        from ..code.status import recording_warning
 
         if warning := recording_warning(_repo_root()):
             b = f"{warning}\n\n{b}"
@@ -314,7 +314,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
 def get(id: str) -> None:
     """Show one record: status, how it was checked, statement, up to 5 links each way and the last 3 decisions,
     within 400 tokens. --json prints the whole record."""
-    from .core.lookup import log_lookup, render
+    from ..core.lookup import log_lookup, render
 
     lg = ledger(read_only=True)
     got = lg.get(id)
@@ -498,9 +498,9 @@ def discard(
 ) -> None:
     """Record a dead end you know without a failed check run (a lead's own, or one a worker told you): the brief
     lists it under discarded approaches, like an approach whose check failed."""
-    from .checks.failures import APPROACH, record_noted
-    from .core.ids import short
-    from .errors import ValidationFailed
+    from ..checks.failures import APPROACH, record_noted
+    from ..core.ids import short
+    from ..errors import ValidationFailed
 
     problems = []
     if not APPROACH.fullmatch(approach):
@@ -600,8 +600,8 @@ def serve(host: Annotated[str, typer.Option()] = "127.0.0.1",
           token: Annotated[str | None, typer.Option(help="required for non-loopback binds (or BENCHBOOK_SERVE_TOKEN)")]
           = None) -> None:
     """HTTP: streamable MCP at /mcp and the read-only viewer at /."""
-    from .web.app import requires_serve_token
-    from .web.app import serve as run
+    from ..web.app import requires_serve_token
+    from ..web.app import serve as run
 
     if requires_serve_token(host):
         print(f"WARNING: binding {host}. Requests need the serve token (Bearer header, cookie or ?token=); anyone "
@@ -612,7 +612,7 @@ def serve(host: Annotated[str, typer.Option()] = "127.0.0.1",
 @app.command()
 def mcp(toolset: Annotated[str, typer.Option(help="worker|orchestrator|all")] = "all") -> None:
     """stdio MCP server (Claude Code starts this)."""
-    from .mcp_server import run_stdio
+    from ..mcp_server import run_stdio
 
     run_stdio(toolset=toolset, project=STATE["project"])
 
@@ -639,15 +639,15 @@ HARNESS_HELP = "The harness running the hook: claude-code (default), codex, curs
 def hook(event: str, harness: Annotated[str | None, typer.Option(help=HARNESS_HELP)] = None) -> None:
     """Harness hook entry point. Always exits 0, except `replay`, which reports what it processed, and
     `task-completed`, which exits 2 to keep a task open (docs/claude-code.md)."""
-    from .entry import BOUNDARY_HOOK_EVENTS, CHECK_HOOK_EVENTS
-    from .hooks.subagent import main as hook_main
+    from ..entry import BOUNDARY_HOOK_EVENTS, CHECK_HOOK_EVENTS
+    from ..hooks.subagent import main as hook_main
 
     if event in CHECK_HOOK_EVENTS:
-        from .hooks.checks import main as check_hook_main
+        from ..hooks.checks import main as check_hook_main
 
         raise typer.Exit(check_hook_main(event, harness))
     if event in BOUNDARY_HOOK_EVENTS:
-        from .hooks import boundary as boundary_hooks
+        from ..hooks import boundary as boundary_hooks
 
         boundary_hooks.main(event, harness)
         raise typer.Exit(0)
@@ -661,9 +661,9 @@ def hook(event: str, harness: Annotated[str | None, typer.Option(help=HARNESS_HE
 @app.command()
 def migrate() -> None:
     """Apply schema migrations (Alembic)."""
-    from .db.conn import database_url
-    from .db.migrate import LEGACY_SCHEMA, status
-    from .db.migrate import migrate as run
+    from ..db.conn import database_url
+    from ..db.migrate import LEGACY_SCHEMA, status
+    from ..db.migrate import migrate as run
 
     url = database_url()
     renamed = {"renamed_from": LEGACY_SCHEMA} if status(url).legacy else {}  # a database from before the rename
@@ -677,7 +677,7 @@ def doctor() -> None:
     """Check the installed build, database, schema and the Claude Code connection (PATH, plugin, env, hook)."""
     import platform
 
-    from . import __version__
+    from .. import __version__
     from .doctor import Check, claude_code_checks, legacy_checks
 
     checks = [Check("benchbook build", True, __version__), *_db_checks()]
@@ -688,8 +688,8 @@ def doctor() -> None:
 
 
 def _db_checks() -> list[Any]:
-    from .db.conn import data_dir, database_url
-    from .db.migrate import LEGACY_SCHEMA, head, status
+    from ..db.conn import data_dir, database_url
+    from ..db.migrate import LEGACY_SCHEMA, head, status
     from .doctor import Check
 
     checks: list[Check] = []
@@ -735,7 +735,7 @@ def _db_checks() -> list[Any]:
         checks.append(Check("db schema", False, f"{cur} (newer than this build)",
                             "upgrade benchbook: uv tool upgrade benchbook"))
     checks.append(build_head)
-    from . import config as lc
+    from .. import config as lc
 
     cfg = lc.load()
     checks.append(Check("project config", cfg.project is not None,
@@ -758,7 +758,7 @@ def _report(checks: list[Any]) -> None:
 @db_app.command("stop")
 def db_stop() -> None:
     """Stop the local embedded Postgres (it keeps running between sessions otherwise)."""
-    from .db.conn import stop_embedded
+    from ..db.conn import stop_embedded
 
     stopped = stop_embedded()
     emit({"ok": stopped}, "stopped" if stopped else "no embedded database")
@@ -767,7 +767,7 @@ def db_stop() -> None:
 @db_app.command("url")
 def db_url() -> None:
     """Print the database URL in use."""
-    from .db.conn import database_url
+    from ..db.conn import database_url
 
     u = database_url()
     emit({"url": u}, u)
@@ -800,7 +800,7 @@ def blob_get(uri: str, output: Annotated[Path | None, typer.Option("-o", "--outp
 
 
 def _register_ar() -> None:
-    from .integrations.autoresearch.cli import ar_app
+    from ..integrations.autoresearch.cli import ar_app
 
     app.add_typer(ar_app, name="ar")
 
@@ -869,11 +869,3 @@ def main(argv: list[str] | None = None) -> None:
         if name == "Abort":
             sys.exit(1)
         raise
-
-
-if __name__ == "__main__":
-    # Run through the canonical module: under `python -m benchbook.cli` this file is __main__, and the
-    # sub-apps (benchbook ar) would otherwise read a second, empty STATE from benchbook.cli.
-    from benchbook.cli import main as _main
-
-    _main()

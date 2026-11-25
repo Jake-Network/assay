@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import config
-from .errors import BenchbookError
+from .. import config
+from ..errors import BenchbookError
 
 MARKETPLACE = "Jake-Network/benchbook"
 PLUGINS = ("benchbook@benchbook", "benchbook-mcp@benchbook")
@@ -68,14 +68,14 @@ class Plan:
 
 
 def version() -> str:
-    from . import __version__
+    from .. import __version__
 
     return str(__version__)
 
 
 def manifest(harness: str) -> dict[str, Any]:
     """The packaged hooks.json of a harness (the wheel's copy, else the repository's)."""
-    here = Path(__file__).resolve().parent
+    here = Path(__file__).resolve().parents[1]  # the benchbook package
     for p in (here / "manifests" / harness / "hooks.json", here.parents[1] / "integrations" / harness / "hooks.json"):
         if p.is_file():
             return json.loads(p.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
@@ -209,7 +209,7 @@ def _untracked(root: Path, name: str) -> tuple[bool, str]:
 def _purge_database(plan: Plan) -> None:
     """--purge: remove the embedded cluster, only when the data directory is one and its server is
     confirmed stopped. BENCHBOOK_DATA_DIR can name any directory; a directory that is not a cluster is kept."""
-    from .db.conn import data_dir, is_cluster, stop_embedded
+    from ..db.conn import data_dir, is_cluster, stop_embedded
 
     d = data_dir()
     if not d.exists() and not d.is_symlink():

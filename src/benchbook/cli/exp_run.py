@@ -21,12 +21,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
-from .checks.runner import Interrupted, RunResult, parse_summary, run_command, tail
-from .core.ids import short
+from ..checks.runner import Interrupted, RunResult, parse_summary, run_command, tail
+from ..core.ids import short
 
 if TYPE_CHECKING:
-    from .core.ledger import Ledger
-    from .core.models import ExperimentSummary
+    from ..core.ledger import Ledger
+    from ..core.models import ExperimentSummary
 
 TIMEOUT_EXIT = 124  # what timeout(1) exits with when it kills the command
 RECEIPT = "benchbook: "  # the start of every line exp run adds to stdout
@@ -64,7 +64,7 @@ def parse_output(text: str, primary: str | None = None) -> Parsed:
     tools/evaluate.py). From the object: every top-level number (or those in a "metrics" object) is a metric;
     "run_status", "invalid" (a reason, so run_status invalid) and "notes" describe the attempt, and "value" is the
     primary metric when the object does not name it. The object wins over summary lines with the same key."""
-    from .core.ledger import RUN_STATUSES
+    from ..core.ledger import RUN_STATUSES
 
     out = Parsed(metrics=parse_summary(text))
     lines = [x.strip() for x in text.replace("\r", "\n").splitlines() if x.strip()]
@@ -112,7 +112,7 @@ def _check_first(lg: Ledger, config: dict[str, Any], code_ref: str | None, seed:
     """Ask the ledger before anything runs. A refuse-mode pack stops here (exit 2) when this config, code_ref and
     seed already ran: an ok run (invalidated ones too: the unique index still counts them, DECISIONS.md) can never
     be recorded again, and a failed one is not retried without --retry-failed. A notify-mode pack runs it anyway."""
-    from .cli import STATE, emit
+    from .main import STATE, emit
 
     tried = lg.check_tried(config, code_ref)  # also validates the config, so a bad one never runs
     same = [(e, False) for e in tried.exact if e.seed == seed]
@@ -220,7 +220,7 @@ def exp_run(
 
     Without --task the experiment belongs to the one task you hold a lease on,
     if there is exactly one."""
-    from .cli import STATE, die, emit, ledger, load_json
+    from .main import STATE, die, emit, ledger, load_json
 
     line = command_line(cmd)
     if not line.strip():

@@ -11,8 +11,8 @@ agent_app = typer.Typer(no_args_is_help=True,
 
 
 def _project() -> str:
-    from . import config
-    from .cli import STATE, die
+    from .. import config
+    from .main import STATE, die
 
     project: str | None = STATE["project"] or config.load().project
     if not project:
@@ -21,7 +21,7 @@ def _project() -> str:
 
 
 def _emit(data: Any, text: str) -> None:
-    from .cli import emit
+    from .main import emit
 
     emit(data, text)
 
@@ -34,7 +34,7 @@ def add(name: str,
         rotate: Annotated[bool, typer.Option("--rotate", help="Replace the agent's token; the old one stops "
                                                               "working at once")] = False) -> None:
     """Register an agent (if new) and print its token. The token is shown this once: only its hash is stored."""
-    from .core.identity import add_agent
+    from ..core.identity import add_agent
 
     t = add_agent(_project(), name, role, model=model, rotate=rotate)
     _emit({"ok": True, "project": t.project, "agent": t.agent, "role": t.role, "rotated": t.rotated,
@@ -48,7 +48,7 @@ def add(name: str,
 @agent_app.command("list")
 def list_() -> None:
     """Agents of the project: role and whether a token is issued (never the token or its hash)."""
-    from .core.identity import list_agents
+    from ..core.identity import list_agents
 
     rows = list_agents(_project())
     _emit(rows, "\n".join(f"{r['agent']:<24} {r['role']:<13} {'token' if r['has_token'] else '-'}" for r in rows)
@@ -58,7 +58,7 @@ def list_() -> None:
 @agent_app.command("revoke")
 def revoke(name: str) -> None:
     """Remove an agent's token. Its records stay; it can no longer write over a benchbook_writer connection."""
-    from .core.identity import revoke_token
+    from ..core.identity import revoke_token
 
     had = revoke_token(_project(), name)
     _emit({"ok": True, "agent": name, "revoked": had},
