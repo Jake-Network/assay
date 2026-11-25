@@ -84,7 +84,7 @@ def main(event: str, harness: str | None = None) -> None:
         if event == "notes":
             text = session_notes.deliver(data.get("session_id")) if lead else ""
         elif event == "session-start":
-            text = session_start(data)
+            text = session_start(data, harness)
         elif event == "pre-compact":
             text = pre_compact(data)
         elif event == "agent-result":
@@ -346,7 +346,10 @@ def _brief_or_none(w: Where, event: str) -> str:
     return brief
 
 
-def lead_guide(data: dict[str, Any], w: Where) -> str:
+GUIDE_HEAD = "benchbook records this repository's checks and reports. If you hand pieces to subagents:"
+
+
+def lead_guide(data: dict[str, Any], w: Where, harness: str = "claude-code") -> str:
     """What a lead needs to know to use benchbook in a swarm, at a session's start (not a resume: it is still in the
     context) in a code project ([checks] declared). Given even when the ledger is empty: a first session's lead
     learns it nowhere else (the boundary pilot's arm F lead had no skill, and its workers reported no findings and it
@@ -362,21 +365,22 @@ def lead_guide(data: dict[str, Any], w: Where) -> str:
     heading = cfg.out_of_scope_heading
     found = (f" and to list what it noticed outside its piece under a `## {heading}` heading (recorded as findings)"
              if heading else "")
+    # the merge gate is the Claude Code plugin's (a PreToolUse hook); other harnesses only get the advice
+    waits = "; a `git merge` of a reported commit waits for it" if harness == "claude-code" else ""
     return "\n".join([
-        "benchbook records this repository's checks and reports. If you hand pieces to subagents:",
+        GUIDE_HEAD,
         f"- Ask each to end its report with `DONE <full commit sha>`{found}.",
-        "- Merge a piece after its verdict line (`benchbook: <piece> <sha>: re-run passed ...`); a `git merge` of a "
-        "reported commit waits for it.",
+        f"- Merge a piece after its verdict line (`benchbook: <piece> <sha>: re-run passed ...`){waits}.",
         "- Write down what you learn yourself: `benchbook --agent lead discard <piece> --approach NAME --why \"...\"` "
         "for a dead end, `benchbook --agent lead finding add \"...\" --file PATH` for a problem outside the pieces.",
     ])
 
 
-def session_start(data: dict[str, Any]) -> str:
+def session_start(data: dict[str, Any], harness: str = "claude-code") -> str:
     w = where(data)
     if w is None:
         return ""
-    guide = lead_guide(data, w)
+    guide = lead_guide(data, w, harness)
     try:
         brief = _brief_or_none(w, "session-start")
     except LedgerFailed as e:

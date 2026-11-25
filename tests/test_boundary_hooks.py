@@ -769,6 +769,9 @@ def test_a_code_projects_session_start_guides_the_lead_even_with_an_empty_ledger
     assert "# benchbook brief" not in text  # the ledger is empty: the guide alone
     resumed = {**fixture("session_start_startup.json", repo), "source": "resume"}
     assert not run("session-start", resumed, capsys, monkeypatch)
+    w = boundary_hooks.where(fixture("session_start_startup.json", repo))
+    assert w is not None and "waits for it" in text  # the merge gate is the Claude Code plugin's alone
+    assert "waits for it" not in boundary_hooks.lead_guide({"source": "startup"}, w, "codex")
 
 
 def test_the_leads_dead_ends_and_findings_reach_the_brief(db_url: str, code: str, env: Path,
