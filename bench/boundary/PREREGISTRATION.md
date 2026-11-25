@@ -252,3 +252,15 @@ any rerun before paying for it.
   the call streams and the log. A runs again as `try2` from the commit that adds this amendment, then C and F as
   planned, all under the same USD 10 total, which counts try1's USD 0.56. try1 is kept and reported and is not a
   completed trial. benchbook's code for F is unchanged from the first amendment of this run.
+- **2026-11-25, fourth boundary pilot.** Written before any call of this run, after the third pilot's report; the
+  owner decided to measure the fixes that report led to. Everything the second and third pilots' amendments fix holds
+  (the task, arms A, C and F in that order, one repetition each, Claude Code 2.1.332, the limits, the runner as of
+  `5931db1`), except the following. Outputs go to `boundary-pilot4-boltons-<arm>-try<k>`, under their own USD 10
+  total with the same USD 3.5 floor per arm. Arm F runs benchbook at the commit that adds this amendment (branch
+  `pilot3-fixes`), which since the third pilot adds: a verified line whose files are the same at HEAD ends in
+  `applies at HEAD`; the hook's automatic re-run records a failed run and runs every check once more, and a retry
+  that passes decides inconclusive with no discarded approach; and a merge the gate holds names the commands the lead
+  can run for that verdict (invalidating a failed run, `check verify --reported-by`). The report gives directions
+  only, set beside the three earlier pilots, with the containment scoring as a sensitivity, and for F says which of
+  the third pilot's six misses each fix was meant to remove, what F answered, and every retry and held merge, read
+  from the copied transcripts.
