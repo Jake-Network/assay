@@ -41,7 +41,13 @@ except ValueError:
     data = {}
 tag = {"SessionStart": data.get("source"), "PostToolUse": data.get("tool_name")}.get(event)
 marker = f"BB-MARKER-{event}" + (f"-{tag}" if tag else "")
-if event == "PreCompact":
+if event == "PreToolUse":  # the merge gate's two answers: a deny with a reason, or additionalContext
+    command = str((data.get("tool_input") or {}).get("command", ""))
+    out = ({"hookEventName": event, "additionalContext": "BB-MARKER-PreToolUse-context"} if "bb-allow" in command
+           else {"hookEventName": event, "permissionDecision": "deny",
+                 "permissionDecisionReason": "BB-MARKER-PreToolUse-deny"})
+    print(json.dumps({"hookSpecificOutput": out}))
+elif event == "PreCompact":
     print("In the summary, keep this exact phrase: BB-MARKER-PreCompact.")
 elif event in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": marker}}))
@@ -49,10 +55,13 @@ PY
 python3 - "$WORK" "$LOG" >"$WORK/settings.json" <<'PY'
 import json, sys
 work, log = sys.argv[1:]
-def hook(event, matcher=None):
-    h = {"hooks": [{"type": "command", "command": f'python3 "{work}/record.py" {event} "{log}"', "timeout": 10}]}
+def hook(event, matcher=None, when=None):
+    h = {"hooks": [{"type": "command", **({"if": when} if when else {}),
+                    "command": f'python3 "{work}/record.py" {event} "{log}"', "timeout": 10}]}
     return [{**({"matcher": matcher} if matcher else {}), **h}]
 print(json.dumps({"hooks": {
+    # The merge gate's entry: PreToolUse on Bash, only for git merge (the hook's if).
+    "PreToolUse": hook("PreToolUse", "Bash", "Bash(git merge *)"),
     "SessionStart": hook("SessionStart"), "PreCompact": hook("PreCompact"), "PostCompact": hook("PostCompact"),
     "UserPromptSubmit": hook("UserPromptSubmit"), "SubagentStop": hook("SubagentStop"),
     # The second PostToolUse entry is the notes hook's matcher: every tool but Bash, Agent and Task.
@@ -85,6 +94,9 @@ run 4-bash --allowedTools "Bash(echo:*)" -- "Run the shell command: echo bb-qa. 
 #    additionalContext through the notes hook's matcher. Background tasks stay on (the default).
 B="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 run 6-subagent --session-id "$B" --allowedTools "Agent,Bash(echo:*),Read" -- "Use the Agent tool once with subagent_type general-purpose and the prompt: Run the shell command: echo bb-sub. Then reply with exactly: DONE. Wait for it to report. Then use the Read tool on app.py. Then: $ASK"
+# 7. the merge gate's hook: PreToolUse with if "Bash(git merge *)" runs for the merges only, its deny reason and its
+#    additionalContext reach the model.
+run 7-merge --allowedTools "Bash(git status:*),Bash(git merge:*)" -- "Run these shell commands one at a time, each as its own Bash call: git status, then git merge --no-edit main # bb-allow, then git merge --no-edit main. Then: $ASK"
 # 5. both plugins from repeated --plugin-dir, and the MCP tool prefix of the hyphenated plugin. The MCP server is
 #    still connecting at init, so the session waits once with Bash and then names the tools it can call.
 PATH="$ROOT/.venv/bin:$PATH" run 5-plugins --max-turns 3 --plugin-dir "$ROOT/integrations/claude-code" \
@@ -154,6 +166,10 @@ rows = [
                if i.get("agent_id") or i.get("session_id") == lead6) or "none"),
     ("6. lead Read marker visible (the notes hook's matcher)",
      str("BB-MARKER-PostToolUse-Read" in answer("6-subagent"))),
+    ("7. PreToolUse ran for", "; ".join(str((i.get("tool_input") or {}).get("command")) for i in of("PreToolUse"))
+     or "none"),
+    ("7. deny reason visible", str("BB-MARKER-PreToolUse-deny" in answer("7-merge"))),
+    ("7. PreToolUse additionalContext visible", str("BB-MARKER-PreToolUse-context" in answer("7-merge"))),
     ("5. plugins loaded", ", ".join(map(str, plugins)) or "none (see 5-plugins.err)"),
     ("5. MCP tool prefixes", ", ".join(prefixes) or "none"),
 ]
