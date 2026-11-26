@@ -890,6 +890,8 @@ by hand, not a live session). Four are fixed; the fourth is not.
   leaves out a commit only when something says it is another piece's and nothing says it is this one's: it is
   another piece's reported commit (a completion whose tags and payload agree), its `Benchbook-Piece` trailer names
   another piece, or the ledger has another piece's check runs at it; and only commits that another piece's reported
-  commit in the range reaches (merged in). A commit nothing attributes stays. Merge commits are not listed, so a
-  conflict resolution made in one is not; when no own commit changed a file, the merge-base diff is recorded as
-  before. The directory scope, the weakened-test and `[checks]` checks and the brief's comparison are unchanged.
+  commit in the range reaches (merged in). A commit nothing attributes stays. A merge commit contributes the files
+  it changed itself (those that differ from every parent: a conflict resolution, an adjustment while merging); the
+  first version listed no merge at all and called that a limit, until a second review showed it hiding a stale
+  verification, which is the error this rule exists to avoid. Paths are kept as git has them (only NUL separates
+  them). When no own commit changed a file, the merge-base diff is recorded as before. The directory scope, the weakened-test and `[checks]` checks and the brief's comparison are unchanged.

@@ -124,14 +124,16 @@ def trailer_pieces(repo: Path, commits: Sequence[str], key: str = "Benchbook-Pie
 
 
 def paths_of(repo: Path, merge_base: str, commit: str, leave_out: set[str]) -> list[str]:
-    """Files changed by the commits of merge_base..commit other than merges and leave_out, newest first."""
-    commits = [c for c in _git(repo, "rev-list", "--no-merges", f"{merge_base}..{commit}").stdout.split()
-               if c not in leave_out]
+    """Files changed by the commits of merge_base..commit other than leave_out, newest first. A merge commit
+    contributes what it changed itself, the files that differ from every parent (--cc: a conflict resolution or an
+    adjustment made while merging), not what it brought in. Paths are kept as git has them: only NUL separates them,
+    so a name that starts or ends with a newline stays that name."""
+    commits = [c for c in _git(repo, "rev-list", f"{merge_base}..{commit}").stdout.split() if c not in leave_out]
     if not commits:
         return []
-    out = _git_in(repo, "".join(c + "\n" for c in commits), "log", "--no-walk=unsorted", "--format=", "--name-only",
-                  "--no-renames", "-z", "--stdin")
-    return list(dict.fromkeys(f for f in (x.strip("\n") for x in out.split("\0")) if f))
+    out = _git_in(repo, "".join(c + "\n" for c in commits), "diff-tree", "--stdin", "--root", "--no-commit-id", "-r",
+                  "--name-only", "--no-renames", "-z", "--cc")
+    return list(dict.fromkeys(f for f in out.split("\0") if f))
 
 
 def _diff_u0(repo: Path, merge_base: str, commit: str, path: str) -> str:

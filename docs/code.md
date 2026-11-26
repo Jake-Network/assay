@@ -722,8 +722,9 @@ The footer names `benchbook get <id>` for one record's details (at most 400 toke
 **Changed since the check.** With `--here` (and from the boundary hooks) the brief compares each verified line with
 the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are the files the piece's own
 commits changed since the merge-base (`payload.files`, recorded by `check verify` when there are at most 200: the
-commits of merge-base..commit other than merges, leaving out a commit merged in from another piece when it is that
-piece's reported commit, carries its trailer or has its check runs, and nothing ties it to this piece; so a piece
+commits of merge-base..commit, a merge commit counting with the files it changed itself, leaving out a commit merged
+in from another piece when it is that piece's reported commit, carries its trailer or has its check runs, and nothing
+ties it to this piece; so a piece
 started from an integration branch does not list the pieces merged there), else those the
 piece's newest task occupies (`piece start`), else the directories its completion recorded. Directories are too
 coarse on an integration branch: in the second boundary pilot two pieces shared `boltons/` and `tests/`, so each

@@ -475,6 +475,43 @@ def test_a_piece_keeps_its_own_commits_below_another_pieces_commit(repo: Path, v
     assert sorted(row["payload"]["files"]) == ["a.py", "a2.py"]
 
 
+@pytest.mark.parametrize("case", ["merge adjusts a file", "file name with newlines"])
+def test_a_piece_lists_what_its_merges_change_and_names_as_git_has_them(repo: Path, vtmp: Path, db_url: str,
+                                                                         code_project: str, case: str) -> None:
+    """Review of #22: a file the piece's merge commit changed itself (beta's shared.txt, adjusted while merging beta
+    in) is the piece's too, or a later change to it would leave the verification marked current; and a path is kept
+    byte for byte, newlines included, as the brief's comparison reads it."""
+    lead = open_as(db_url, code_project, "lead")
+
+    def git_(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    if case == "merge adjusts a file":
+        beta = piece(repo, "beta", {"shared.txt": "beta\n"})
+        checks.verify(lead, "beta", beta, repo=repo, reported_by="impl-b")
+        git_("checkout", "-q", "-b", "alpha", "main")
+        (repo / "a.py").write_text("a = 1\n")
+        git_("add", "a.py")
+        git_("commit", "-q", "-m", "alpha")
+        git_("merge", "-q", "--no-ff", "--no-commit", "beta")
+        (repo / "shared.txt").write_text("adjusted\n")
+        git_("add", "shared.txt")
+        git_("commit", "-q", "-m", "merge beta, adjusting shared.txt")
+        want = ["a.py", "shared.txt"]
+    else:
+        git_("checkout", "-q", "-b", "alpha", "main")
+        (repo / "\ntrailing.txt\n").write_text("x\n")
+        git_("add", "-A")
+        git_("commit", "-q", "-m", "an odd name")
+        want = ["\ntrailing.txt\n"]
+    head = git_("rev-parse", "HEAD")
+    git_("checkout", "-q", "main")
+    _, rec = checks.verify(lead, "alpha", head, repo=repo, reported_by="impl-a")
+    [row] = lead.sql_internal("SELECT payload FROM benchbook.claims WHERE id = %s", (rec.claim_id,))
+    assert sorted(row["payload"]["files"]) == want
+
+
 def test_the_lead_command_decides_the_claim_the_nameless_run_was_for(repo: Path, vtmp: Path, db_url: str,
                                                                      code_project: str) -> None:
     """Review of #18: two completions by one reporter for the same piece and commit; the nameless run was for the
