@@ -877,3 +877,5 @@ by hand, not a live session). Four are fixed; the fourth is not.
   per phase), a /compact that emits no `compact_boundary` with trigger `manual` stops the run instead of passing as
   a work call without a sample, and a phase's own automatic compactions are kept as `auto_compactions`, since the
   forced boundary, being the last, is the phase's sample (with `--force-compact` the delayed column stays empty).
+  A second review added: the host's `DISABLE_AUTO_COMPACT` and `DISABLE_COMPACT` are removed from a run's
+  environment, and boundaries count only the call's own session and the expected trigger.

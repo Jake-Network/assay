@@ -149,9 +149,19 @@ def own_spend(receipt: dict[str, Any], before: tuple[float, int, float, int] | N
             "session_cost_usd": cost + own_cost, "session_tokens": tokens + own_tokens}
 
 
+def boundaries(events: list[tuple[int, dict[str, Any]]], session: str, trigger: str | None = None) -> list[int]:
+    """Indexes of this session's compact_boundary events, of one trigger (auto, manual) when given."""
+    return [i for i, (_, e) in enumerate(events)
+            if (e.get("type"), e.get("subtype")) == ("system", "compact_boundary") and e.get("session_id") == session
+            and (trigger is None or (e.get("compact_metadata") or {}).get("trigger") == trigger)]
+
+
 def compile_env(arm: str, target: Path, args: argparse.Namespace) -> dict[str, str]:
     env = ledger_env(target, None)
-    for key in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "DISABLE_AUTOUPDATER"):
+    # the host's compaction settings never reach a run: DISABLE_AUTO_COMPACT and DISABLE_COMPACT would turn off what
+    # --compact-pct and --force-compact measure (code.claude.com/docs/en/env-vars)
+    for key in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "DISABLE_AUTO_COMPACT",
+                "DISABLE_COMPACT", "DISABLE_AUTOUPDATER"):
         env.pop(key, None)
     if getattr(args, "compact_pct", None) is not None:  # compact earlier than the window's default point
         env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(args.compact_pct)
@@ -233,13 +243,12 @@ class Trial:
             events = self.invoke(name, prompt, session, resume=resume)
             if self.arm == "F" and not self.batch.args.dry:
                 real._flush_hooks(real.PreparedRun(self.work, [], self.env, None, "boundary", session))
-            auto = sum((e.get("type"), e.get("subtype")) == ("system", "compact_boundary") for _, e in events)
+            auto = len(boundaries(events, session, "auto"))
             if self.batch.args.force_compact:
                 # every arm compacts once at the same point of every phase (DECISIONS.md, pilot tools); the forced
                 # boundary is then the last one, so it is the phase's sample (auto_compactions keeps the others)
                 forced = self.invoke(f"{name}-compact-cmd", "/compact", session, resume=True, compact=True)
-                if not any((e.get("type"), e.get("subtype")) == ("system", "compact_boundary")
-                           and (e.get("compact_metadata") or {}).get("trigger") == "manual" for _, e in forced):
+                if not boundaries(forced, session, "manual"):
                     raise real.BenchRunError(f"{name}-compact-cmd: /compact emitted no compact_boundary with trigger "
                                              "manual; this Claude Code does not compact on a headless /compact, so "
                                              "use --compact-pct instead")

@@ -107,6 +107,25 @@ def test_compact_pct_is_set_only_when_given(tmp_path: Path, monkeypatch: pytest.
     assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "100000"
 
 
+@pytest.mark.parametrize("flag", ["DISABLE_AUTO_COMPACT", "DISABLE_COMPACT"])
+def test_a_host_flag_cannot_turn_compaction_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
+    """Review of #21: DISABLE_AUTO_COMPACT stops automatic compaction and DISABLE_COMPACT also /compact, which would
+    make --compact-pct or --force-compact spend a paid run without a sample."""
+    monkeypatch.setenv(flag, "1")
+    args = argparse.Namespace(compact_window=100_000, compact_pct=40, model="m", dry=True)
+    assert flag not in run.compile_env("F", tmp_path, args)
+
+
+def test_boundaries_count_only_this_sessions_events_of_the_trigger() -> None:
+    """Review of #21: a manual boundary of another session must not pass as this call's /compact."""
+    def boundary(session: str, trigger: str) -> tuple[int, dict[str, object]]:
+        return 0, {"type": "system", "subtype": "compact_boundary", "session_id": session,
+                   "compact_metadata": {"trigger": trigger}}
+    events = [boundary("other", "manual"), boundary("s", "auto"), (0, {"type": "assistant", "session_id": "s"})]
+    assert run.boundaries(events, "s") == [1] and run.boundaries(events, "s", "manual") == []
+    assert run.boundaries([*events, boundary("s", "manual")], "s", "manual") == [3]
+
+
 def test_contains_counts_a_sentence_with_the_identifier_and_score_does_not() -> None:
     expected = {"verified": "split-camel", "discarded": "unit:a1b2c3", "finding": "f-race", "stale": "no",
                 "fresh": "yes"}
