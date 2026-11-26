@@ -27,7 +27,7 @@ not copy or modify autoresearch code.
 | S2 | several machines | the same `BENCHBOOK_DATABASE_URL` and `BENCHBOOK_PROJECT` everywhere (see [Several machines](multi-machine.md)) |
 | S3 | you already ran autoresearch alone | `benchbook ar import results.tsv --hw <gpu class> --agent <name>`: each row's `train.py` comes from git; `--hw` names the GPU those runs used (required: results.tsv does not say); your old keeps become candidates and get replicated |
 | S4 | macOS, MLX, Windows or AMD fork | `--hw` / `BENCHBOOK_AR_HW` when detection fails, `--cmd` for the run command, `--parse-regex` for the summary |
-| S5 | you run an autoresearch skill (pi-autoresearch, uditgoenka/autoresearch, codex-autoresearch) | `benchbook ar gate on --from <skill>` once, then `benchbook ar import --from <skill> ...` after each run; see [Autoresearch skills](#autoresearch-skills) |
+| S5 | you run an autoresearch skill (pi-autoresearch, uditgoenka/autoresearch, codex-autoresearch) | `benchbook ar gate on --from <skill>` once, then `benchbook ar import --from <skill> ...` after each run; see [Autoresearch skills](autoresearch-skills.md) |
 
 ### S1 in detail
 
@@ -51,9 +51,9 @@ export BENCHBOOK_PROJECT=autoresearch BENCHBOOK_AGENT=gpu0-$(hostname) CUDA_VISI
 cd autoresearch && benchbook ar init && claude "Read program.benchbook.md and start."
 ```
 
-Run the database either with this repository's `docker compose up -d` on one machine (restrict the port with a
-firewall to your machines) or as a managed Postgres with TLS. `.benchbook/config.toml` may be committed; the URL
-never goes into it.
+Run the database with this repository's compose file or as a managed Postgres with TLS
+([Several machines](multi-machine.md)). `ar init` writes `.gitignore` entries, so `.benchbook/config.toml` can be
+committed; the URL never goes into it.
 
 ## Comparison groups (partitions)
 
@@ -67,13 +67,9 @@ changes `TIME_BUDGET`, `EVAL_TOKENS`, `MAX_SEQ_LEN` or the evaluation gets a dif
   `nvidia-smi` that fails (three tries) is an error, not `unknown-<hostname>`.
 - Code identity: sha256 of a canonical dump of `ast.parse(train.py)` (node types and non-empty fields, no
   positions), so comments, blank lines and quote style do not matter, and the hash is the same on Python
-  3.11 to 3.13. `ast.unparse` is not used: its output differs between versions (3.12 writes f-strings with
-  other quotes), which split dedup between machines. The CLI checks both hash formats when looking for prior
-  runs. If the legacy harness hash matches an existing partition, the checkout keeps that partition and
-  its verified baseline, and the worker can claim its existing replication jobs. The ledger remembers the
-  detected partition alias. If the old Python version rendered your harness differently, run
-  `BENCHBOOK_AGENT=gpu-0 python -m benchbook ar status` once with the upgraded package installed in that original
-  interpreter to discover the alias. A file that does not parse is hashed raw (`raw-…`).
+  3.11 to 3.13. Runs recorded under the older `ast.unparse` hash still match. A partition named by that hash is
+  kept as an alias: any `ar` command run under the Python that recorded it (`python -m benchbook ar status`) finds
+  it, and the ledger remembers it for every machine. A file that does not parse is hashed raw (`raw-…`).
 - Knobs: every module-level `UPPER_CASE = value` in `train.py`, evaluated safely (`2**19` → 524288; anything
   else is kept as an expression). `H100_BF16_PEAK_FLOPS` is ignored in knob changes (`knob_ignore`).
 - Parent: the committed `train.py` one commit back (or `HEAD` when you run uncommitted changes). The run is
@@ -139,90 +135,12 @@ or human; each change is audited in `settings_events`):
 | `outcome_baseline` | `verified` | `improved` means better than the verified best (the raw best before any verification); such a first run is a candidate for replication |
 | `time_budget_s` | `TIME_BUDGET` in `prepare.py`, else 300 | a run whose `training_seconds` exceeds it by more than `time_budget_slack_s` (30), or whose wall clock exceeds it by more than `time_budget_overhead_s` (240, startup and evaluation), is recorded `invalid`; 0 turns the check off |
 
-## Autoresearch skills
-
-Most autoresearch users now run the loop through a skill for their agent rather than through upstream's
-`program.md`. benchbook does not replace the skill's loop. It reads the log the skill already writes and records
-each run as an experiment, and the gate applies to those runs as to runs started with `benchbook ar run`:
-
-- **The gate is the one described above.** `benchbook ar gate on` does not add a mechanism: it makes sure the
-  project uses the verified best as the baseline (`outcome_baseline = verified`), that the referee schedules
-  `replicates` re-runs for each candidate, and that the ledger's rerun rule needs `rerun_min_seeds` runs from
-  `rerun_min_authors` authors. `benchbook ar init` already sets these; `gate on` restores them when they were
-  lowered and creates the project when a skill's checkout has none (without `program.benchbook.md`: the skill's
-  own loop stays).
-- **An imported run is a first run.** It is recorded with replication number 0, whoever imports it. A keep that
-  beats the verified best becomes a candidate, and other agents re-run its `train.py` with
-  `benchbook ar replicate --auto` before it can be verified. A skill that re-runs its own code does not add
-  replications: the ledger already holds a first run of that code, so the second record is a duplicate.
-- **Statuses map onto the existing ones.** A measured run is `ok`, a crash or an unparseable metric is
-  `error`, and a run that the skill measured but must not count (a failed guard or check) is `invalid`. The
-  ledger computes the outcome (`improved`, `no_change`, `worse`, `failed`) against the verified best, as for
-  any run; the skill's own word is kept in `trace_ref.status` and the notes.
-- **Code.** `train.py` comes from the commit the log names. pi-autoresearch and uditgoenka/autoresearch revert a
-  discarded change without committing it, so their discards and crashes have no code: they are recorded with
-  their value and description (others see the approach was tried) but as `invalid`, so a value nobody can re-run
-  never becomes a candidate or the best that later runs are compared with. codex-autoresearch commits every trial
-  before measuring it, so all its runs have code.
-- **Evaluator.** Each run's partition is read from `prepare.py` at its commit, so the evaluator version is part
-  of the run's identity (dedup key and comparison group) next to its `code_ref`, and is kept in
-  `trace_ref.evaluator`.
-- **Time budget.** `check_budget` runs on imported runs too: a run whose logged `training_seconds` exceeds the
-  budget by more than the slack is `invalid`. No skill logs the wall clock, so only reported training time is
-  checked; `gate on` prints whether the check is on (`time_budget_s` 0 turns it off).
-- **Idempotent.** Every record has a key from its own fields (pi: run number, timestamp, commit, metric, status;
-  uditgoenka: iteration, timestamp, commit, metric, status; codex: run id and sequence number). Importing the same
-  log again, or another agent importing it, adds nothing (for the same `--hw`). `--hw` is required, as for results.tsv.
-- Rows that measure another metric (a pi segment started for something else, a codex run with another metric
-  name or direction) are skipped and counted; `--metric NAME` names the project's metric when the log calls it
-  differently. An import is refused while the importing agent holds a replication task (the run would be
-  recorded as that task's result).
-
-The sample logs in `tests/fixtures/autoresearch/skills/` name the upstream commit each format was read from.
-
-### pi-autoresearch
-
-[davebcn87/pi-autoresearch](https://github.com/davebcn87/pi-autoresearch) (an extension for the pi agent) appends
-every `log_experiment` to `.auto/log.jsonl` (older sessions: `autoresearch.jsonl`). Statuses: `keep` → ok,
-`discard` → invalid (reverted without a commit, so no code), `crash` → error, `checks_failed` → invalid.
-
-```bash
-benchbook ar gate on --from pi-autoresearch      # once; add program.benchbook.pi-autoresearch.md to .auto/prompt.md
-benchbook ar import --from pi-autoresearch .auto/log.jsonl --hw h100-80gb
-```
-
-### uditgoenka/autoresearch
-
-[uditgoenka/autoresearch](https://github.com/uditgoenka/autoresearch) (`/autoresearch` for Claude Code and other
-agents) appends one row per iteration to a results TSV in `autoresearch/loop-<YYMMDD>-<HHMM>/`. Statuses:
-`baseline`, `keep`, `keep (reworked)` → ok; `discard` → invalid (reverted, the row names no commit);
-`crash`, `metric-error` → error; `no-op`, `hook-blocked` and fork-and-flush summary
-rows (`fork-<k>`, `fork-select`) are not runs and are skipped. Only the loop's TSV is accepted (other
-subcommands write TSVs with other columns). The TSV records the metric's direction but not its name.
-
-```bash
-benchbook ar gate on --from uditgoenka           # once; add program.benchbook.uditgoenka.md to CLAUDE.md
-benchbook ar import --from uditgoenka autoresearch/loop-261121-0930/ --hw h100-80gb
-```
-
-### codex-autoresearch
-
-[leo-lilinxiao/codex-autoresearch](https://github.com/leo-lilinxiao/codex-autoresearch) (a Codex skill) keeps
-`autoresearch-results/run.json` (metric name and direction) and `autoresearch-results/events.jsonl` (schema 2:
-a baseline event, then one iteration event per trial). Outcomes: `keep` → ok, `discard` → ok (invalid when the
-guard failed), `crash` → error. Other events (stopped, resumed, blocked, complete, error) are not runs.
-
-```bash
-benchbook ar gate on --from codex-autoresearch   # once; add program.benchbook.codex-autoresearch.md to AGENTS.md
-benchbook ar import --from codex-autoresearch autoresearch-results --hw h100-80gb
-```
-
 ## Cost
 
 Replication costs GPU time: by default 10 minutes (2 × 5) per candidate, plus 10 minutes of calibration per
 partition. Control it with `replicates` and `replicate_max_queue`; T7 cancels replications that can no longer
-win. `benchbook ar status` and the viewer always show the share of GPU minutes spent on replication, and the
-launch experiment reports it.
+win. `benchbook ar status` and the viewer always show the share of GPU minutes spent on replication; the
+pre-registered launch experiment will report it.
 
 ## Known limits
 
@@ -234,9 +152,10 @@ launch experiment reports it.
 
 ## Trust model
 
-Anyone who can connect to the database can write to it: share it only with collaborators you trust. benchbook
-has no accounts or authentication. Replication limits the damage of a fabricated or lucky value: a single run
-never becomes the shared baseline, and suspicious values are flagged.
+With the owner's URL, anyone who connects can write. Give machines the writer login and per-agent tokens
+([Several machines](multi-machine.md#per-agent-tokens)) so that every write is bound to its agent. A token holder can
+still record a made-up value under its own name; replication limits the damage: a single run never becomes the
+shared baseline, and suspicious values are flagged.
 
 ## Viewer
 
@@ -255,13 +174,6 @@ root, and the whole tree), a knob history table, and for each run the `train.py`
 
 ## FAQ
 
-**Is this autoresearch-at-home?** No. autoresearch-at-home (as of its last commit, 2026-03-12) coordinates through a hosted key-value service
-(Ensue, `ENSUE_API_KEY`), blocks claims whose description embedding is ≥ 0.92 similar, keeps a best per VRAM
-tier and accepts a new global best after sanity checks (val_bpb ≥ 0.5, at most 0.1 better at once, re-read
-before write). benchbook is self-hosted, compares exact normalised code and declared knob changes instead of
-embeddings, groups by GPU model and evaluation harness, and only promotes a result after other agents
-replicate it.
-
 **Does an agent wait for verification?** A KEEP lets the agent build on its local result immediately. `sync`
 moves it to the verified best later if the candidate is refuted or a better result is verified.
 
@@ -278,7 +190,7 @@ recorded and the intent expires after its lease. Give the command a long tool ti
 background (`program.benchbook.md` says so).
 
 **What if an agent runs `uv run train.py` directly?** That run is invisible to the ledger. `program.benchbook.md`
-forbids it; a PATH shim that redirects it to `benchbook ar run` is planned (`ar init --shim`).
+forbids it; nothing redirects it to `benchbook ar run`.
 
 **One agent alone?** It works, but nothing gets verified: calibration and replication need agents other than
 the original runner.
