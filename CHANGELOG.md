@@ -59,7 +59,7 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
 - `benchbook get <id>` prints at most 400 tokens (status, `checked:` label, links, last decisions); lookups go to
   `lookups.jsonl`. `benchbook task claim <id>` claims one task.
 - `benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--no-cli] [--dry-run]` (the CLI from PyPI for
-  a release, from git for a development build) and `benchbook uninstall [--purge] [--dry-run]`; uninstall keeps `.benchbook/` when git cannot say whether it is tracked, and `--purge` removes only a
+  a release, from the git commit a development build was installed from, or left as it is when that is unknown) and `benchbook uninstall [--purge] [--dry-run]`; uninstall keeps `.benchbook/` when git cannot say whether it is tracked, and `--purge` removes only a
   cluster `benchbook db stop` confirmed stopped.
 - `benchbook mcp` (stdio) and `benchbook serve` (HTTP at `/mcp`, a token for non-loopback binds) with worker and
   orchestrator tool sets and `benchbook://schema`; it starts before the project is initialized, and a worktree finds the
@@ -96,7 +96,8 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
   piece's paths.
 - Out-of-scope findings are recorded from an implementer's report (`[report] out_of_scope_heading` or a `범위 밖:` line),
   from the reports of the subagent types in `[report] agents`, and by `benchbook finding add "..." [--file PATH]`;
-  `finding accept <claim> --issue URL` accepts one, `decide <claim> refuted` rejects it.
+  `finding accept <claim> --issue URL --oracle human --as human` accepts one, and
+  `decide <claim> refuted --oracle human --rationale "..." --as human` rejects it.
 - docs/code.md has the queries for record coverage (`observed.jsonl`) and the false completion rate.
 
 ### Hooks and plugins
@@ -139,6 +140,8 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
   request, with a shared ledger or a ledger of that run only (the head as `pr-<number>`), with the run's URL in
   `trace_ref`, and keeps one summary comment; fork and Dependabot pull requests get a notice and pass. `benchbook pr
   pieces [--claims]`, `pr summary` (both `--whole-as NAME`) and `pr comment` do the same by hand.
+- The PR summary's notes on the states and `check verify --help` say that a weakened test or a changed `[checks]`
+  sends a piece to a person; a commit that only adds tests does not.
 
 ### Experiment swarms and autoresearch
 

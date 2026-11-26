@@ -152,10 +152,12 @@ pre-registered launch experiment will report it.
 
 ## Trust model
 
-With the owner's URL, anyone who connects can write. Give machines the writer login and per-agent tokens
-([Several machines](multi-machine.md#per-agent-tokens)) so that every write is bound to its agent. A token holder can
-still record a made-up value under its own name; replication limits the damage: a single run never becomes the
-shared baseline, and suspicious values are flagged.
+With the owner's URL, anyone who connects can write. `benchbook ar` does not support the writer login and
+per-agent tokens ([Several machines](multi-machine.md#per-agent-tokens)) yet: `ar init` creates the project, which
+the writer login may not, agents are named by `BENCHBOOK_AGENT` rather than by a token, and the referee writes under
+its own name, which a token connection refuses. Keep the database on a network only the GPU machines reach.
+Replication limits what a made-up value can do: a single run never becomes the shared baseline, and suspicious
+values are flagged.
 
 ## Viewer
 

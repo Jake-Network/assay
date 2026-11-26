@@ -48,7 +48,7 @@ def verify(
 
     The verifier is --agent or BENCHBOOK_AGENT (or BENCHBOOK_TOKEN's agent), else verifier@<host>; it must differ
     from --reported-by. With lead authority (orchestrator or human role) verify also decides: verified, inconclusive,
-    or nothing when a guarded path or [checks] changed (docs/code.md)."""
+    or nothing when the commit weakened a test or changed \\[checks] (docs/code.md)."""
     from ..checks.verify import default_verifier
     from ..checks.verify import verify as run_verify
     from ..config import env

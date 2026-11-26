@@ -7,10 +7,13 @@ gate applies to those runs as to runs started with `benchbook ar run`:
 
 - **The gate is the referee's ([autoresearch.md](autoresearch.md#the-referee)).** `benchbook ar gate on` adds no
   mechanism: it makes sure the project uses the verified best as the baseline (`outcome_baseline = verified`), that
-  the referee schedules `replicates` re-runs for each candidate, and that the ledger's rerun rule needs `rerun_min_seeds` runs from
-  `rerun_min_authors` authors. `benchbook ar init` already sets these; `gate on` restores them when they were
-  lowered and creates the project when a skill's checkout has none (without `program.benchbook.md`: the skill's
-  own loop stays).
+  the referee schedules `replicates` re-runs for each candidate, and that the ledger's rerun rule needs
+  `rerun_min_seeds` runs from `rerun_min_authors` authors. `benchbook ar init` already sets these; `gate on` sets a
+  value that is missing or below what the gate needs (`replicates` at least 1, `rerun_min_authors` at least 2,
+  `rerun_min_seeds` at least 2) and keeps stricter ones. A candidate can be verified only when `replicates + 1`
+  reaches `rerun_min_seeds`: with `replicates = 1` and `rerun_min_seeds = 3` nothing is, so set `replicates` to at
+  least `rerun_min_seeds - 1`. `gate on` also creates the project when a skill's checkout has none (without
+  `program.benchbook.md`: the skill's own loop stays).
 - **An imported run is a first run.** It is recorded with replication number 0, whoever imports it. A keep that
   beats the verified best becomes a candidate, and other agents re-run its `train.py` with
   `benchbook ar replicate --auto` before it can be verified. A skill that re-runs its own code does not add

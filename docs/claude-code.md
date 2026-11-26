@@ -28,8 +28,8 @@ benchbook install --no-cli          # the marketplace and the hook plugin; --mcp
 ```
 
 `benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--no-cli] [--dry-run]` installs the CLI at its
-own version (`uv tool install benchbook==<version>` for a release; a development build installs from the git
-repository), adds the `Jake-Network/benchbook` marketplace and installs the hook plugin `benchbook@benchbook`.
+own version (`uv tool install benchbook==<version>` for a release; a development build from the git repository and
+commit it was installed from, and left as it is when that source is unknown, such as a local checkout), adds the `Jake-Network/benchbook` marketplace and installs the hook plugin `benchbook@benchbook`.
 `--mcp` adds `benchbook-mcp@benchbook` and `--dry-run` prints the steps. Without a `claude` command it prints the
 plugin steps for you to run. For `codex`, `cursor` and `gemini` it merges that harness's packaged manifest into the
 user-level file instead ([harnesses](harnesses.md)).
@@ -193,6 +193,10 @@ quarantined with the `.invalid` suffix. An entry without a recorded capture deci
 `BENCHBOOK_HOOK_AGENTS` does not cover also goes to `dead/`; `BENCHBOOK_HOOK_AGENTS=<the original list> benchbook hook
 replay` captures it. After an outage or a fix, `benchbook hook replay` retries pending and dead reports once in the
 foreground using the same database settings. See `~/.local/state/benchbook/hook.log` for capture and retry status.
+
+Reports queued by a build from before the per-target spool folders sit at the root of the spool directory, where
+`hook replay` does not look. To record one, run `python -m benchbook.hooks /path/to/entry.json` with the Python
+environment benchbook is installed in and the original session's project and database settings.
 
 When there are dead or overdue spool entries or recent hook failures, the code brief opens with a recording warning
 and the replay command (docs/code-brief.md, "The brief").

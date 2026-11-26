@@ -56,7 +56,9 @@ login inside a read-only transaction with a statement filter.
 In the setup above every machine holds the owner's URL and names itself with `BENCHBOOK_AGENT`: the name is
 self-declared, so an agent can write as the lead or as a second "independent" replicator. To have the database
 check names, give machines the `benchbook_writer` login and one token per agent. Enforcement applies only to
-connections made as the writer login; the owner's URL and local mode are not checked.
+connections made as the writer login; the owner's URL and local mode are not checked. Tokens work with the SDK, the
+CLI, the MCP server and the hooks; `benchbook ar` does not support them yet
+([autoresearch](autoresearch.md#trust-model)).
 
 **1. The writer login (operator, once).** `benchbook migrate` creates the cluster-wide role `benchbook_writer` with
 LOGIN and no password, so under password authentication nobody can use it yet. Either give it a password:

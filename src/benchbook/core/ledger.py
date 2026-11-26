@@ -1167,8 +1167,8 @@ class Ledger:
         (min_authors counts the implementer), that ran every declared check (metrics.checks_declared: a --checks run
         of some is partial) and passed them all, with guard_weakened and checks_changed false (T04: tests only
         added do not count; an attempt from before guard_weakened is read by guard_touched).
-        And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, touched a
-        guarded path or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
+        And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, weakened a
+        test or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
         that disagree are a person's call."""
         human = "a person decides with oracle human (benchbook decide CLAIM verified --oracle human --as human)"
         info = self._completion(conn, claim_id)

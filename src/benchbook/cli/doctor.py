@@ -403,8 +403,12 @@ def check_hook_cli() -> Check | None:
     if not found:
         return None
     lines = [x for p in found for x in p.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
-    return Check("hook cli", False, f"{len(lines)} hook run(s) found no benchbook command on PATH ({found[0]}); "
-                                    "nothing was recorded for them",
+    detail = f"{len(lines)} hook run(s) found no benchbook command on PATH ({found[0]}); nothing was recorded for them"
+    if (cli := shutil.which("benchbook")) is not None:
+        # The CLI is here now: what is left is the record, or a PATH the harness does not share with this shell.
+        return Check("hook cli", False, f"{detail}; benchbook is on this shell's PATH now ({cli})",
+                     f"start Claude Code from a shell where `command -v benchbook` finds it, then remove {found[0]}")
+    return Check("hook cli", False, detail,
                  "uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook "
                  f"(then remove {found[0]})")
 
