@@ -4,26 +4,48 @@ Checks that need a real Claude Code session, another harness, a GPU or paid mode
 `scripts/qa_first_experiment.sh` (scenario 1), `tests/test_scenarios.py` (scenario 3) and the hooks with stored inputs
 (`tests/fixtures/hooks/`). Anything marked paid needs the owner's approval (CLAUDE.md, "Paid runs").
 
-Setup, in a scratch repository (`git init` and one commit): install as in
-[docs/claude-code.md](docs/claude-code.md#install) with `benchbook install --no-cli --mcp`, or from a checkout with
-`claude --plugin-dir integrations/claude-code --plugin-dir integrations/claude-code-mcp`.
+Setup: install as in [docs/claude-code.md](docs/claude-code.md#install) (`benchbook install --no-cli --mcp`), or
+run a checkout's plugins with `claude --plugin-dir /abs/path/to/benchbook/integrations/claude-code --plugin-dir
+/abs/path/to/benchbook/integrations/claude-code-mcp` (absolute paths: the session starts in the scratch repository).
+`--plugin-dir` installs nothing, so `benchbook doctor`'s `claude code plugin` line fails there; check that line only
+with an installed plugin.
 
 ## Code-mode session
 
-Run `benchbook init` (the code pack; accept the proposed checks) and `benchbook piece start <name>`, then in Claude
-Code:
+A scratch repository with one non-JUnit check, a piece and a worktree for its branch:
 
-- An implementer subagent commits and ends its report with `DONE <sha>`: the "re-running" line and then the verdict
+```bash
+mkdir -p /tmp/bb-qa && cd /tmp/bb-qa && git init -q -b main
+printf 'def f():\n    return 1\n' > app.py
+printf 'test:\n\tpython3 -c "import app; assert app.f() == 1"\n' > Makefile
+git add app.py Makefile && git commit -qm init
+benchbook init --yes                                    # declares check unit = make test; .benchbook/ stays out of git
+benchbook --agent lead piece start qa-worker --paths app.py
+git worktree add -q ../bb-qa-worker -b qa-worker
+```
+
+Then:
+
+- **Completion gate.** Start a second Claude Code session in `../bb-qa-worker` and, before any passing run exists, mark
+  a task completed: it is held (exit 2) and the message names `benchbook check run unit --piece qa-worker`. Run that
+  command there and mark the task completed again: it goes through.
+- **Re-run and verdict.** In a session in `/tmp/bb-qa`, have an implementer subagent change `app.py` in
+  `../bb-qa-worker`, commit, and end its report with `DONE <full sha>`: the "re-running" line and then the verdict
   each arrive once.
-- The lead's `git merge` of that commit before the verdict is held once with the hold message; after a clean verdict
-  it goes through.
-- `TaskUpdate` to completed on the piece's branch is held until `benchbook check run NAME` passes at HEAD.
-- A declared check run in Bash shows in `observed.jsonl` (kind `direct`) and as an attempt with `via = bash-hook`.
-- `benchbook doctor` passes. With `benchbook` removed from PATH, a hook run makes `hook cli` fail.
+- **Merge gate, verdict in time.** Right after that report the lead runs `git merge qa-worker`: the re-run passes
+  within 30 s, so the merge goes through with the verdict as context.
+- **Merge gate, verdict late.** A second commit adds `import time; time.sleep(45)` at the top of `app.py` and is
+  reported the same way. The lead's first `git merge qa-worker` is denied once with the wait as the reason; the next
+  one goes through.
+- **Bash check.** `make test` run in Bash shows in `observed.jsonl` (kind `direct`) and as an attempt with
+  `via = bash-hook`.
+- **Doctor.** `benchbook doctor` passes (with an installed plugin). With `benchbook` removed from PATH, a hook run
+  makes `hook cli` fail.
 
 ## Scenario 2: `/benchbook-lead` runs circle packing for two rounds
 
-1. Copy `examples/circle-packing/{evaluator.py,packing.py,seed_program.py}` into the scratch repo.
+1. In a new scratch repository (not the code-mode one, whose project `init` would reuse), copy
+   `examples/circle-packing/{evaluator.py,packing.py,seed_program.py}` into it.
 2. `benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles in the unit square." --metric sum_radii --direction max`
 3. In another terminal: `benchbook serve`, open http://127.0.0.1:7466.
 4. In Claude Code: `/benchbook-mcp:benchbook-lead Maximize sum_radii for 26 circles; evaluate with python evaluator.py <program.py>; 2 rounds, 4 workers`
@@ -60,7 +82,9 @@ column; the fixture list is there too.
 ## Other harnesses
 
 For Codex, Cursor and Gemini CLI: `benchbook install --no-cli --harness <name> --dry-run`, then without
-`--dry-run`; one declared check run in the harness is recorded, and `benchbook doctor` shows `harness hook input`.
+`--dry-run`, and `benchbook doctor` shows `harness hook input`. In Cursor and Gemini CLI one declared check run in
+the shell is recorded. In Codex, trust the benchbook hooks in `/hooks` first; a raw run through `exec_command` carries
+no exit code and is observed as `unrecordable`, so check the ledger with `benchbook check run NAME`.
 `benchbook uninstall --dry-run` lists the manifests it would rewrite without benchbook's entries. For OpenCode and Pi,
 install the extension as its README says (`integrations/opencode/`, `integrations/pi/`) and check that the first
 model request carries the brief.
@@ -76,13 +100,14 @@ With the `assay@assay` plugin, `.assay/` and `ASSAY_*` variables in place, `benc
 ```bash
 uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5                      # previews only
 uv run python -m bench.run --model sonnet --runs 3 --max-budget-usd 5 --execute --claude-version <X.Y.Z>
-uv run python -m bench.analyze_cost bench/out/<run>     # writes bench/out/<run>/cost-breakdown.md
+uv run python -m bench.analyze_cost bench/out/<batch>   # writes bench/out/<batch>/cost-breakdown.md
 ```
 
 `--claude-version` (in `bench.run`, `bench.boundary.run` and `bench.code.run`) stops a run before its first paid call
 when `claude --version` differs; without it `--execute` only warns. The installed CLI updates itself, so also pass
-`--claude-bin ~/.local/share/claude/versions/<X.Y.Z>` and follow bench/CLAUDE.md. Each run's `report.md` is in its
-output directory. The compaction options of `bench.boundary.run` are in its `--help` and
+`--claude-bin ~/.local/share/claude/versions/<X.Y.Z>` and follow bench/CLAUDE.md. `--runs 3` makes three runs of
+each of A, B and C: nine runs at up to USD 5 each, USD 45 for the batch. The batch's `report.md` is in
+`bench/out/<batch>/`. The compaction options of `bench.boundary.run` are in its `--help` and
 [its preregistration](bench/boundary/PREREGISTRATION.md).
 
 Release gate: C has zero lost results, a lower duplicate ratio and a lower peak lead context than A; report also
