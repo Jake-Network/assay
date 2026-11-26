@@ -95,7 +95,7 @@ steps 4 and 5 depend on the rename in step 3.
 ## Every release
 
 - [ ] `main` is green in CI, `smoke` included on both systems.
-- [ ] `CHANGELOG.md`: the `Unreleased` headings carry the version and the date.
+- [ ] `CHANGELOG.md`: the `Unreleased` heading carries the version and the date.
 - [ ] `uv build --no-sources && bash scripts/smoke_wheel.sh` passes locally.
 - [ ] **Owner confirms**, then tag the commit CI ran on and push only that tag:
 
