@@ -308,3 +308,28 @@ FROM done d LEFT JOIN touched t USING (id)
 ```bash
 benchbook sql "$(cat false-completion.sql)"
 ```
+
+## Sections on other pages
+
+A link to one of this page's former sections lands here; follow it to where the section is now.
+
+- <a id="path-occupancy"></a>[Path occupancy](code-pieces.md#path-occupancy)
+- <a id="what-is-recorded"></a>[What is recorded](code-verify.md#what-is-recorded)
+- <a id="checks-pinned-in-the-ledger"></a>[Checks pinned in the ledger](code-verify.md#checks-pinned-in-the-ledger)
+- <a id="the-verification-worktree"></a>[The verification worktree](code-verify.md#the-verification-worktree)
+- <a id="environment-failures"></a>[Environment failures](code-verify.md#environment-failures)
+- <a id="added-tests-and-weakened-tests"></a>[Added tests and weakened tests](code-verify.md#added-tests-and-weakened-tests)
+- <a id="failure-signatures"></a>[Failure signatures](code-verify.md#failure-signatures)
+- <a id="seen-before"></a>[Seen before](code-verify.md#seen-before)
+- <a id="discarded-approaches"></a>[Discarded approaches](code-verify.md#discarded-approaches)
+- <a id="the-brief"></a>[The brief](code-brief.md#the-brief)
+- <a id="reads-that-changed-a-plan"></a>[Reads that changed a plan](code-brief.md#reads-that-changed-a-plan)
+- <a id="ci-evidence-and-the-pr-summary"></a>[CI evidence and the PR summary](code-ci.md#ci-evidence-and-the-pr-summary)
+- <a id="out-of-scope-findings"></a>[Out-of-scope findings](code-findings.md#out-of-scope-findings)
+- <a id="which-reports-are-read"></a>[Which reports are read](code-findings.md#which-reports-are-read)
+- <a id="what-counts-as-a-finding"></a>[What counts as a finding](code-findings.md#what-counts-as-a-finding)
+- <a id="what-is-recorded-1"></a>[What is recorded](code-findings.md#what-is-recorded)
+- <a id="deciding"></a>[Deciding](code-findings.md#deciding)
+- <a id="reading-open-findings"></a>[Reading open findings](code-findings.md#reading-open-findings)
+- <a id="the-implementers-runs-benchbook-check-run"></a>[The implementer's runs: `benchbook check run`](code-verify.md#the-implementers-runs-benchbook-check-run)
+- <a id="record-coverage"></a>[Record coverage](code-brief.md#record-coverage)
