@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shlex
 import signal
 import socket
 import time
@@ -636,6 +637,26 @@ def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:
     rec.discarded_id, rec.discarded_new = c.id, c.duplicate_of is None
 
 
+def _next_step(lg: Ledger, v: Verification, rec: Recorded, info: dict[str, Any], human: str) -> str:
+    """What decides a completion that a run without lead authority recorded: the same re-run as the lead when that
+    run would decide verified, a person when a re-run cannot (weakened tests, or the lead is an implementer), and
+    nothing more after a failed or partial run. Not under a token: it names one agent, which --agent lead would
+    contradict. A re-run, not decide --oracle rerun on the stored attempts, which takes two steps (DECISIONS.md)."""
+    if lg.token is not None or not rec.reported_by:
+        return ""
+    attempts = info["attempts"]
+    if any(a["guard_weakened"] is True or a["checks_changed"] is True for a in attempts) \
+            or "lead" in info["implementers"]:
+        return f". A person decides it: {human}"
+    mine = next((a for a in attempts if a["id"] == rec.experiment_id), None)
+    if (mine is None or not mine["complete"] or info["status"] not in ("proposed", "supported")
+            or not all(a["passed"] for a in attempts)):
+        return ""
+    return (f". To decide, run it as the lead: benchbook --agent lead check verify {shlex.quote(v.piece)} "
+            f"{v.commit[:12]} --reported-by {shlex.quote(rec.reported_by)} --base {shlex.quote(v.base.ref)} "
+            f"--project {shlex.quote(lg.project_id)}")
+
+
 def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
     """Step 5. The ledger's rule (decide, rule all_pass) is what makes a completion verified; this only picks the
     decision the evidence calls for and asks the rule before writing anything."""
@@ -644,13 +665,13 @@ def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
 
     if rec.claim_id is None:
         return Outcome(None, "no completion claim to decide (no --reported-by)")
-    if lg.role not in DECIDERS:
-        return Outcome(None, f"recorded without a decision: {lg.agent} has role {lg.role}, and verify decides only "
-                             "with lead authority (orchestrator or human role)")
     info = lg.completion_attempts(rec.claim_id)
     assert info is not None
     status, claim, attempts = info["status"], rec.claim_id, info["attempts"]
     human = f"benchbook decide {short('claim', claim)} verified|refuted --oracle human --as human --rationale ..."
+    if lg.role not in DECIDERS:
+        return Outcome(None, f"recorded without a decision: {lg.agent} has role {lg.role}, and verify decides only "
+                             "with lead authority (orchestrator or human role)" + _next_step(lg, v, rec, info, human))
     if touched := [a for a in attempts if a["guard_weakened"] is True or a["checks_changed"] is True]:
         files = sorted({f for a in touched for f in a["weakened_files"]})
         changed = any(a["checks_changed"] is True for a in touched)

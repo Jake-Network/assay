@@ -55,7 +55,7 @@ Details: [docs/code.md](docs/code.md).
 ## Commands for the lead
 
 ```bash
-benchbook check verify media-upload a1b2c3d --reported-by implementer-1   # the re-run by hand (CI, other harnesses)
+benchbook --agent lead check verify media-upload a1b2c3d --reported-by implementer-1   # re-run and decide as the lead; without --agent lead it only records (as CI does)
 benchbook brief --here            # the brief for what this branch changed
 benchbook status                  # pieces verified, reported only and re-run mismatched; open findings; hook health
 benchbook get c:7f3a91c2          # one record in at most 400 tokens

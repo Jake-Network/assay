@@ -388,6 +388,7 @@ def test_cli_verify_decides_with_lead_authority(repo: Path, vtmp: Path, db_url: 
     p = run_cli(repo, env, *base, "check", "verify", "media", good, "--reported-by", "impl")
     assert p.returncode == 0, p.stderr
     assert "decision: recorded without a decision" in p.stdout
+    assert f"benchbook --agent lead check verify media {good[:12]} --reported-by impl" in p.stdout  # what to run
     p = run_cli(repo, env, *base, "--agent", "lead", "check", "verify", "media", good, "--reported-by", "impl",
                 "--json")
     assert p.returncode == 0, p.stderr
@@ -402,6 +403,23 @@ def test_cli_verify_decides_with_lead_authority(repo: Path, vtmp: Path, db_url: 
     assert Ledger.open(project=code_project, agent="lead", database_url=db_url).claim_status(
         claim[0]["id"]) == "proposed"
     assert uuid.UUID(str(claim[0]["id"]))
+
+
+def test_a_nameless_rerun_names_what_decides_only_when_it_can(repo: Path, vtmp: Path, db_url: str,
+                                                             code_project: str) -> None:
+    """After a re-run without lead authority: the lead's re-run (with the same base and project) only when it would
+    decide, a person when the lead reported the piece itself, and no command after a failed run."""
+    harness = open_as(db_url, code_project, "verifier@test", "harness")
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    _, rec = checks.verify(harness, "media", good, repo=repo, reported_by="impl")
+    assert rec.outcome is not None and " --reported-by impl --base " in rec.outcome.reason
+    assert rec.outcome.reason.endswith(f" --project {code_project}")
+    _, rec = checks.verify(harness, "own", good, repo=repo, reported_by="lead")
+    assert rec.outcome is not None and "A person decides it: benchbook decide " in rec.outcome.reason
+    bad = piece(repo, "bad", {"impl.txt": "almost\n"})
+    _, rec = checks.verify(harness, "broken", bad, repo=repo, reported_by="impl")
+    assert rec.relation == "refutes" and rec.outcome is not None
+    assert rec.outcome.reason.endswith("(orchestrator or human role)")  # a lead's re-run would not decide either
 
 
 def test_cli_verify_under_a_lead_token(repo: Path, vtmp: Path, db_url: str, code_project: str) -> None:

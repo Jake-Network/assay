@@ -82,7 +82,7 @@ happens to come first. A completion that needs human review includes that inform
 In the integration step, for each piece an implementer reported done:
 
 ```bash
-benchbook check verify <piece> <commit> --reported-by <implementer>
+benchbook --agent lead check verify <piece> <commit> --reported-by <implementer>
 ```
 
 Options: `--base REF` (default `[guard] base`, else `origin/main`), `--checks a,b` (a subset of the declared
@@ -116,7 +116,7 @@ What it does:
 6. Prints the table and the decision.
 
 The verifier is `--agent` or `BENCHBOOK_AGENT` when set (with `BENCHBOOK_TOKEN`, the token's agent), else
-`verifier@<host>` (registered with the harness role). It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
+`verifier@<host>` (registered with the harness role), so a re-run without a name is recorded and not decided. It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
 The hook's automatic re-run of a reported `DONE <sha>` runs as another name, `rerun@<host>` (registered with the
 orchestrator role), or as the token's agent under `BENCHBOOK_TOKEN`.
 

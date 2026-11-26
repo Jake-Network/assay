@@ -811,3 +811,18 @@ by hand, not a live session). Four are fixed; the fourth is not.
   (`rerun.run_checks`, the spooler's functions) is called through its module everywhere, so replacing it reaches
   every caller, as it did when they shared a module. The Ledger class stays in one file: its methods share one
   connection and transaction discipline, and splitting it is a separate change.
+
+## First-run fixes, the action without a ledger, pilot tools (2026-11-26)
+
+- **A re-run without lead authority says what decides it.** The README's first lead command, run as written, ended
+  in "recorded without a decision" and left `status` at 0 verified; a pilot's lead stopped at the same line. The
+  rule stays (CI depends on a nameless run only recording); the line now ends with the command to run next: the
+  same `check verify` with `--agent lead` (repeating `--base` and `--project`, so it reads the same merge-base
+  and project), but only when that run would decide verified: this run passed every declared check, no run of the
+  commit failed, and the claim is proposed or supported. When an attempt weakened tests or the lead is an
+  implementer the line names the `decide --as human` command instead, and after a failed or partial run nothing,
+  since a lead's re-run would not decide either (a review of the first version found it pointing to re-runs that
+  could not decide). It names a re-run, not `decide --oracle rerun` on the stored attempts, because that needs two
+  transitions (proposed to supported to verified) and so two commands; the price is running the checks twice,
+  minutes in a repository with slow checks. Under a token there is no hint: the token names one agent, and
+  `--agent lead` would contradict it.

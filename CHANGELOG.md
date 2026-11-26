@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- `check verify` without a name (`verifier@<host>`, harness role) still records without deciding, and now ends that
+  line with the command that decides: the same re-run as the lead, or `benchbook decide ... --as human` when the
+  commit weakened tests. The README and docs/code.md show the lead's form.
 - The package is arranged by function: `benchbook.core` (ledger, models, ids, brief, the command runner),
   `benchbook.checks` (declared checks and the re-run that verifies a completion), `benchbook.code` (pieces,
   findings, PR evidence, status line), `benchbook.hooks` and `benchbook.cli`. Code that imported a module by its old
