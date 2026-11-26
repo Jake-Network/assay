@@ -186,9 +186,11 @@ bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boun
   and every merge commit; reviews showed each hiding a stale verification, so a commit is now left out only on positive
   evidence.
 - **Re-run states.** "Reported, not re-run" means no evidence either way; a completion with a supporting or refuting
-  link is under review. "Re-run, not decided" is a `proposed` or `inconclusive` completion with a supporting re-run, and
-  `status` uses the same condition, so the two screens agree. A refutation counts as a rerun mismatch first; a
-  `supported` completion stays "reported only" until both rerun decisions are made.
+  link is under review. The brief's "Re-run, not decided" is a `proposed` or `inconclusive` completion with any re-run
+  linked, supporting or refuting. `status` sorts the same completions by their links: a refutation makes a rerun
+  mismatch, supporting re-runs only make "re-run not decided". So a refuted completion nobody decided is in the
+  brief's section and counted as a mismatch by `status`. A `supported` completion stays "reported only" until both
+  rerun decisions are made.
 - **The footer asks for the approach name:** naming it is what makes a failure a discarded approach.
 - **A checkout's brief covers the pieces merged into it:** `--here` adds every piece with a completion at a commit among
   HEAD's newest 5,000, by commit rather than branch name, since workers' branches are often deleted after the merge.
@@ -247,9 +249,11 @@ bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boun
 ### Declarations and the guard
 
 - **check verify runs the merge-base's declarations,** never the commit's or the verifier's checkout's, so a piece
-  cannot choose its own checks; guard and `checks_changed` use the same merge-base. With no `[checks]` there, verify
-  uses the newest ledger pin of the piece, else of the project, leaving out pins by the piece's implementers, and
-  refuses without one. Default `[guard] paths`: `tests/**`, `**/conftest.py`, `.benchbook/config.toml`.
+  cannot choose its own checks; guard and `checks_changed` use the same merge-base. With no `.benchbook/config.toml`
+  at the merge-base, verify uses the newest ledger pin of the piece, else of the project, leaving out pins by the
+  piece's implementers, and refuses without one. A config.toml there must declare valid `[checks]`: a pin does not
+  stand in for an empty or broken table. Default `[guard] paths`: `tests/**`, `**/conftest.py`,
+  `.benchbook/config.toml`.
 - **Pins (T01).** `checks_source`, `checks_pin` and `checks_sha256` are written only on pinned runs, so other runs keep
   exactly their metrics. The newest pin is in effect; a re-pin counts as a `[checks]` change only when the pin in effect
   at the first attempt is missing or has another sha256, so re-pinning the same declarations sends no piece to a person.

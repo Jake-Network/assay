@@ -96,7 +96,8 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
   piece's paths.
 - Out-of-scope findings are recorded from an implementer's report (`[report] out_of_scope_heading` or a `범위 밖:` line),
   from the reports of the subagent types in `[report] agents`, and by `benchbook finding add "..." [--file PATH]`;
-  `finding accept <claim> --issue URL` accepts one, `decide <claim> refuted` rejects it.
+  `finding accept <claim> --issue URL --oracle human --as human` accepts one, and
+  `decide <claim> refuted --oracle human --rationale "..." --as human` rejects it.
 - docs/code.md has the queries for record coverage (`observed.jsonl`) and the false completion rate.
 
 ### Hooks and plugins
