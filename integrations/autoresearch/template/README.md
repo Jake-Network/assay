@@ -26,8 +26,10 @@ export BENCHBOOK_AGENT=gpu0-$(hostname -s) CUDA_VISIBLE_DEVICES=0
 benchbook ar init && claude "Read program.benchbook.md and start."
 ```
 
-Only share the database with people you trust: anyone who can connect can write. Replication still keeps a
-single fabricated value from becoming the shared baseline.
+With the owner's URL anyone who connects can write; give machines the writer login and per-agent tokens
+([Several machines](https://github.com/Jake-Network/benchbook/blob/main/docs/multi-machine.md#per-agent-tokens)) so
+every write is bound to its agent. Replication still keeps a single fabricated value from becoming the shared
+baseline.
 
 ## Files
 

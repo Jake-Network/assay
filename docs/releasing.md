@@ -114,8 +114,9 @@ pre-release only when asked for one or when the project has no final release.
 
 After the first release, the install lines that still say `uv tool install --from git+https://...` can use the
 PyPI name (`uv tool install benchbook`, `uvx benchbook`): `README.md`, `README.ko.md`, `docs/autoresearch.md`,
-`integrations/autoresearch/template/README.md` and the fix line of the PATH check in `src/benchbook/cli/doctor.py`.
-Change them only once the package is on PyPI, or they point at nothing.
+`integrations/autoresearch/template/README.md` and the fix line of the PATH check (`check_path`) in
+`src/benchbook/cli/doctor.py`. Change them only once the package is on PyPI, or they point at nothing. The fix line
+of the `hook cli` check (`check_hook_cli`) already says `uv tool install benchbook`, which fails until then.
 
 ## Phase 0 exit condition
 
@@ -134,9 +135,9 @@ The first `doctor` exits 1 on such a machine, by design of `doctor`: the databas
 has no project yet, and it prints the fix (`benchbook migrate`, `benchbook init`) for each. What it already proves
 is that the package installed and that the embedded Postgres started. The second `doctor` is the one that passes.
 
-CI runs these commands from the built wheel on `ubuntu-latest` and `macos-latest` for every pull request and push to main, which covers the
-packaging and the Postgres dependency. It does not cover installing by name from PyPI, an Intel Mac (the `test` job
-runs there, from a checkout and not from the wheel) or a Linux that is not glibc-based. The exit condition is
+CI runs these commands from the built wheel on `ubuntu-latest` and `macos-latest` (Apple silicon) for every pull
+request and push to main, which covers the packaging and the Postgres dependency. It does not cover installing by
+name from PyPI, an Intel Mac (no CI job runs there) or a Linux that is not glibc-based. The exit condition is
 checked by hand on real machines after the first upload.
 
 ## When a release goes wrong

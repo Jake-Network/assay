@@ -33,16 +33,15 @@ benchbook init --goal "Maximize the sum of radii of 26 non-overlapping circles i
   --metric sum_radii --direction max
 ```
 
-In Claude Code (with the plugin installed):
+In Claude Code (after `benchbook install --mcp`):
 
 ```
 /benchbook-mcp:benchbook-lead Maximize sum_radii over packing.py configs (init, optimizer, iters, perturb); workers evaluate each one with: benchbook exp run --config '<json>' --seed <n> --code-ref packing-v1 -- python run_config.py ; 2 rounds, 4 workers
 ```
 
-Each evaluation is that one command. `benchbook exp run` asks the ledger first: a config, code_ref and seed that
-already ran is not run again (exit 2, with the earlier result and its id). Otherwise it runs `run_config.py`,
-which reads the config and seed from the environment `exp run` sets, shows its output, reads `sum_radii` from
-its JSON line and records the result, failures and timeouts included. Its last line names the record:
+Each evaluation is that one command: it refuses a config, code_ref and seed that already ran, otherwise runs
+`run_config.py` (which reads the config and seed from the environment) and records the result, failures included
+([exp run](../../docs/sdk.md#check-run-and-record-in-one-command)). Its last line names the record:
 
 ```
 {"sum_radii": 2.6359317681882644, "max_violation": 0.0}
