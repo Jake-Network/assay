@@ -19,8 +19,14 @@ benchbook init --pack code        # same as --pack code --metric checks_passed -
 The pack's defaults also set `partition_key = "piece"`, so best results and outcomes are computed per piece, and
 `worker_intents = true`, so implementers can start their own pieces (path occupancy, below).
 
-Declare the completion checks and the guarded paths in `.benchbook/config.toml` and commit them to the branch the
-pieces start from:
+`benchbook init` proposes the checks it finds (`pyproject.toml`, `package.json`, a `Makefile`, `go.mod`,
+`Cargo.toml`) and writes them to `.benchbook/config.toml` when you confirm (`--yes` writes them without asking),
+with guard paths for the language (Python `tests/**`, `**/conftest.py`, `**/test_*.py`; Node `**/*.test.*`,
+`**/*.spec.*`, `**/__tests__/**`; Go `**/*_test.go`; Rust `tests/**`; always `.benchbook/config.toml`) and
+`base` from `origin/HEAD`, else a local `main` or `master`. It adds `.benchbook/` to `.git/info/exclude` and pins
+the checks in the ledger ([Checks pinned in the ledger](#checks-pinned-in-the-ledger)), so nothing needs committing.
+For the team mode (CI as the verifier) commit the config to the branch the pieces start from with
+`git add -f .benchbook/config.toml`. The declarations look like this:
 
 ```toml
 [checks.pytest-media]
@@ -36,8 +42,9 @@ paths = ["tests/**", "**/conftest.py", ".benchbook/config.toml"]
 base = "origin/main"
 ```
 
-A check is a shell command run from the repository root; exit code 0 is a pass. Keys other than `cmd`, `junit`
-and `timeout` are errors, so a misspelt key cannot quietly fall back to a default.
+A check is a shell command run from the repository root; exit code 0 is a pass. `timeout` is in seconds (default
+900, at most 86400). Keys other than `cmd`, `junit` and `timeout` are errors, so a misspelt key cannot quietly fall
+back to a default.
 
 `junit = true` is also what makes "nothing ran" visible. An exit code alone cannot tell a passing test run from
 one that stopped before any test (code outside the guarded paths that ends the process with status 0 while the tests
@@ -50,7 +57,8 @@ so this catches a run that ended early, not a commit written to forge the report
 
 Guard globs are matched against the whole repository-relative path: `*`, `?` and `[...]` stay inside one
 path segment, a `**` segment spans any number of them (`tests/**` is every file under `tests/`, `**/conftest.py`
-is a conftest.py at any depth, the root included). Without `[guard] paths` the three globs above are used.
+is a conftest.py at any depth, the root included). Without `[guard] paths` the guard is `tests/**`,
+`**/conftest.py` and `.benchbook/config.toml`.
 
 ## The lead's line
 
@@ -215,7 +223,7 @@ field of a live intent.
 
 ## What is recorded
 
-One attempt, in the shape of spec §6:
+One attempt:
 
 ```
 config     {"piece": "media-upload-dedupe", "checks": ["pytest-media", "lint"]}
@@ -250,7 +258,7 @@ random `statement_hash`. So nobody can take a completion first: a claim with the
 does not give its author the credit, and one with a wrong commit in its payload does not block the piece. Older
 ledgers need nothing: their claims have the usual statement and are found the same way.
 
-`statement_hash` is computed by the client (`dedup.statement_hash`, or a caller's own hash for discarded approaches
+`statement_hash` is computed by the client (`benchbook.core.dedup.statement_hash`, or a caller's own hash for discarded approaches
 and findings). The database checks only that it is unique in the project; under a token, a writer can store any
 hash with any statement. Nothing reads a claim's identity from it: that is an SDK rule, and the triple above is
 what `check verify` and `pr` match on. A check in the database that the hash fits the statement is not possible
@@ -520,10 +528,6 @@ candidate's, or beside it with `[verify] parallel_baseline`). This comparison ru
 
 ## The numbers
 
-Run `uv run python -m bench.boundary.run --dry` to generate a synthetic H1–H6 report for the boundary
-benchmark. For the fan-in experiment, the circle-packing runner accepts `--workers 8,16,30`.
-[Boundary benchmark preregistration](../bench/boundary/PREREGISTRATION.md)
-
 The false completion rate and the number of completions that touched guarded paths, in one `benchbook sql`
 statement over the reader's views:
 
@@ -777,7 +781,7 @@ with what was cut counted ("… 45 more (--json)"). `--json` prints the whole re
 `lookups.jsonl` in the state directory (time, project, id): an id a brief carried that was then looked up is the
 cheapest sign that the brief was read.
 
-The spec's unit for "a read that changed a plan" is a claim id cited by a plan document. Two things are recorded:
+A read that changed a plan is counted as a claim id cited by a plan document. Two things are recorded:
 the claims themselves (with their ids, tags and times) and `brief_log` (one row per brief compiled: project, agent,
 task, tokens and time; not what it showed). The count, for one plan document:
 
@@ -805,8 +809,8 @@ FROM found
 
 `<plan written>` is when the plan was written (its commit time, `git log -1 --format=%cI -- plan.md`). The last
 column counts the cited claims of the kinds the brief shows that existed before the plan. Summed over the plans of a
-delegate run it is the number the spec's stop rule reads (five delegate runs with none: drop signatures and the
-brief, keep verification).
+delegate run it is the number the stop rule reads: after five delegate runs with none, drop signatures and the
+brief, and keep verification.
 
 What it can tell: that a plan names a discarded approach, an open finding or a verified commit by its id, and that
 the claim was in the ledger before the plan was written. What it cannot: that the id came from a brief rather than
@@ -860,7 +864,7 @@ recorded without a piece tag is not counted), and whether tests changed (any att
 
 | state | when |
 | --- | --- |
-| **verified** | the claim is `verified`; or no run of the commit failed, none touched a guarded path or changed `[checks]`, and at least one passing run by an agent other than the implementer (not `via` check run or the hook) satisfies the pack's rule (`Ledger._check_rerun`, the same check `decide ... verified --oracle rerun` makes). The second case is shown with the claim's status: CI records, a lead decides. |
+| **verified** | the claim is `verified`; or no run of the commit failed, none touched a guarded path or changed `[checks]`, and at least one passing run by an agent other than the implementer (not `via` check run or the hook) satisfies the pack's rule (`Ledger.check_rerun`, the same check `decide ... verified --oracle rerun` makes). The second case is shown with the claim's status: CI records, a lead decides. |
 | **re-run disagrees** | the claim is `refuted` or `inconclusive`, or a valid finished run of the commit failed a check (anyone's: the implementer's own failing run counts too). |
 | **claimed only** | a claim exists and none of the above: no independent re-run yet, or the commit changed tests, which a person decides. |
 | **not reported** | the ledger has no completion claim for the piece at that commit. |
@@ -891,13 +895,14 @@ on later, instead of leaving them in a report nobody reads again:
 
 ```toml
 [report]
-out_of_scope_heading = "범위 밖"     # or "Out of scope"; the only key of [report]
+out_of_scope_heading = "Out of scope"  # or "범위 밖", or any heading text
+agents = ["*"]                         # see Which reports are read
 ```
 
 Ask the implementers to end their final report with that section, one top-level list item per finding:
 
 ```markdown
-## 범위 밖
+## Out of scope
 - `src/app/modules/media/upload.py`: the retry loop ignores the timeout. mod:media
   - reproduced with tests/media/test_upload.py::test_retry
 - The auth token refresh races with logout.
@@ -1045,8 +1050,8 @@ benchbook check run <name> [--piece P] [--approach A]
   does not run.
 - What it adds is one line on stderr after the output: `benchbook: unit ok (exit 0, 1.2s), piece media at
   1a2b3c4d5e6f; queued for the ledger (...)`.
-- It never waits for the database. The result goes to the local hook spool (one directory per database target, as
-  for the result-capture hook) and the spool's background processor records it. A database that is down cannot
+- It never waits for the database. The result goes to the local hook spool (one directory per database target and
+  writer, as for the result-capture hook) and the spool's background processor records it. A database that is down cannot
   change the exit code or lose the result: the entry waits in the spool and `benchbook hook replay` records it.
   The time it adds to a check is at most 300 ms (`tests/test_check_run.py` measures it against the bare command).
 
@@ -1081,16 +1086,15 @@ notes      "check run: pytest-media in /path/to/checkout; guard against origin/m
 
 ## Record coverage
 
-The share of declared check runs that reached the ledger (spec §11, target 95%): ledger attempts over the runs the
+The share of declared check runs that reached the ledger (target 95%): ledger attempts over the runs the
 Claude Code hook observed.
 
 - **Denominator.** Every Bash call the hook matches to a declared check appends one line to `observed.jsonl` in the
-  spool directory of the database target (`~/.local/state/benchbook/spool/<key>/`; `benchbook doctor` prints the
-  path on its `hook failures` line). A line has `ts`, `project`, `piece`, `check`, `kind`, `exit_code`,
-  `reason`, `session_id`, `tool_use_id` and `harness` (`claude-code`, or `codex`/`cursor`/`gemini` from their
-  manifests, docs/harnesses.md; Cursor's lines add `harness_version`). `kind` is `direct` (the hook queued the attempt), `wrapped` (a
-  `benchbook check run`, which records itself) or `unrecordable` (piped or chained, in the background,
-  interrupted, no exit code, no piece or no commit: observed, not recorded).
+  spool directory of the database target and writer (`~/.local/state/benchbook/spool/<key>/`; `benchbook doctor`
+  prints the path on its `hook failures` line). A line has `ts`, `project`, `piece`, `check`, `kind`,
+  `exit_code`, `reason`, `session_id`, `tool_use_id` and `harness` (`claude-code`, `codex`, `cursor`, `gemini`,
+  `opencode` or `pi`; docs/harnesses.md; Cursor's lines add `harness_version`). `kind` is `direct`, `wrapped` or
+  `unrecordable`, with the `reason` of an unrecordable run (docs/claude-code.md, "`benchbook hook bash-result`").
 - **Numerator.** The attempts with `via` `bash-hook` or `check-run` in the ledger.
 
 ```bash
