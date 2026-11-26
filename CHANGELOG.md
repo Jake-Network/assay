@@ -9,8 +9,8 @@
   `--compact-pct N` (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`); the `discarded` probe asks for the failure signature
   only; the report adds an "H1 Session answers (contains)" sensitivity column, recomputed from stored answers.
 - The GitHub Action runs without `database-url`: it keeps a ledger of that workflow run only, re-runs the checks
-  committed at the merge-base (a notice when there are none), treats a pull request without trailers as one piece
-  `pr-<number>` reported by its author, and says in the comment that there was no shared ledger. Before, it failed
+  committed at the merge-base (a notice when there are none), re-runs the pull request's head as piece `pr-<number>`
+  (reported by its author) when no trailer names it, and says in the comment that there was no shared ledger. Before, it failed
   with "no ledger". `pr pieces` and `pr summary` take `--whole-as NAME` for that piece.
 - `benchbook status` counts a piece whose re-run passed but was not decided (a weakened test waiting for a person,
   or a re-run without lead authority) as "re-run not decided", as the brief does, not as "reported only"; `--json`

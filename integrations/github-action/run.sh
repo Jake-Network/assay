@@ -45,8 +45,28 @@ if [ -z "$url" ]; then
   notice "no database-url: the re-runs are recorded in a ledger of this workflow run only (README.md of the action, Without a ledger)"
 fi
 
-tmp=${RUNNER_TEMP:-}
-[ -n "$tmp" ] || tmp=$(mktemp -d)
+# One folder per invocation (a second run of the action in the same job must not reuse the first one's ledger),
+# removed at the end; the run's own ledger, if it started one, is stopped first.
+tmp=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/benchbook.XXXXXX")
+ledger_dir=
+cleanup() {
+  if [ -n "$ledger_dir" ]; then BENCHBOOK_DATA_DIR="$ledger_dir" benchbook db stop >/dev/null 2>&1 || true; fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+# The summary to the job summary and, unless comment: false, to the pull request's one comment ($2: update-only
+# keeps an earlier comment current without starting one). gh gets only the GitHub token.
+post_summary() {
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$1" >> "$GITHUB_STEP_SUMMARY"; fi
+  if [ "${BB_COMMENT:-true}" = true ]; then
+    local comment=(pr comment --repo "$GITHUB_REPOSITORY" --pr "$BB_PR" --body-file "$1")
+    if [ -n "${BB_COMMENT_AUTHOR:-}" ]; then comment+=(--author "$BB_COMMENT_AUTHOR"); fi
+    if [ "${2:-}" = update-only ]; then comment+=(--update-only); fi
+    env -u BENCHBOOK_DATABASE_URL -u BENCHBOOK_TOKEN GH_TOKEN="$gh_token" benchbook "${comment[@]}" \
+      || fail "could not post the summary comment: the workflow needs permissions: pull-requests: write"
+  fi
+}
 
 # --- benchbook itself ------------------------------------------------------------------------------------------
 case "${BB_INSTALL:-}" in
@@ -120,10 +140,15 @@ if [ "$ephemeral" = true ]; then
   if ! git cat-file -e "$merge_base:.benchbook/config.toml" 2>/dev/null \
       && ! git cat-file -e "$merge_base:.assay/config.toml" 2>/dev/null; then
     notice "no database-url and no config committed at the merge-base, so there are no checks to re-run. Commit the config on the base branch: git add -f .benchbook/config.toml (docs/code.md, Set up)."
+    # an earlier comment (from before the base changed) must not stand as this head's result
+    printf '%s\n### benchbook: completions in this pull request\n\n%s\n' '<!-- benchbook-summary -->' \
+      "This run did not re-run anything: there is no \`database-url\` and no \`.benchbook/config.toml\` committed at the merge-base of ${BB_BASE_SHA:0:12} and ${BB_HEAD_SHA:0:12}, so no checks are declared there. An earlier result in this comment is not about this head; it is not re-run." \
+      > "$tmp/benchbook-summary.md"
+    post_summary "$tmp/benchbook-summary.md" update-only
     exit 0
   fi
-  export BENCHBOOK_DATA_DIR="$tmp/benchbook-ledger"
-  trap 'benchbook db stop >/dev/null 2>&1 || true' EXIT
+  ledger_dir="$tmp/benchbook-ledger"
+  export BENCHBOOK_DATA_DIR="$ledger_dir"
   # init in an empty repository: in the checkout it would rewrite config.toml and pin the pull request's own
   # checks, which check verify falls back to for a piece whose merge-base has no config.
   project=${BB_PROJECT:-pr-$BB_PR}
@@ -168,14 +193,7 @@ if [ "$ephemeral" = true ]; then
   printf '\n%s\n' "This run had no shared ledger (no \`database-url\`), so the re-runs were recorded in a ledger of this workflow run only. Discarded approaches and findings from agent sessions do not show here." \
     >> "$tmp/benchbook-summary.md"
 fi
-if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$tmp/benchbook-summary.md" >> "$GITHUB_STEP_SUMMARY"; fi
-if [ "${BB_COMMENT:-true}" = true ]; then
-  comment=(pr comment --repo "$GITHUB_REPOSITORY" --pr "$BB_PR" --body-file "$tmp/benchbook-summary.md")
-  if [ -n "${BB_COMMENT_AUTHOR:-}" ]; then comment+=(--author "$BB_COMMENT_AUTHOR"); fi
-  # no piece: keep an earlier comment current, but do not start one on every pull request
-  if [ ! -s "$tmp/benchbook-pieces.tsv" ]; then comment+=(--update-only); fi
-  # the comment needs only the GitHub token, and gh is not given the ledger's credentials
-  env -u BENCHBOOK_DATABASE_URL -u BENCHBOOK_TOKEN GH_TOKEN="$gh_token" benchbook "${comment[@]}" \
-    || fail "could not post the summary comment: the workflow needs permissions: pull-requests: write"
-fi
+# no piece: keep an earlier comment current, but do not start one on every pull request
+if [ -s "$tmp/benchbook-pieces.tsv" ]; then post_summary "$tmp/benchbook-summary.md"
+else post_summary "$tmp/benchbook-summary.md" update-only; fi
 exit "$failed"

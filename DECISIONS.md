@@ -814,18 +814,18 @@ by hand, not a live session). Four are fixed; the fourth is not.
 
 ## First-run fixes, the action without a ledger, pilot tools (2026-11-26)
 
-- **A re-run without lead authority says what decides it.** The README's first lead command, run as written, ended
-  in "recorded without a decision" and left `status` at 0 verified; a pilot's lead stopped at the same line. The
-  rule stays (CI depends on a nameless run only recording); for the nameless `verifier@<host>` (harness role; a
-  named worker is not shown how to decide as the lead) the line now ends with the command to run next: the
-  same `check verify` with `--agent lead` (repeating `--base` and `--project`, so it reads the same merge-base
-  and project), but only when that run would decide verified: this run passed every declared check, no run of the
-  commit failed, and the claim is proposed or supported. When an attempt weakened tests or the lead is an
-  implementer the line names the `decide --as human` command instead, and after a failed or partial run nothing,
-  since a lead's re-run would not decide either (a review of the first version found it pointing to re-runs that
-  could not decide). It names a re-run, not `decide --oracle rerun` on the stored attempts, because that needs two
-  transitions (proposed to supported to verified) and so two commands; the price is running the checks twice,
-  minutes in a repository with slow checks. Under a token there is no hint: the token names one agent, and
+- **A re-run without lead authority says what decides it.** The README's first lead command, run as written, ended in
+  "recorded without a decision" and left `status` at 0 verified; a pilot's lead stopped at the same line. The rule
+  stays (CI depends on a nameless run only recording); for the nameless `verifier@<host>` (harness role; a named
+  worker is not shown how to decide as the lead) the line now ends with the command to run next: the same `check
+  verify` with `--agent lead` (naming the claim by id, the whole commit, the merge-base as `--base` and the project,
+  so it decides the same claim against the same checks), but only when that run would decide verified: this run passed
+  every declared check, no run of the commit failed, and the claim is proposed or supported. When an attempt weakened
+  tests or the lead is an implementer the line names the `decide --as human` command instead, and after a failed or
+  partial run nothing, since a lead's re-run would not decide either (a review of the first version found it pointing
+  to re-runs that could not decide). It names a re-run, not `decide --oracle rerun` on the stored attempts, because
+  that needs two transitions (proposed to supported to verified) and so two commands; the price is running the checks
+  twice, minutes in a repository with slow checks. Under a token there is no hint: the token names one agent, and
   `--agent lead` would contradict it.
 - **brief reads without a name.** `benchbook brief --here` is what a person types first to see the state, and
   it failed with "no agent name" while `status` and `get` worked. brief writes one row, to `brief_log` (who read
@@ -845,9 +845,11 @@ by hand, not a live session). Four are fixed; the fourth is not.
 - **The GitHub Action without a ledger.** Trying the action meant a shared Postgres, a secret and a commit trailer
   in every agent's commits; without them it failed or commented nothing. The part of benchbook that is worth having
   from CI alone, an independent re-run that also marks weakened tests, needs none of that. Without `database-url`
-  the action now creates a ledger for the workflow run and, when no commit has a trailer, treats the pull request as
-  one piece `pr-<number>` at its head, reported by its author (so the summary has a claim to show as verified or
-  claimed only). The checks come from the config committed at the merge-base only, as `check verify` reads them;
+  the action now creates a ledger for the workflow run and re-runs the pull request's head as one piece
+  `pr-<number>`, reported by its author, whenever no trailer names the head commit (so the summary has a claim to
+  show as verified or claimed only; a second review found that a head after the last trailered commit was not re-run
+  at all). Each invocation keeps its ledger in a folder of its own, and a run with nothing to re-run updates an
+  earlier comment instead of leaving its old verdict standing. The checks come from the config committed at the merge-base only, as `check verify` reads them;
   proposing them from the pull request's files or falling back to a ledger pin would let the pull request choose
   its own checks, so a repository without a committed config gets a notice instead. For the same reason init runs in
   an empty repository under `RUNNER_TEMP`, not in the checkout, where it would pin the pull request's config, which
@@ -875,6 +877,8 @@ by hand, not a live session). Four are fixed; the fourth is not.
   per phase), a /compact that emits no `compact_boundary` with trigger `manual` stops the run instead of passing as
   a work call without a sample, and a phase's own automatic compactions are kept as `auto_compactions`, since the
   forced boundary, being the last, is the phase's sample (with `--force-compact` the delayed column stays empty).
+  A second review added: the host's `DISABLE_AUTO_COMPACT` and `DISABLE_COMPACT` are removed from a run's
+  environment, and boundaries count only the call's own session and the expected trigger.
 - **A piece's files are its own commits' files.** In the fourth boundary pilot the worker of one piece started
   from the integration branch where another piece had been merged; `payload.files` was the merge-base diff, which
   held the other piece's file, and when that file changed the brief marked this piece `changed since` too, one of

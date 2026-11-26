@@ -120,9 +120,10 @@ jobs:
       - uses: Jake-Network/benchbook/integrations/github-action@<full commit sha>
 ```
 
-**What the comment shows.** Commits without a `Benchbook-Piece:` trailer make the whole pull request one piece,
-`pr-<number>`, at its head commit, reported by the pull request's author; with trailers each piece is its own row,
-as with a shared ledger. Per piece: **verified** when every declared check passed in the re-run and no test was
+**What the comment shows.** Each `Benchbook-Piece:` trailer's piece is its own row, as with a shared ledger, and the
+pull request's head is always re-run: when no trailer names the head commit (no trailers at all, or a fix after the
+last trailered commit) it is the row `pr-<number>`, reported by the pull request's author. A run that has nothing to
+re-run (no config at the merge-base, for example after the base branch changed) updates an earlier comment to say so. Per piece: **verified** when every declared check passed in the re-run and no test was
 weakened; **claimed only** with `tests weakened: <files>` when the commit touched a guarded test in a way that can
 weaken it (a person decides; the job does not fail for it); **re-run disagrees** when a check failed (the job
 fails). The comment ends with a paragraph saying that this run had no shared ledger.

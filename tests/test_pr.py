@@ -83,6 +83,9 @@ def test_whole_as_names_the_head_only_when_no_trailer_does(tmp_path: Path) -> No
     with pytest.raises(pr.BenchbookError, match="not a piece name"):
         pr.pieces(repo, base, "HEAD", whole_as="pr 7")
     assert pr.pieces(repo, "HEAD", "HEAD", whole_as="pr-7") == ([], [])  # no commit, no piece
+    later = commit(repo, "after the trailer", {"a.txt": "4\n"})  # the head is no piece's commit: re-run it as well
+    assert pr.pieces(repo, base, "HEAD", whole_as="pr-7")[0] == [pr.Piece("alpha", with_trailer),
+                                                                 pr.Piece("pr-7", later)]
 
 
 def test_pieces_cli_prints_tab_separated_lines(tmp_path: Path) -> None:
@@ -459,7 +462,7 @@ def test_action_says_why_it_does_nothing(tmp_path: Path, gh: Path, case: str) ->
         assert "no config committed at the merge-base" in r.stdout and "git add -f .benchbook/config.toml" in r.stdout
     else:
         assert r.returncode == 1 and "::error title=benchbook::" in r.stdout
-    assert not gh.exists()  # nothing was commented
+    assert not gh.exists() or comments(gh) == []  # nothing was commented
     assert "secret-password" not in r.stdout + r.stderr
 
 
@@ -493,11 +496,58 @@ def test_action_without_a_ledger_rereruns_the_pull_request_as_one_piece(tmp_path
     assert re.search(rf"^\| `pr-7` \| `{head[:12]}` \| \*\*{state}\*\*", body, re.M), body
     assert ("tests weakened: `tests/test_a.py`" in body) is (change == "weakened test")
     assert "no shared ledger (no `database-url`)" in body and "this workflow run only" in body
-    assert (tmp_path / "runner-temp" / "benchbook-ledger").is_dir()  # the run's own embedded ledger
     assert ("independent: `ci:41`" in body) is (change == "code only")
+    assert list((tmp_path / "runner-temp").iterdir()) == []  # the run's ledger was stopped and removed
     again = run_action(repo, {**env, "GITHUB_RUN_ID": "42"})
     assert again.returncode == 0, again.stdout + again.stderr
-    assert [x["id"] for x in comments(gh)] == [c["id"]]  # still one comment
+    [c2] = comments(gh)
+    assert c2["id"] == c["id"]  # still one comment
+    # review of #20: a second invocation in the same RUNNER_TEMP counts only its own run, not the first one's too
+    assert "| 1 passed, 0 failed" in c2["body"] and "ci:41" not in c2["body"]
+
+
+@pytest.mark.parametrize("after", ["failing commit", "weakening commit", "none"])
+def test_action_without_a_ledger_rereruns_a_head_after_the_last_trailer(tmp_path: Path, gh: Path, after: str) -> None:
+    """Review of #20: a commit after the last trailered one is the pull request's head and is re-run too, as
+    pr-<number>; a head that carries a trailer gets no second row."""
+    repo = new_repo(tmp_path / "repo", CHECKS.replace("{env_dump}", ""))
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "feature")
+    alpha = commit(repo, "alpha\n\nBenchbook-Piece: alpha", {"a.txt": "alpha\n"})
+    head = {"failing commit": lambda: commit(repo, "later", {"value.txt": "broken\n"}),
+            "weakening commit": lambda: commit(repo, "later", {"tests/test_a.py": "def test_a():\n    assert True\n"}),
+            "none": lambda: alpha}[after]()
+    r = run_action(repo, action_env(tmp_path, {"base": base, "head": head}, BB_DATABASE_URL="", BB_PR_AUTHOR="octo"))
+    assert r.returncode == (1 if after == "failing commit" else 0), r.stdout + r.stderr
+    [c] = comments(gh)
+    assert re.search(rf"^\| `alpha` \| `{alpha[:12]}` \| \*\*verified\*\*", c["body"], re.M), c["body"]
+    row = re.search(r"^\| `pr-7` \| `(\w+)` \| \*\*([^*]+)\*\*", c["body"], re.M)
+    if after == "none":
+        assert row is None
+    else:
+        assert row and row.group(1) == head[:12]
+        assert row.group(2) == ("re-run disagrees" if after == "failing commit" else "claimed only")
+        assert ("tests weakened: `tests/test_a.py`" in c["body"]) is (after == "weakening commit")
+
+
+def test_action_without_a_ledger_that_skips_updates_its_earlier_comment(tmp_path: Path, gh: Path) -> None:
+    """Review of #20: a run with nothing to re-run (the base moved to a branch without a committed config) must not
+    leave an earlier verified comment standing as if it were current."""
+    repo = new_repo(tmp_path / "repo")
+    bare = git(repo, "rev-parse", "HEAD")
+    base = commit(repo, "declare the checks", {".benchbook/config.toml": CHECKS.replace("{env_dump}", "")})
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, "change", {"a.txt": "changed\n"})
+    env = action_env(tmp_path, {"base": base, "head": head}, BB_DATABASE_URL="")
+    assert run_action(repo, env).returncode == 0
+    [c] = comments(gh)
+    assert "**verified**" in c["body"]
+    r = run_action(repo, {**env, "BB_BASE_SHA": bare, "GITHUB_RUN_ID": "42"})
+    assert r.returncode == 0 and "no config committed at the merge-base" in r.stdout
+    [again] = comments(gh)
+    assert again["id"] == c["id"] and again["body"].startswith(pr.MARKER + "\n")
+    assert "**verified**" not in again["body"] and "not re-run" in again["body"]
+    assert "not re-run" in (tmp_path / "step-summary.md").read_text()
 
 
 def test_action_files_keep_inputs_out_of_the_script_text() -> None:

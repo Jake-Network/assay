@@ -844,9 +844,8 @@ have no claim at the new commits until someone reports them there.
 
 **Without a ledger.** With no `database-url` the action creates a ledger for the workflow run only (an embedded
 Postgres in `RUNNER_TEMP`, `benchbook init --pack code` run in an empty repository there, so nothing is pinned from
-the pull request's files), and when no commit carries a trailer it passes
-`--whole-as pr-<number>` to `pr pieces` and `pr summary`, so the whole pull request is one piece at its head,
-reported by the pull request's author. The checks still come only from the config committed at the merge-base;
+the pull request's files), and it passes `--whole-as pr-<number>` to `pr pieces` and `pr summary`, so the head is
+re-run as that piece, reported by the pull request's author, when no trailer names the head commit. The checks still come only from the config committed at the merge-base;
 without one the action ends with a notice (commit it with `git add -f .benchbook/config.toml`, see
 [Set up](#set-up)). It always records with `--no-decide`, and the comment says the run had no shared ledger, so
 no discarded approach or finding from agent sessions shows. What it adds to a plain CI test run is the weakened-test

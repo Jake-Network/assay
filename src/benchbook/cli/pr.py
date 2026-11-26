@@ -15,7 +15,7 @@ pr_app = typer.Typer(no_args_is_help=True, help="Pull requests: the pieces their
 BASE = typer.Option("--base", help="The pull request's base commit (its commits are BASE..HEAD)")
 HEAD = typer.Option("--head", help="The pull request's head commit")
 WHOLE_AS = typer.Option("--whole-as", metavar="NAME",
-                        help="When no commit of BASE..HEAD carries a trailer, take HEAD as the commit of piece NAME "
+                        help="When no trailer names HEAD's commit, add HEAD as the commit of piece NAME "
                              "(the GitHub Action without a ledger passes pr-<number>)")
 
 
