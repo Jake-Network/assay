@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- `check verify` records in `payload.files` only the files of the piece's own commits: a commit merged into its
+  range from another piece (a worker that started from an integration branch) is left out when the ledger or its
+  trailer ties it to that piece, so a later change to its files no longer marks this piece `changed since`.
 - `bench.boundary.run` takes `--force-compact` (send `/compact` after each phase's work call, in every arm) and
   `--compact-pct N` (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`); the `discarded` probe asks for the failure signature
   only; the report adds an "H1 Session answers (contains)" sensitivity column, recomputed from stored answers.

@@ -38,7 +38,7 @@ from ..errors import BenchbookError, InvalidTransition
 from . import failures, rerun
 from .baseline import EarlyBaseline, classify_environment, count_tests, passed_elsewhere
 from .declarations import DEFAULT_GUARD_PATHS, PIECE, Base, pin_changed, pinned, read_base
-from .gitrepo import changed_paths, path_prefixes, resolve_commit, toplevel
+from .gitrepo import changed_paths, merged_from, path_prefixes, paths_of, resolve_commit, toplevel, trailer_pieces
 from .guard import MAX_GUARD_FILES, Integrity, integrity
 from .rerun import STATUSES, CheckResult, Prepared, _signals_held, check_env, failure_signature
 
@@ -208,6 +208,36 @@ class Recorded:
     discarded_error: str | None = None  # why that claim could not be written (the attempt is recorded)
 # A completion's payload.files: more changed files than this and the brief compares its directory prefixes instead.
 MAX_FILES = 200
+# The commits other pieces were reported done at: completions whose tags and payload name the same piece and commit.
+_OTHER_PIECES = ("SELECT DISTINCT payload ->> 'commit' AS commit FROM benchbook.claims WHERE project_id = %s"
+                 " AND kind = 'completion' AND payload ->> 'piece' IS DISTINCT FROM %s"
+                 " AND tags @> ARRAY['piece:' || (payload ->> 'piece'), 'commit:' || (payload ->> 'commit')]")
+# Which pieces the ledger ties each commit to: completions reported at it and check runs recorded at it.
+_PIECES_AT = ("SELECT payload ->> 'commit' AS commit, payload ->> 'piece' AS piece FROM benchbook.claims"
+              " WHERE project_id = %(p)s AND kind = 'completion' AND payload ->> 'commit' = ANY(%(c)s)"
+              " AND tags @> ARRAY['piece:' || (payload ->> 'piece'), 'commit:' || (payload ->> 'commit')]"
+              " UNION SELECT code_ref, config ->> 'piece' FROM benchbook.experiments"
+              " WHERE project_id = %(p)s AND code_ref = ANY(%(c)s) AND config ->> 'piece' IS NOT NULL")
+
+
+def own_files(lg: Ledger, repo: Path, piece: str, merge_base: str, sha: str) -> list[str]:
+    """The files of this piece's own commits since the merge-base (payload.files; the brief's "changed since"
+    compares them with HEAD). A commit that another piece's reported commit reaches (merged in from an integration
+    branch) is left out only when something says it is that other piece's (it is that piece's reported commit, its
+    trailer names that piece, or the ledger has that piece's check runs at it) and nothing says it is this one's. A
+    commit nothing attributes stays: a file listed in excess only adds a "changed since" mark, a file left out hides
+    one (DECISIONS.md). [] when no own commit changed a file (the caller falls back to the merge-base diff)."""
+    others = [r["commit"] for r in lg.sql_internal(_OTHER_PIECES, (lg.project_id, piece))]
+    merged = merged_from(repo, merge_base, sha, others)
+    if not merged:
+        return paths_of(repo, merge_base, sha, set())
+    owners: dict[str, set[str]] = {c: set() for c in merged}
+    for c, names in trailer_pieces(repo, merged).items():
+        owners.setdefault(c, set()).update(names)
+    for row in lg.sql_internal(_PIECES_AT, {"p": lg.project_id, "c": merged}):
+        owners.setdefault(row["commit"], set()).add(row["piece"])
+    theirs = {c for c, names in owners.items() if names and piece not in names}
+    return paths_of(repo, merge_base, sha, theirs)
 # metrics.retry (verify(retry=True)): RETRYING on the failed first run, recorded before its retry runs; one of the
 # others on the retry, which carries metrics.retry_of (the first run) and metrics.first_signature
 RETRYING = "failed; retried"
@@ -305,7 +335,8 @@ def verify(lg: Ledger, piece: str, commit: str, *, repo: Path, base: str | None 
         moved = pin is not None and pin_changed(lg, pin, piece, repo, impl)
     changed = changed_paths(repo, b.merge_base, sha)
     scope = path_prefixes(changed)
-    files = changed if len(changed) <= MAX_FILES else []
+    own = own_files(lg, repo, piece, b.merge_base, sha) or changed
+    files = own if len(own) <= MAX_FILES else []
     found = None if given is None else given[0]
     first_id = uuid5(receipt_id, "first run") if receipt_id is not None else None
     record_id = receipt_id

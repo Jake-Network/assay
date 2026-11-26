@@ -875,3 +875,17 @@ by hand, not a live session). Four are fixed; the fourth is not.
   per phase), a /compact that emits no `compact_boundary` with trigger `manual` stops the run instead of passing as
   a work call without a sample, and a phase's own automatic compactions are kept as `auto_compactions`, since the
   forced boundary, being the last, is the phase's sample (with `--force-compact` the delayed column stays empty).
+- **A piece's files are its own commits' files.** In the fourth boundary pilot the worker of one piece started
+  from the integration branch where another piece had been merged; `payload.files` was the merge-base diff, which
+  held the other piece's file, and when that file changed the brief marked this piece `changed since` too, one of
+  F's four misses ("coarser than its own changes", after the second pilot). The first version left out every commit
+  another piece's reported commit reaches. A review found what that hides: on one line that mixes pieces (alpha's
+  a.py, beta reported at b.py, alpha's a2.py), alpha lost a.py, and a later change to a.py would leave a stale
+  verification unmarked. Which piece a commit belongs to is not in git, and the two errors are not equal: a file
+  listed in excess adds a `changed since` mark a reader can check, a file left out hides one. So `check verify` now
+  leaves out a commit only when something says it is another piece's and nothing says it is this one's: it is
+  another piece's reported commit (a completion whose tags and payload agree), its `Benchbook-Piece` trailer names
+  another piece, or the ledger has another piece's check runs at it; and only commits that another piece's reported
+  commit in the range reaches (merged in). A commit nothing attributes stays. Merge commits are not listed, so a
+  conflict resolution made in one is not; when no own commit changed a file, the merge-base diff is recorded as
+  before. The directory scope, the weakened-test and `[checks]` checks and the brief's comparison are unchanged.

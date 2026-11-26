@@ -425,6 +425,55 @@ def test_a_nameless_rerun_names_what_decides_only_when_it_can(repo: Path, vtmp: 
     assert rec.outcome is not None and rec.outcome.reason.endswith("(orchestrator or human role)")
 
 
+def test_a_piece_started_from_an_integration_branch_lists_only_its_own_files(repo: Path, vtmp: Path, db_url: str,
+                                                                            code_project: str) -> None:
+    """Fourth boundary pilot: the worker of one piece branched from an integration branch where another piece was
+    merged; the merge-base diff listed the other piece's file too, which a later change then marked changed since."""
+    lead = open_as(db_url, code_project, "lead")
+    first = piece(repo, "alpha", {"a.py": "a = 1\n"})
+    checks.verify(lead, "alpha", first, repo=repo, reported_by="impl-a")
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "integration", "main"], check=True)
+    subprocess.run(["git", "-C", str(repo), "merge", "-q", "--no-ff", "-m", "merge alpha", "alpha"], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "beta", "integration"], check=True)
+    (repo / "b.py").write_text("b = 1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "b.py"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "beta"], check=True)
+    second = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+                            text=True).stdout.strip()
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+    v, rec = checks.verify(lead, "beta", second, repo=repo, reported_by="impl-b")  # [guard] base: main
+    assert v.base.merge_base == subprocess.run(["git", "-C", str(repo), "rev-parse", "main"], check=True,
+                                               capture_output=True, text=True).stdout.strip()
+    [row] = lead.sql_internal("SELECT payload FROM benchbook.claims WHERE id = %s", (rec.claim_id,))
+    assert row["payload"]["files"] == ["b.py"]
+    assert v.paths == ["a.py", "b.py"]  # the scope (file: tags) still comes from the merge-base diff
+
+
+def test_a_piece_keeps_its_own_commits_below_another_pieces_commit(repo: Path, vtmp: Path, db_url: str,
+                                                                    code_project: str) -> None:
+    """One line mixes two pieces (alpha's a.py, then beta reported at its commit, then alpha's a2.py): only beta's
+    commit is left out of alpha's files, not alpha's first commit below it, or a later change to a.py would not mark
+    alpha changed since (review of the first version)."""
+    lead = open_as(db_url, code_project, "lead")
+
+    def commit(path: str) -> str:
+        (repo / path).write_text("x\n")
+        subprocess.run(["git", "-C", str(repo), "add", path], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", path], check=True)
+        return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "mixed", "main"], check=True)
+    commit("a.py")
+    b1 = commit("b.py")
+    checks.verify(lead, "beta", b1, repo=repo, reported_by="impl-b")
+    a2 = commit("a2.py")
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+    _, rec = checks.verify(lead, "alpha", a2, repo=repo, reported_by="impl-a")
+    [row] = lead.sql_internal("SELECT payload FROM benchbook.claims WHERE id = %s", (rec.claim_id,))
+    assert sorted(row["payload"]["files"]) == ["a.py", "a2.py"]
+
+
 def test_cli_verify_under_a_lead_token(repo: Path, vtmp: Path, db_url: str, code_project: str) -> None:
     """With BENCHBOOK_TOKEN and no --agent, the token names the verifier (no verifier@<host> to contradict it)."""
     env = {**os.environ, "BENCHBOOK_DATABASE_URL": as_writer(db_url), "TMPDIR": str(vtmp),
