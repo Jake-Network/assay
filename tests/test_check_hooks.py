@@ -13,13 +13,19 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, check_hooks, config, hooks, pieces
-from benchbook.checks import last_line_hash
+from benchbook import Ledger, config
+from benchbook.checks.rerun import last_line_hash
+from benchbook.code import pieces
 from benchbook.config import LocalConfig, parse_checks
+from benchbook.hooks import checks as check_hooks
+from benchbook.hooks import spooler
 from tests.conftest import make_project
 from tests.test_check_run import PY, SCRIPT, attempts, cli_env, git, make_checkout, wait_attempts
 
 FX = Path(__file__).parent / "fixtures" / "hooks"
+# The stages of check verify (checks.py before the package layout): none of them belongs on the Bash hook's path.
+VERIFY_STAGES = tuple(f"benchbook.checks.{m}" for m in ("verify", "rerun", "baseline", "guard", "declarations",
+                                                         "gitrepo"))
 ROOT = Path(__file__).resolve().parent.parent
 GATE_CONFIG = """project = "{project}"
 
@@ -211,7 +217,8 @@ def test_the_bash_hook_never_loads_the_database_layer(gate_repo: Path, tmp_path:
             "from benchbook.entry import main\n"
             "try:\n    main()\nexcept SystemExit as e:\n    assert e.code == 0, e.code\n"
             "heavy = [m for m in sys.modules if m.split('.')[0] in ('typer', 'click', 'psycopg', 'jsonschema', "
-            "'pydantic') or m.startswith(('benchbook.cli', 'benchbook.ledger', 'benchbook.db', 'benchbook.checks'))]\n"
+            "'pydantic') or m.startswith(('benchbook.cli', 'benchbook.core.ledger', 'benchbook.db')) "
+            f"or m in {VERIFY_STAGES!r}]\n"
             "assert not heavy, heavy\n")
     p = subprocess.run([sys.executable, "-c", code], cwd=gate_repo, env=cli_env(tmp_path), capture_output=True,
                        text=True, timeout=60)
@@ -266,11 +273,11 @@ def test_a_run_still_in_the_spool_counts(gate_repo: Path, tmp_path: Path, lg: Le
                                          monkeypatch: pytest.MonkeyPatch) -> None:
     """check run returns before its processor has written the attempt; completing right after must not be blocked."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     head = git(gate_repo, "rev-parse", "HEAD")
     for name in ("unit", "quick"):
-        hooks._write_spool(spool, {"event": "check-run", "project": lg.project_id, "accepted": True, "data": {
+        spooler._write_spool(spool, {"event": "check-run", "project": lg.project_id, "accepted": True, "data": {
             "piece": "media", "check": name, "status": "ok", "sha": head, "dirty": False}})
     p = hook("task-completed", fixture("task_completed.json", gate_repo), cli_env(tmp_path), gate_repo)
     assert (p.returncode, p.stderr) == (0, "")

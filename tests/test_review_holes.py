@@ -22,9 +22,13 @@ import pytest
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from benchbook import Ledger, attempts, check_run, checks, findings, pr, signature
+from benchbook import Ledger
+from benchbook.checks import attempts, rerun, signature
+from benchbook.checks import run as check_run
+from benchbook.checks import verify as checks
+from benchbook.code import findings, pr
 from benchbook.config import CheckSpec
-from benchbook.dedup import statement_hash
+from benchbook.core.dedup import statement_hash
 from benchbook.errors import InvalidTransition, PermissionDenied
 from tests.conftest import make_project
 from tests.writer import as_writer, issue
@@ -206,7 +210,7 @@ def test_a_worker_naming_the_lead_adds_only_itself_to_other_claims(db_url: str) 
 
 # ------------------------------------------------------------------------------------------- 2. junit = true
 
-def junit_run(tmp_path: Path, xml: str | None, exit_code: int = 0) -> checks.CheckResult:
+def junit_run(tmp_path: Path, xml: str | None, exit_code: int = 0) -> rerun.CheckResult:
     """_run_one of a junit check whose command writes xml (None: nothing) to {junit} and exits with exit_code."""
     wt, out = tmp_path / "wt", tmp_path / "out"
     wt.mkdir(parents=True)
@@ -214,7 +218,7 @@ def junit_run(tmp_path: Path, xml: str | None, exit_code: int = 0) -> checks.Che
     (wt / "write.py").write_text("import sys\nif len(sys.argv) > 2:\n    open(sys.argv[1], 'w').write(sys.argv[2])\n"
                                  f"sys.exit({exit_code})\n")
     arg = "" if xml is None else " " + shlex.quote(xml)
-    return checks._run_one(CheckSpec("unit", f"{PY} write.py {{junit}}{arg}", True, 30), wt, out)
+    return rerun._run_one(CheckSpec("unit", f"{PY} write.py {{junit}}{arg}", True, 30), wt, out)
 
 
 OK_CASE = '<testcase classname="t" name="a"/>'
@@ -479,7 +483,7 @@ def test_check_verify_runs_the_checks_without_ledger_credentials(db_url: str, tm
     names = {line.split("=", 1)[0] for line in dump.read_text().splitlines() if "=" in line}
     assert not names & (set(CREDENTIALS) | {"BENCHBOOK_DATABASE_URL"})
     assert {"BENCH_SWE_HIDDEN", "PATH", "DUMP_TO"} <= names
-    assert checks.CREDENTIALS >= set(CREDENTIALS) | {"BENCHBOOK_DATABASE_URL"}
+    assert rerun.CREDENTIALS >= set(CREDENTIALS) | {"BENCHBOOK_DATABASE_URL"}
 
 
 def test_check_run_keeps_the_implementers_environment(db_url: str, tmp_path: Path,

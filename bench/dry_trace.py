@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from benchbook.tokens import estimate_tokens
+from benchbook.core.tokens import estimate_tokens
 
 from .real import MODEL_USAGE_KEYS, TOKEN_KEYS
 

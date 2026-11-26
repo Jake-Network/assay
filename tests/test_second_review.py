@@ -22,9 +22,12 @@ from typing import Any
 
 import pytest
 
-from benchbook import checks, hooks, pieces, pr, runner
+from benchbook.checks import verify as checks
+from benchbook.code import pieces, pr
+from benchbook.core import runner
+from benchbook.core.runner import run_command
 from benchbook.errors import BenchbookError, Conflict, InvalidTransition, LeaseLost
-from benchbook.runner import run_command
+from benchbook.hooks import spooler
 from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, cli_env, git, make_checkout, wait_attempts
 from tests.test_review_holes import code_project, commit, local, make_repo, owner_rows, tok
@@ -105,25 +108,25 @@ def test_an_entry_is_recorded_only_under_the_token_it_was_queued_with(db_url: st
     monkeypatch.delenv("BENCHBOOK_AGENT", raising=False)
 
     monkeypatch.delenv("BENCHBOOK_TOKEN", raising=False)
-    plain = hooks._spool_dir()
+    plain = spooler._spool_dir()
     monkeypatch.setenv("BENCHBOOK_TOKEN", atok)
-    spool_a = hooks._spool_dir()
+    spool_a = spooler._spool_dir()
     spool_a.mkdir(parents=True)
-    hooks._write_spool(spool_a, _capture_entry(project, "report of agent a, queued with its token"))
+    spooler._write_spool(spool_a, _capture_entry(project, "report of agent a, queued with its token"))
     [path] = list(spool_a.glob("*.json"))
 
     monkeypatch.setenv("BENCHBOOK_TOKEN", btok)
-    spool_b = hooks._spool_dir()
+    spool_b = spooler._spool_dir()
     assert len({plain, spool_a, spool_b}) == 3  # one spool per token on the same database
     spool_b.mkdir(parents=True)
-    summary = hooks.replay_now(spool_b)
+    summary = spooler.replay_now(spool_b)
     assert summary.processed == 0 and path.exists()
     # the entry itself is bound too: handed to B's processor, it stays queued
-    assert hooks.process_file(path).startswith("held:queued under another BENCHBOOK_TOKEN") and path.exists()
+    assert spooler.process_file(path).startswith("held:queued under another BENCHBOOK_TOKEN") and path.exists()
     assert not owner_rows(db_url, "SELECT id FROM benchbook.claims WHERE project_id = %s", (project,))
 
     monkeypatch.setenv("BENCHBOOK_TOKEN", atok)
-    assert hooks.replay_now(spool_a).captured == 1 and not path.exists()
+    assert spooler.replay_now(spool_a).captured == 1 and not path.exists()
     [row] = owner_rows(db_url, "SELECT author FROM benchbook.claims WHERE project_id = %s", (project,))
     assert row["author"] == "agent-a"
 
@@ -137,10 +140,10 @@ def test_without_a_token_the_spool_is_where_it_was(tmp_path: Path, monkeypatch: 
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://example/db")
     monkeypatch.delenv("BENCHBOOK_TOKEN", raising=False)
     key = hashlib.sha256(json.dumps(["postgresql://example/db"]).encode()).hexdigest()
-    assert hooks._spool_dir().name == key and hooks.writer_identity() is None
+    assert spooler._spool_dir().name == key and spooler.writer_identity() is None
     monkeypatch.setenv("BENCHBOOK_TOKEN", "bbt_x")
-    ident = hooks.writer_identity()
-    assert ident is not None and "bbt_x" not in ident and hooks._spool_dir().name != key
+    ident = spooler.writer_identity()
+    assert ident is not None and "bbt_x" not in ident and spooler._spool_dir().name != key
 
 
 # ------------------------------------------------------------------------------------------- 3. the Bash hook and JUnit
@@ -199,16 +202,16 @@ def test_older_raw_junit_passes_do_not_open_the_gate(db_url: str, tmp_path: Path
     env = cli_env(tmp_path, BENCHBOOK_DATABASE_URL=db_url)
     monkeypatch.setenv("XDG_STATE_HOME", env["XDG_STATE_HOME"])
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", db_url)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    hooks._write_spool(spool, {
+    spooler._write_spool(spool, {
         "event": "bash-result", "project": project, "accepted": True,
         "data": {"piece": "media", "check": "unit", "sha": sha, "status": "ok", "dirty": False, "repo": str(repo)},
     })
 
     task = fixture("task_completed.json", repo)
     assert hook("task-completed", task, env, repo).returncode == 2
-    assert hooks.replay_now(spool).recorded == 1
+    assert spooler.replay_now(spool).recorded == 1
     [recorded] = wait_attempts(lg, 1)
     assert recorded["metrics"]["checks"] == {"unit": "ok"} and recorded["metrics"]["via"] == "bash-hook"
     assert hook("task-completed", task, env, repo).returncode == 2

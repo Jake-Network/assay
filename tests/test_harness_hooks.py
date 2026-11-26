@@ -15,10 +15,13 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, boundary_hooks, doctor, harnesses
-from benchbook.checks import last_line_hash
+from benchbook import Ledger
+from benchbook.checks.rerun import last_line_hash
+from benchbook.cli import doctor
 from benchbook.entry import hook_args
-from benchbook.harnesses import shell_call
+from benchbook.hooks import boundary as boundary_hooks
+from benchbook.hooks import harnesses
+from benchbook.hooks.harnesses import shell_call
 from tests.conftest import make_project
 from tests.test_check_hooks import FX, GATE_CONFIG, ROOT, fixture, hook_log, observed
 from tests.test_check_run import PY, SCRIPT, attempts, cli_env, make_checkout, wait_attempts

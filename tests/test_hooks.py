@@ -11,9 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import Ledger, hooks
+from benchbook import Ledger
 from benchbook.config import write_config
-from benchbook.hooks import extract_text, process
+from benchbook.hooks import spooler
+from benchbook.hooks import subagent as hooks
+from benchbook.hooks.citations import extract_text
+from benchbook.hooks.subagent import process
 
 FX = Path(__file__).parent / "fixtures" / "hooks"
 
@@ -95,10 +98,10 @@ def test_distinct_hook_reports_with_same_excerpt(repo: Path, worker: Ledger) -> 
 
 def test_spool_retries_with_original_project(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    monkeypatch.setattr(hooks, "RETRY_DELAYS", (0,))
-    spool = hooks._spool_dir()
+    monkeypatch.setattr(spooler, "RETRY_DELAYS", (0,))
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
                              "data": {"cwd": str(repo), "last_assistant_message": "Recovered finding."}})
     write_config(repo, "unrelated-project")
     calls = 0
@@ -111,7 +114,7 @@ def test_spool_retries_with_original_project(repo: Path, worker: Ledger, monkeyp
         return process(*args, **kwargs)
 
     monkeypatch.setattr(hooks, "process", flaky_process)
-    hooks.replay(spool)
+    spooler.replay(spool)
     assert calls == 2 and list(spool.glob("*.json")) == []
     [note] = _notes(worker)
     assert note["payload"]["text"] == "Recovered finding."
@@ -122,7 +125,7 @@ def test_legacy_spool_entry_can_be_replayed(repo: Path, worker: Ledger, monkeypa
     path = repo / "legacy-report.json"
     path.write_text(json.dumps({"event": "subagent-stop", "cwd": str(repo),
                                "input": json.dumps({"last_assistant_message": "Pre-upgrade finding."})}))
-    assert hooks.process_file(path).startswith("ok:captured:")
+    assert spooler.process_file(path).startswith("ok:captured:")
     assert not path.exists()
     [note] = _notes(worker)
     assert note["payload"]["text"] == "Pre-upgrade finding."
@@ -259,17 +262,17 @@ def test_only_benchbook_workers_are_captured(repo: Path, worker: Ledger, monkeyp
 
 def test_handback_and_stop_capture_one_report(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     common = {"cwd": str(repo), "session_id": "s9", "agent_id": "a9", "agent_type": "benchbook:benchbook-worker"}
     # the SubagentStop entry is spooled first but must not win
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id, "data": {
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id, "data": {
         **common, "hook_event_name": "SubagentStop", "last_assistant_message": "Handed back."}})
     time.sleep(0.05)
-    hooks._write_spool(spool, {"event": "subagent-handback", "project": worker.project_id, "data": {
+    spooler._write_spool(spool, {"event": "subagent-handback", "project": worker.project_id, "data": {
         **common, "hook_event_name": "PostToolUse", "tool_name": "SubagentHandback",
         "tool_input": {"message": "Full report: hex beats lattice by 0.02."}}})
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert (s.captured, s.skipped, s.ok) == (1, 1, True)
     [note] = _notes(worker)
     assert note["payload"]["text"].startswith("Full report")
@@ -278,20 +281,20 @@ def test_handback_and_stop_capture_one_report(repo: Path, worker: Ledger, monkey
 def test_permanent_failures_go_to_dead_and_replay_reports(repo: Path, worker: Ledger,
                                                           monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    monkeypatch.setattr(hooks, "RETRY_DELAYS", (0, 0))
-    spool = hooks._spool_dir()
+    monkeypatch.setattr(spooler, "RETRY_DELAYS", (0, 0))
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": "no-such-project",
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": "no-such-project",
                                "data": {"cwd": str(repo), "last_assistant_message": "Lost on a new machine."}})
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
                                "data": {"cwd": str(repo), "last_assistant_message": "NUL \x00 inside."}})
     t = time.monotonic()
-    hooks.replay(spool)
+    spooler.replay(spool)
     assert time.monotonic() - t < 10  # no retry loop for an error a retry cannot fix
     assert list(spool.glob("*.json")) == [] and len(list((spool / "dead").glob("*.json"))) == 1
     [note] = _notes(worker)
     assert note["payload"]["text"] == "NUL  inside."
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert (s.requeued, s.processed, s.dead, s.ok) == (1, 0, 1, False)
     assert "no-such-project" in str(s) and "dead" in str(s)
     assert s.as_dict()["errors"]
@@ -299,9 +302,9 @@ def test_permanent_failures_go_to_dead_and_replay_reports(repo: Path, worker: Le
 
 def test_replay_entry_point_returns_summary(repo: Path, worker: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
                                "data": {"cwd": str(repo), "last_assistant_message": "Replayed finding."}})
     s = hooks.main("replay")
     assert s is not None and (s.processed, s.captured, s.ok) == (1, 1, True)
@@ -310,13 +313,13 @@ def test_replay_entry_point_returns_summary(repo: Path, worker: Ledger, monkeypa
 def test_replay_quarantines_invalid_utf8_and_drains_valid_reports(repo: Path, worker: Ledger,
                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     (spool / "broken.json").write_bytes(b"\xff")
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
                                "data": {"last_assistant_message": "Valid report."}})
 
-    summary = hooks.replay_now(spool)
+    summary = spooler.replay_now(spool)
 
     assert (summary.captured, summary.dead) == (1, 1)
     assert list(spool.glob("*.json")) == []
@@ -328,9 +331,9 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
     import io
 
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    pending = hooks._pending
+    pending = spooler._pending
     queued = False
 
     def append_after_snapshot(path: Path, lane: str | None = None) -> list[Path]:
@@ -338,7 +341,7 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
         snapshot = pending(path, lane)
         if not queued:
             queued = True
-            assert hooks._locked(spool)
+            assert spooler._locked(spool)
             monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
                 {"cwd": str(repo), "agent_type": "benchbook-worker", "last_assistant_message": "Concurrent report."})))
             hooks.main("subagent-stop")
@@ -347,10 +350,10 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
     def unexpected_spawn(*args, **kwargs):
         pytest.fail("The foreground processor already owns the spool.")
 
-    monkeypatch.setattr(hooks, "_pending", append_after_snapshot)
+    monkeypatch.setattr(spooler, "_pending", append_after_snapshot)
     monkeypatch.setattr(hooks.subprocess, "Popen", unexpected_spawn)
 
-    summary = hooks.replay_now(spool)
+    summary = spooler.replay_now(spool)
 
     assert (summary.captured, summary.queued, summary.ok) == (1, 0, True)
     assert list(spool.glob("*.json")) == []
@@ -359,11 +362,11 @@ def test_replay_drains_arrivals_after_snapshot(repo: Path, worker: Ledger, monke
 
 def test_no_processor_spawned_while_one_drains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    with hooks._lock(spool, blocking=False) as got:
-        assert got and hooks._locked(spool)
-    assert not hooks._locked(spool)
+    with spooler._lock(spool, blocking=False) as got:
+        assert got and spooler._locked(spool)
+    assert not spooler._locked(spool)
 
 
 def test_missing_project_is_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -415,7 +418,7 @@ def test_untyped_events_are_not_captured_unless_wildcard(repo: Path, worker: Led
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
     monkeypatch.delenv("BENCHBOOK_HOOK_AGENTS", raising=False)
     monkeypatch.setattr(hooks.subprocess, "Popen", lambda *a, **k: None)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     event = {"cwd": str(repo), "hook_event_name": "SubagentStop", "last_assistant_message": "Untyped report."}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
     hooks.main("subagent-stop")
@@ -425,7 +428,7 @@ def test_untyped_events_are_not_captured_unless_wildcard(repo: Path, worker: Led
     hooks.main("subagent-stop")
     assert len(list(spool.glob("*.json"))) == 1
     monkeypatch.delenv("BENCHBOOK_HOOK_AGENTS")
-    assert hooks.replay_now(spool).captured == 1
+    assert spooler.replay_now(spool).captured == 1
     assert _notes(worker)[0]["payload"]["text"] == "Untyped report."
 
 
@@ -440,7 +443,7 @@ def test_the_compaction_summary_is_never_captured(repo: Path, worker: Ledger, mo
              "last_assistant_message": "<analysis>The conversation so far.</analysis>\n<summary>...</summary>"}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
     hooks.main("subagent-stop")
-    assert not list(hooks._spool_dir().glob("*.json"))
+    assert not list(spooler._spool_dir().glob("*.json"))
 
 
 def test_hook_help_is_not_read_as_an_event() -> None:
@@ -462,11 +465,11 @@ def test_replay_keeps_the_capture_decision_made_at_enqueue(repo: Path, worker: L
         {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "implementer",
          "last_assistant_message": "Implementer finding."})))
     hooks.main("subagent-stop")
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     [entry] = spool.glob("*.json")
     assert json.loads(entry.read_text())["accepted"] is True
     monkeypatch.delenv("BENCHBOOK_HOOK_AGENTS")
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert (s.captured, s.skipped) == (1, 0)
     assert _notes(worker)[0]["payload"]["text"] == "Implementer finding."
 
@@ -477,20 +480,20 @@ def test_entry_without_a_recorded_decision_is_kept_for_a_replay_with_its_setting
     delete it: it waits in dead/ until a replay with the original BENCHBOOK_HOOK_AGENTS captures it."""
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
     monkeypatch.delenv("BENCHBOOK_HOOK_AGENTS", raising=False)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     entry = {"event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
              "data": {"cwd": str(repo), "hook_event_name": "SubagentStop", "agent_type": "implementer",
                       "last_assistant_message": "Queued before the upgrade."}}
     (spool / "old.json").write_text(json.dumps(entry))
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert (s.captured, s.skipped, s.dead) == (0, 0, 1) and not s.ok
     assert (spool / "dead" / "old.json").exists() and not _notes(worker)
-    assert "BENCHBOOK_HOOK_AGENTS=" in (hooks._state_dir() / "hook.log").read_text()
-    s = hooks.replay_now(spool)  # a second replay with the wrong setting still keeps it
+    assert "BENCHBOOK_HOOK_AGENTS=" in (spooler._state_dir() / "hook.log").read_text()
+    s = spooler.replay_now(spool)  # a second replay with the wrong setting still keeps it
     assert s.dead == 1 and (spool / "dead" / "old.json").exists()
     monkeypatch.setenv("BENCHBOOK_HOOK_AGENTS", "benchbook-worker,implementer")
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert (s.captured, s.dead) == (1, 0) and not list(spool.rglob("*.json"))
     assert _notes(worker)[0]["payload"]["text"] == "Queued before the upgrade."
 
@@ -501,21 +504,21 @@ def test_malformed_legacy_entry_does_not_stop_replay(repo: Path, worker: Ledger,
     after it."""
     monkeypatch.setenv("XDG_STATE_HOME", str(repo / "state"))
     monkeypatch.delenv("BENCHBOOK_HOOK_AGENTS", raising=False)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     bad = {"event": "subagent-stop", "project": worker.project_id, "spooled_at": time.time(),
            "data": {"cwd": str(repo), "tool_name": "Agent", "tool_input": "not an object",
                     "tool_response": "Legacy report."}}
     (spool / "a-old.json").write_text(json.dumps(bad))
     os.utime(spool / "a-old.json", (1, 1))  # first in the drain order
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id, "accepted": True,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id, "accepted": True,
                                "data": {"cwd": str(repo), "last_assistant_message": "Valid report."}})
-    s = hooks.replay_now(spool)
+    s = spooler.replay_now(spool)
     assert s.queued == 0 and not list(spool.glob("*.json"))
     assert {n["payload"]["text"] for n in _notes(worker)} == {"Legacy report.", "Valid report."}
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": worker.project_id,
                                "data": {"tool_name": "SubagentHandback", "tool_input": ["x"]}})
-    assert hooks.replay_now(spool).ok  # no text to capture, and no AttributeError
+    assert spooler.replay_now(spool).ok  # no text to capture, and no AttributeError
 
 
 # a shell call that is not a declared check, as each harness's shell-result hook receives it (docs/harnesses.md)

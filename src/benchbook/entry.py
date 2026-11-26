@@ -10,9 +10,9 @@ import sys
 
 # the events the harnesses' hooks run (with an optional --harness NAME); anything else (--help, replay, a typo) goes
 # through the CLI
-# check_hooks.py: their exit code is the hook's answer
+# hooks/checks.py: their exit code is the hook's answer
 CHECK_HOOK_EVENTS = ("bash-start", "bash-result", "task-completed")
-# boundary_hooks.py: they print context for the model (session start, compaction, notes at a prompt)
+# hooks/boundary.py: they print context for the model (session start, compaction, notes at a prompt)
 BOUNDARY_HOOK_EVENTS = ("session-start", "pre-compact", "notes", "agent-result")
 HOOK_EVENTS = ("subagent-stop", "subagent-handback", *CHECK_HOOK_EVENTS, *BOUNDARY_HOOK_EVENTS)
 LEGACY_NOTICE = ("the `assay` command is now `benchbook` (same arguments); `assay` keeps working during 0.1.x. "
@@ -49,11 +49,11 @@ def main(legacy: bool = False) -> None:
     if (hook := hook_args(argv)) is not None:
         event, harness = hook
         if event in CHECK_HOOK_EVENTS:
-            from .check_hooks import main as check_hook_main
+            from .hooks.checks import main as check_hook_main
 
             sys.exit(check_hook_main(event, harness))
         if event in BOUNDARY_HOOK_EVENTS:
-            from . import boundary_hooks
+            from .hooks import boundary as boundary_hooks
 
             boundary_hooks.main(event, harness)
             if boundary_hooks.abandoned:  # a ledger call still running past its limit: do not wait for it
@@ -61,17 +61,17 @@ def main(legacy: bool = False) -> None:
 
                 os._exit(0)
             sys.exit(0)
-        from .hooks import main as hook_main
+        from .hooks.subagent import main as hook_main
 
         hook_main(event, harness)
         sys.exit(0)
     if argv[:2] == ["check", "run"]:
         # A check's own run pays this start-up (the wrapper's budget is 300 ms); --help and other options go
         # through the CLI and end in the same check_run.run().
-        from .check_run import parse_fast_args
+        from .checks.run import parse_fast_args
 
         if (fast := parse_fast_args(argv[2:])) is not None:
-            from .check_run import run
+            from .checks.run import run
 
             sys.exit(run(*fast))
     if argv in (["--version"], ["-V"]):
@@ -80,12 +80,12 @@ def main(legacy: bool = False) -> None:
         print(f"benchbook {__version__}")
         sys.exit(0)
     if argv == ["statusline"]:
-        from .code_status import read_cache
+        from .code.status import read_cache
 
         if line := read_cache():
             print(line)
         sys.exit(0)
-    from .cli import main as cli_main
+    from .cli.main import main as cli_main
 
     cli_main()
 

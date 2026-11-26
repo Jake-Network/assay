@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import code_status, hooks
+from benchbook.code import status as code_status
+from benchbook.hooks import spooler
 from benchbook.packs import load_pack
 from tests.conftest import make_project
 from tests.test_boundary_hooks import code_repo, context, fixture, run
@@ -52,11 +53,11 @@ def test_status_counts_current_pieces_and_queue(db_url: str, project: str, tmp_p
     lg.propose_claim("observation", "Another module has a race", tags=["out-of-scope"])
     closed = lg.propose_claim("observation", "Another module has a typo", tags=["out-of-scope"])
     agent(db_url, project, "human", "human").decide(closed.id, "retracted", "human", "Fixed")
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     (spool / "dead").mkdir(parents=True)
     (spool / "pending.json").write_text("{}")
     (spool / "dead" / "failed.json").write_text("{}")
-    hooks.log(f"hook processing failed for {spool}/pending.json")
+    spooler.log(f"hook processing failed for {spool}/pending.json")
 
     status = json.loads(cli(repo, "--json", "status"))
     assert status["project"] == project and status["pack"] == "code"
@@ -73,7 +74,7 @@ def test_dead_queue_is_first_line_of_even_an_empty_brief(project: str, tmp_path:
                                                         capsys: pytest.CaptureFixture[str],
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     repo = code_repo(tmp_path / "repo", project)
-    dead = hooks._spool_dir() / "dead"
+    dead = spooler._spool_dir() / "dead"
     dead.mkdir(parents=True)
     (dead / "failed.json").write_text("{}")
     expected = "benchbook: recording stopped: 1 report(s) in dead/. Fix: benchbook hook replay"
@@ -84,15 +85,15 @@ def test_dead_queue_is_first_line_of_even_an_empty_brief(project: str, tmp_path:
 
 def test_pending_and_failure_are_scoped_to_the_active_spool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://u@127.0.0.1:1/a")
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
     waiting = spool / "waiting.json"
     waiting.write_text("{}")
-    hooks.log("bash-result: queued unit fail (exit 1) for piece failed-build at 123abc")
+    spooler.log("bash-result: queued unit fail (exit 1) for piece failed-build at 123abc")
     assert not code_status.recording_warning(tmp_path)
     old = time.time() - 600
     os.utime(waiting, (old, old))
-    hooks.log(f"hook processing failed for {spool}/waiting.json")
+    spooler.log(f"hook processing failed for {spool}/waiting.json")
     warning = code_status.recording_warning(tmp_path)
     assert "1 hook failure line(s) in the last 24h" in warning and "1 overdue report(s)" in warning
     monkeypatch.setenv("BENCHBOOK_DATABASE_URL", "postgresql://u@127.0.0.1:1/b")
@@ -102,11 +103,11 @@ def test_pending_and_failure_are_scoped_to_the_active_spool(tmp_path: Path, monk
 def test_statusline_reads_cache_written_by_the_processor(project: str, tmp_path: Path) -> None:
     repo = code_repo(tmp_path / "repo", project)
     assert cli(repo, "statusline") == ""
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True)
-    hooks._write_spool(spool, {"event": "subagent-stop", "project": project, "accepted": True, "data": {
+    spooler._write_spool(spool, {"event": "subagent-stop", "project": project, "accepted": True, "data": {
         "agent_type": "benchbook-worker", "last_assistant_message": "Found a problem outside this piece."}})
-    assert hooks.replay_now(spool).ok
+    assert spooler.replay_now(spool).ok
     expected = "benchbook: verified 0/0, open findings 0"
     assert code_status.read_cache(project) == expected
     assert cli(repo, "statusline") == expected + "\n"

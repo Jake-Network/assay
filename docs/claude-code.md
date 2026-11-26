@@ -291,7 +291,7 @@ warning and the replay command. `benchbook statusline` reads a one-line summary 
 findings from the processor's cache. Output is empty until the processor records its first entry for this project.
 
 The `benchbook` plugin also gives the model what the ledger says at the points where a session loses it
-(`src/benchbook/boundary_hooks.py`):
+(`src/benchbook/hooks/boundary.py`):
 
 | hook | event | what it prints |
 |---|---|---|

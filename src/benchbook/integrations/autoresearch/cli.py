@@ -19,13 +19,13 @@ RegexOpt = Annotated[str | None, typer.Option("--parse-regex", help="summary lin
 
 
 def _st() -> dict[str, Any]:
-    from ...cli import STATE
+    from ...cli.main import STATE
 
     return STATE
 
 
 def _emit(data: Any, text: str) -> None:
-    from ...cli import emit
+    from ...cli.main import emit
 
     emit(data, text)
 
@@ -38,7 +38,7 @@ def _ctx(hw: str | None = None) -> Any:
 
 
 def _refused(e: Exception) -> None:
-    from ...cli import STATE, emit
+    from ...cli.main import STATE, emit
 
     data = {"ok": False, "refused": True, "error": str(e), **getattr(e, "data", {})}
     if STATE["json"]:
@@ -201,7 +201,7 @@ def idea(text: str, knob: Annotated[list[str] | None, typer.Option("--knob")] = 
 @ar_app.command("status")
 def status(all_: Annotated[bool, typer.Option("--all", help="every partition")] = False, hw: HwOpt = None) -> None:
     """Verified best, candidates, in-flight work, replication queue and calibration per partition."""
-    from ...ledger import Ledger
+    from ...core.ledger import Ledger
     from .ops import status as do_status
 
     part = None
@@ -267,7 +267,7 @@ def import_cmd(path: Annotated[str | None, typer.Argument(
 def referee_cmd(interval: Annotated[float, typer.Option("--interval", help="seconds between ticks")] = 30,
                 once: Annotated[bool, typer.Option("--once", help="one tick and exit")] = False) -> None:
     """Apply the referee rules (they also run after every ar run/replicate/sync)."""
-    from ...ledger import Ledger
+    from ...core.ledger import Ledger
     from .referee import tick
 
     st = _st()

@@ -41,7 +41,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from benchbook.globs import matching
+from benchbook.core.globs import matching
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "instances.json"

@@ -6,8 +6,8 @@ import json
 import pytest
 
 from benchbook import Ledger
+from benchbook.core.tokens import estimate_tokens
 from benchbook.errors import BenchbookError
-from benchbook.tokens import estimate_tokens
 
 
 @pytest.mark.parametrize("q", [

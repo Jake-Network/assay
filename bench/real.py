@@ -452,7 +452,7 @@ def stream_messages(events: Iterable[tuple[int, dict[str, Any]]]) -> Iterator[tu
 
 def worker_reports(events: list[tuple[int, dict[str, Any]]]) -> tuple[int | None, int]:
     """Estimate the size of actual Agent/Task results shown to the lead, once per tool call."""
-    from benchbook.tokens import estimate_tokens
+    from benchbook.core.tokens import estimate_tokens
 
     agent_calls: set[str] = set()
     reports: dict[str, int] = {}

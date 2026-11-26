@@ -14,7 +14,7 @@ import pytest
 from bench import real
 from bench.common import CODE_REF, load_evals
 from benchbook import Ledger
-from benchbook.hooks import process
+from benchbook.hooks.subagent import process
 from tests.conftest import make_project
 
 

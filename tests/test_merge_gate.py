@@ -12,7 +12,8 @@ from typing import Any
 
 import pytest
 
-from benchbook import check_hooks, hooks, merge_gate, session_notes
+from benchbook.hooks import checks as check_hooks
+from benchbook.hooks import merge_gate, session_notes, spooler
 from tests.conftest import CONFIG, git, make_repo, piece
 
 SESSION = "lead-session"
@@ -150,7 +151,7 @@ def test_a_report_replaced_while_waiting_uses_the_new_verdict(setup: dict[str, A
     merge_gate.mark(notes, sha, "media", old_names)
 
     def deliver_both(_: float) -> None:
-        with hooks._lock(notes, blocking=True):
+        with spooler._lock(notes, blocking=True):
             merge_gate.mark(notes, sha, "media", new_names)
             (notes / old_names[1]).write_text("old environment failure\n")
             (notes / new_names[1]).write_text("new environment failure\n")

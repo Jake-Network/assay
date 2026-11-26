@@ -19,8 +19,10 @@ from typing import Any
 import psycopg
 import pytest
 
-from benchbook import hooks, identity, pieces
+from benchbook.code import pieces
+from benchbook.core import identity
 from benchbook.errors import BenchbookError
+from benchbook.hooks import spooler
 from tests.test_check_hooks import fixture, hook, observed, start_piece
 from tests.test_check_run import SCRIPT, attempts, cli_env, make_checkout, spool_entries
 from tests.test_review_holes import code_project, make_repo, owner_rows, tok
@@ -156,7 +158,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, db_url: str) -> None:
 
 def _spool(monkeypatch: pytest.MonkeyPatch, token: str) -> Path:
     monkeypatch.setenv("BENCHBOOK_TOKEN", token)
-    spool = hooks._spool_dir()
+    spool = spooler._spool_dir()
     spool.mkdir(parents=True, exist_ok=True)
     return spool
 
@@ -167,9 +169,9 @@ def test_entries_of_a_token_that_never_reached_the_ledger_are_reported_as_held(
     _, old = tok(db_url, project, "agent-a", "worker")
     _env(monkeypatch, tmp_path, db_url)
     spool_old = _spool(monkeypatch, old)
-    hooks._write_spool(spool_old, _capture_entry(project, "queued; the ledger was never reached with this token"))
+    spooler._write_spool(spool_old, _capture_entry(project, "queued; the ledger was never reached with this token"))
     new = identity.add_agent(project, "agent-a", rotate=True, database_url=db_url).token
-    summary = hooks.replay_now(_spool(monkeypatch, new))
+    summary = spooler.replay_now(_spool(monkeypatch, new))
     assert (summary.processed, summary.held, summary.ok) == (0, 1, False)
     assert "held 1" in str(summary) and any(str(spool_old) in e for e in summary.errors)
     assert len(list(spool_old.glob("*.json"))) == 1
@@ -181,9 +183,9 @@ def test_a_retried_adoption_records_the_entry_once(db_url: str, tmp_path: Path,
     _, old = tok(db_url, project, "agent-a", "worker")
     _env(monkeypatch, tmp_path, db_url)
     spool_old = _spool(monkeypatch, old)
-    hooks._write_spool(spool_old, _capture_entry(project, "first, recorded under the old token"))
-    assert hooks.replay_now(spool_old).captured == 1
-    hooks._write_spool(spool_old, _capture_entry(project, "second, queued before the rotation"))
+    spooler._write_spool(spool_old, _capture_entry(project, "first, recorded under the old token"))
+    assert spooler.replay_now(spool_old).captured == 1
+    spooler._write_spool(spool_old, _capture_entry(project, "second, queued before the rotation"))
     [original] = list(spool_old.glob("*.json"))
     new = identity.add_agent(project, "agent-a", rotate=True, database_url=db_url).token
     spool_new = _spool(monkeypatch, new)
@@ -196,11 +198,11 @@ def test_a_retried_adoption_records_the_entry_once(db_url: str, tmp_path: Path,
         real_unlink(self, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", failing)
-    first = hooks.replay_now(spool_new)
+    first = spooler.replay_now(spool_new)
     assert (first.adopted, first.captured) == (1, 1) and original.exists()
     assert any("could not be removed" in e for e in first.errors)
     monkeypatch.setattr(Path, "unlink", real_unlink)
-    second = hooks.replay_now(spool_new)
+    second = spooler.replay_now(spool_new)
     assert (second.adopted, second.captured, second.processed) == (0, 0, 0) and not original.exists()
     rows = owner_rows(db_url, "SELECT author FROM benchbook.claims WHERE project_id = %s", (project,))
     assert len(rows) == 2 and {r["author"] for r in rows} == {"agent-a"}

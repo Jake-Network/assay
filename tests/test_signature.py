@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import check_hooks, signature
-from benchbook.checks import CheckResult, failure_signature
+from benchbook.checks import signature
+from benchbook.checks.rerun import CheckResult, failure_signature
+from benchbook.hooks import checks as check_hooks
 
 # ------------------------------------------------------------------------------------------- realistic outputs
 # Each case: a failure, the same failure in another run (other timestamps, durations, line numbers, addresses,

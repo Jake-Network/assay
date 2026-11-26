@@ -195,7 +195,7 @@ def verify_best(lead: Ledger) -> None:
         return
     values = [e["primary_value"] for e in exps]
     lo, mean = min(values), fmean(values)
-    from benchbook.ledger import config_line
+    from benchbook.core.ledger import config_line
 
     tested = ", ".join(map(str, seeds))
     stmt = (f"{config_line(t['config'])}: minimum sum_radii {lo!r} across {len(seeds)} tested seeds ({tested}). "

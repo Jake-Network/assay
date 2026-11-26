@@ -30,8 +30,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from benchbook.dedup import canonical_json
-from benchbook.tokens import estimate_tokens
+from benchbook.core.dedup import canonical_json
+from benchbook.core.tokens import estimate_tokens
 
 from . import real
 from .common import CODE_REF, SPACE, EvalLog, RunMetrics, best_curve, duplicate_ratio, load_evals
@@ -247,17 +247,17 @@ class Sim:
         """Leave each worker's SubagentStop in the hook spool, in the form `benchbook hook subagent-stop` writes
         it, without starting the hook's background processor: the harness's own replay then has entries to
         snapshot, record and export, which is the path a real C run takes when a processor was still behind."""
-        from benchbook import hooks
+        from benchbook.hooks import spooler
 
         # The spool is keyed by the database target, which this process shares with the replay; only the state
         # directory is the run's own.
-        spool = self.out / "state" / "benchbook" / "spool" / hooks._spool_dir().name
+        spool = self.out / "state" / "benchbook" / "spool" / spooler._spool_dir().name
         spool.mkdir(parents=True, exist_ok=True)
         for worker, text in self.stopped:
             data = {"hook_event_name": "SubagentStop", "session_id": self.trace.session_id,
                     "agent_id": worker.agent_id, "agent_type": "benchbook:benchbook-worker",
                     "last_assistant_message": text}
-            hooks._write_spool(spool, {"event": "subagent-stop", "project": self.pid, "data": data,
+            spooler._write_spool(spool, {"event": "subagent-stop", "project": self.pid, "data": data,
                                        "spooled_at": time.time(), "accepted": True})
 
 

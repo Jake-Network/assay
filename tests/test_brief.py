@@ -10,10 +10,10 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from benchbook import Ledger
-from benchbook.brief import compile_brief
+from benchbook.core.brief import compile_brief
+from benchbook.core.ids import short
+from benchbook.core.tokens import estimate_tokens
 from benchbook.errors import ValidationFailed
-from benchbook.ids import short
-from benchbook.tokens import estimate_tokens
 
 from .conftest import make_project
 

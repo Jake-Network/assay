@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from benchbook.blobs import artifact_blob
+from benchbook.core.blobs import artifact_blob
 from benchbook.integrations.autoresearch.checkout import Checkout
 from benchbook.integrations.autoresearch.code import code_hash
 from benchbook.integrations.autoresearch.ops import _isolated_dir

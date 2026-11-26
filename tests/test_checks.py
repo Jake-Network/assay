@@ -18,7 +18,9 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, checks, config
+from benchbook import Ledger, config
+from benchbook.checks import declarations, rerun
+from benchbook.checks import verify as checks
 from benchbook.errors import BenchbookError
 from benchbook.packs import load_pack
 from tests.conftest import CONFIG, TEST_EXTRA, TEST_IMPL, git, make_project, make_repo, piece
@@ -267,7 +269,7 @@ def test_worktree_is_removed_when_the_run_raises(repo: Path, vtmp: Path, verifie
     def boom(*a: Any, **k: Any) -> Any:
         raise RuntimeError("runner exploded")
 
-    monkeypatch.setattr(checks, "run_command", boom)
+    monkeypatch.setattr(rerun, "run_command", boom)
     with pytest.raises(RuntimeError, match="exploded"):
         checks.verify(verifier, "media", sha, repo=repo, reported_by="impl")
     assert_clean(repo, vtmp)
@@ -418,7 +420,7 @@ def test_loading_declarations_imports_nothing_heavy(tmp_path: Path) -> None:
     code = ("import sys; from pathlib import Path; from benchbook import config; c = config.load(Path(sys.argv[1]));"
             "assert list(c.checks) == ['unit', 'value'];"
             "print(sorted(m for m in sys.modules if m.split('.')[0] in ('psycopg', 'typer', 'jsonschema', 'pydantic')"
-            " or m.startswith(('benchbook.ledger', 'benchbook.db', 'benchbook.checks'))))")
+            " or m.startswith(('benchbook.core.ledger', 'benchbook.db', 'benchbook.checks'))))")
     p = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, check=True)
     assert p.stdout.strip() == "[]"
 
@@ -438,7 +440,7 @@ def test_code_pack() -> None:
 def test_verify_names_an_earlier_attempt_that_failed_the_same_way(repo: Path, vtmp: Path, verifier: Ledger) -> None:
     """check verify shows the same notice as check run, and its failed re-runs leave the same discarded-approach
     claim: one per piece, signature and approach, the second re-run added as evidence."""
-    from benchbook.check_cli import render, summary
+    from benchbook.cli.check import render, summary
 
     a = piece(repo, "bad", {"impl.txt": "almost\n"})
     v1, r1 = checks.verify(verifier, "media", a, repo=repo, reported_by="impl")
@@ -489,9 +491,9 @@ def lead_lg(db_url: str, code_project: str) -> Ledger:
     return Ledger.open(project=code_project, agent="lead", role="orchestrator", database_url=db_url)
 
 
-def pin_from_config(lg: Ledger, repo: Path, piece_name: str | None = None) -> checks.Pin:
+def pin_from_config(lg: Ledger, repo: Path, piece_name: str | None = None) -> declarations.Pin:
     cfg = config.load(repo)
-    return checks.pin_checks(lg, piece_name, cfg.checks, cfg.guard_paths, None, source="config")[0]
+    return declarations.pin_checks(lg, piece_name, cfg.checks, cfg.guard_paths, None, source="config")[0]
 
 
 def test_pinned_checks_verify_without_a_committed_config(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
@@ -505,7 +507,7 @@ def test_pinned_checks_verify_without_a_committed_config(tmp_path: Path, vtmp: P
     assert m["checks_source"] == "pin" and m["checks_sha256"] == p.sha256 and m["checks_changed"] is False
     assert rec.outcome is not None and rec.outcome.decision == "verified"
     # pinning the same declarations again records nothing
-    assert checks.pin_checks(lead_lg, None, p.checks, p.guard_paths, None, source="config") == (p, False)
+    assert declarations.pin_checks(lead_lg, None, p.checks, p.guard_paths, None, source="config") == (p, False)
 
 
 def test_a_pin_changed_under_the_work_goes_to_a_person(tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
@@ -524,7 +526,7 @@ def test_a_new_pin_after_the_first_attempt_goes_to_a_person(tmp_path: Path, vtmp
     pin_from_config(lead_lg, repo, "media")
     bad = piece(repo, "bad", {"impl.txt": "no\n"})
     checks.verify(lead_lg, "media", bad, repo=repo, reported_by="impl")  # the first attempt, under the first pin
-    checks.pin_checks(lead_lg, "media", checks.parse_check_options(["value=grep -qx ok value.txt"]), [])
+    declarations.pin_checks(lead_lg, "media", declarations.parse_check_options(["value=grep -qx ok value.txt"]), [])
     good = piece(repo, "good", {"impl.txt": "fixed\n"})
     v, rec = checks.verify(lead_lg, "media", good, repo=repo, reported_by="impl")
     assert v.all_passed and v.integrity.checks_changed and [r.name for r in v.results] == ["value"]
@@ -545,7 +547,7 @@ def test_a_pin_by_the_implementer_is_ignored(tmp_path: Path, vtmp: Path, db_url:
 
 
 def test_a_committed_config_wins_over_a_pin(repo: Path, vtmp: Path, lead_lg: Ledger) -> None:
-    checks.pin_checks(lead_lg, None, checks.parse_check_options(["broken=false"]), [])
+    declarations.pin_checks(lead_lg, None, declarations.parse_check_options(["broken=false"]), [])
     sha = piece(repo, "good", {"impl.txt": "fixed\n"})
     v, rec = checks.verify(lead_lg, "media", sha, repo=repo, reported_by="impl")
     assert v.all_passed and v.base.source == "merge-base" and [r.name for r in v.results] == ["unit", "value"]
@@ -556,7 +558,7 @@ def test_a_committed_config_wins_over_a_pin(repo: Path, vtmp: Path, lead_lg: Led
                                                 (["bad name=x"], "a check name is")])
 def test_bad_check_options(items: list[str], message: str) -> None:
     with pytest.raises(BenchbookError, match=message):
-        checks.parse_check_options(items)
+        declarations.parse_check_options(items)
 
 
 def test_cli_init_pins_and_verify_needs_no_commit(tmp_path: Path, vtmp: Path, cli_env: dict[str, str]) -> None:
@@ -676,7 +678,7 @@ def test_a_check_failing_the_same_way_at_the_merge_base_is_the_environment(tmp_p
     assert rec.relation is None and rec.discarded_id is None and not links_to(lead_lg, rec.claim_id)
     m = row(lead_lg, "experiments", rec.experiment_id)["metrics"]
     assert m["environment"] is True and m["baseline_signature"] == m["failure_signature"]
-    from benchbook.check_cli import render
+    from benchbook.cli.check import render
     assert "environment: secret fails the same way at the merge-base" in render(v, rec)
 
 
@@ -708,13 +710,13 @@ def test_the_merge_base_runs_fresh_for_each_environment_failure(tmp_path: Path, 
     repo = make_env_repo(tmp_path / "repo", "")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     calls: list[str] = []
-    real = checks.run_checks
+    real = rerun.run_checks
 
     def counting(repo: Path, commit: str, *a: Any, **kw: Any) -> Any:
         calls.append(commit)
         return real(repo, commit, *a, **kw)
 
-    monkeypatch.setattr(checks, "run_checks", counting)
+    monkeypatch.setattr(rerun, "run_checks", counting)
     one = piece(repo, "one", {"impl.txt": "fixed\n"})
     two = piece(repo, "two", {"impl.txt": "fixed too\n"})
     implementer_passed(lead_lg, "media", one, ["secret"], repo)
@@ -771,7 +773,7 @@ def test_a_retried_request_finishes_from_the_attempt_it_recorded(tmp_path: Path,
                                                                  lead_lg: Ledger) -> None:
     """The first run failed and was recorded under the request's receipt; the retry would pass (the service came
     back). The retry links and reports the stored failure, never its own run."""
-    from benchbook.verify_requests import _result_line
+    from benchbook.checks.verify_requests import _result_line
 
     flag = tmp_path / "service-up"
     repo = service_repo(tmp_path / "repo", flag)
@@ -820,7 +822,8 @@ def test_guard_compares_junit_counts_in_the_current_environment(
 
 def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
         tmp_path: Path, vtmp: Path, lead_lg: Ledger, monkeypatch: pytest.MonkeyPatch) -> None:
-    from benchbook import hooks, session_notes, verify_requests
+    from benchbook.checks import verify_requests
+    from benchbook.hooks import session_notes, spooler
 
     flag = tmp_path / "service-up"
     prepare = json.dumps(f"test -f {shlex.quote(str(flag))}")
@@ -841,7 +844,7 @@ def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
     assert session_notes.deliver("session") == ""
     receipt = uuid.uuid4()
     report = {**data, "report_sha256": "b" * 64}
-    write_info = hooks._write_info
+    write_info = spooler._write_info
 
     with monkeypatch.context() as fault:
         def fail_result(path: Path, *args: Any, **kwargs: Any) -> None:
@@ -849,7 +852,7 @@ def test_verify_requests_retry_and_reuse_only_the_same_environment_failure(
                 raise OSError("cannot write result")
             write_info(path, *args, **kwargs)
 
-        fault.setattr(hooks, "_write_info", fail_result)
+        fault.setattr(spooler, "_write_info", fail_result)
         with pytest.raises(OSError, match="cannot write result"):
             verify_requests.process(report, project, receipt, spool)
     flag.unlink()
@@ -884,8 +887,8 @@ def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no
         tmp_path: Path, vtmp: Path, lead_lg: Ledger) -> None:
     """Third boundary pilot: two re-runs failed once on socket timing tests outside the pieces, and became
     refutations and discarded approaches that the lead's own passing check verify could not undo."""
-    from benchbook import merge_gate
-    from benchbook.verify_requests import _result_line
+    from benchbook.checks.verify_requests import _result_line
+    from benchbook.hooks import merge_gate
 
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
@@ -917,7 +920,7 @@ def test_a_failed_automatic_re_run_that_passes_on_a_retry_is_inconclusive_and_no
 ])
 def test_a_retry_that_fails_too(tmp_path: Path, vtmp: Path, lead_lg: Ledger, second: str, retry: str,
                                 dead_end: bool) -> None:
-    from benchbook.verify_requests import _result_line
+    from benchbook.checks.verify_requests import _result_line
 
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once", second)
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
@@ -936,18 +939,18 @@ def test_an_interrupted_retry_is_run_again_by_the_next_try(tmp_path: Path, vtmp:
     """The failed first run is recorded before its retry runs, under an id the next try of the request finds."""
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    receipt, real, calls = uuid.uuid4(), checks.run_checks, []
+    receipt, real, calls = uuid.uuid4(), rerun.run_checks, []
 
     def stopped_on_the_retry(*args: Any, **kwargs: Any) -> Any:
         calls.append(1)
         results, interrupted = real(*args, **kwargs)
         return (results, KeyboardInterrupt()) if len(calls) == 2 else (results, interrupted)
 
-    monkeypatch.setattr(checks, "run_checks", stopped_on_the_retry)
+    monkeypatch.setattr(rerun, "run_checks", stopped_on_the_retry)
     with pytest.raises(KeyboardInterrupt):
         checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
     assert not discarded_claims(lead_lg) and len(attempts_of(lead_lg, sha)) == 1
-    monkeypatch.setattr(checks, "run_checks", real)
+    monkeypatch.setattr(rerun, "run_checks", real)
     v, rec = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
     assert v.retry == checks.RETRY_PASSED and rec.experiment_id == receipt
     assert len(attempts_of(lead_lg, sha)) == 2  # the first run was not run again
@@ -959,16 +962,16 @@ def test_a_retry_that_could_not_run_leaves_the_failure_as_it_was(
         initial: str) -> None:
     repo = flaky_repo(tmp_path / "repo", tmp_path / "ran-once")
     sha = piece(repo, "p", {"impl.txt": "fixed\n"})
-    receipt, real, calls = uuid.uuid4(), checks.run_checks, []
+    receipt, real, calls = uuid.uuid4(), rerun.run_checks, []
 
-    def no_retry(repo: Path, commit: str, specs: Any, env: Any, prep: Any, prepared: checks.Prepared) -> Any:
+    def no_retry(repo: Path, commit: str, specs: Any, env: Any, prep: Any, prepared: rerun.Prepared) -> Any:
         calls.append(1)
         if len(calls) == 2:  # the retry's prepare step failed: nothing ran
             prepared.error = "preparation unavailable"
-            return [checks.CheckResult(s.name, "not_run") for s in specs], None
+            return [rerun.CheckResult(s.name, "not_run") for s in specs], None
         return real(repo, commit, specs, env, prep, prepared)
 
-    monkeypatch.setattr(checks, "run_checks", no_retry)
+    monkeypatch.setattr(rerun, "run_checks", no_retry)
     if initial == "interrupted":
         def crash(*args: Any) -> None:
             raise KeyboardInterrupt()
@@ -1008,17 +1011,17 @@ def test_retry_compares_its_own_junit_counts(tmp_path: Path, vtmp: Path, lead_lg
                                            monkeypatch: pytest.MonkeyPatch) -> None:
     repo = make_repo(tmp_path / "repo")
     sha = piece(repo, "p", {"tests/test_added.py": TEST_EXTRA})
-    real, calls = checks.run_checks, []
+    real, calls = rerun.run_checks, []
 
     def run(repo: Path, commit: str, specs: Any, *args: Any) -> Any:
         if commit != sha:
             return real(repo, commit, specs, *args)
         calls.append(1)
-        unit = (checks.CheckResult("unit", "fail", exit_code=1, tests=2) if len(calls) == 1
-                else checks.CheckResult("unit", "ok", tests=1))
-        return [unit, checks.CheckResult("value", "ok")], None
+        unit = (rerun.CheckResult("unit", "fail", exit_code=1, tests=2) if len(calls) == 1
+                else rerun.CheckResult("unit", "ok", tests=1))
+        return [unit, rerun.CheckResult("value", "ok")], None
 
-    monkeypatch.setattr(checks, "run_checks", run)
+    monkeypatch.setattr(rerun, "run_checks", run)
     receipt = uuid.uuid4()
     run_result, record = checks.verify(lead_lg, "p", sha, repo=repo, reported_by="impl", retry=True, receipt_id=receipt)
     assert run_result.retry_of is not None

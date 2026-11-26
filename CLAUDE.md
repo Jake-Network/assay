@@ -16,6 +16,10 @@ and claims for agent swarms and hands the lead a budgeted brief (`src/benchbook/
 
 ## Code that is easy to misread
 
+- Layout: `core/` (ledger, models, brief, runner), `checks/` (declared checks, `check verify` by stage), `code/`
+  (pieces, findings, PR evidence), `hooks/`, `cli/`; DECISIONS.md, "Package layout". Keep the `__init__.py` of
+  `checks/` and `hooks/` empty (the 50 ms budget below), and call a function that tests replace through its
+  module (`rerun.run_checks`, `spooler.start_processor`) so the replacement reaches every caller.
 - Hooks run on every tool call of someone else's session. They never write to stderr, exit 0, and outside a
   benchbook project leave without touching the database. For a Bash call that is not a declared check,
   `hook bash-result` returns within 50 ms, imports included (`tests/test_hooks.py`), so keep heavy imports off that

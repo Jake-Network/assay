@@ -85,8 +85,9 @@ def test_module_entry_shares_global_options(tmp_path: Path) -> None:
 # ------------------------------------------------------------------------------------- get within 400 tokens (T12)
 
 def test_get_text_is_bounded_and_json_is_whole(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from benchbook import Ledger, lookup
-    from benchbook.tokens import estimate_tokens
+    from benchbook import Ledger
+    from benchbook.core import lookup
+    from benchbook.core.tokens import estimate_tokens
     from tests.conftest import make_project
 
     pid = make_project(db_url)

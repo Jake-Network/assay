@@ -563,7 +563,7 @@ benchbook sql "$(cat false-completion.sql)"
 ## Failure signatures
 
 A failed check is signed so that the same failure gives the same short string in every run, and a different failure
-a different one (`src/benchbook/signature.py`, the one place a signature is made). Per failing check, from the most
+a different one (`src/benchbook/checks/signature.py`, the one place a signature is made). Per failing check, from the most
 specific source the run has:
 
 | source | part | example |

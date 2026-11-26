@@ -13,11 +13,11 @@ from threading import Event
 import pytest
 
 from benchbook import Ledger
+from benchbook.core.tokens import estimate_tokens
 from benchbook.integrations.autoresearch import ops
 from benchbook.integrations.autoresearch.checkout import Checkout
 from benchbook.integrations.autoresearch.code import code_hash, normalize, short_hash
 from benchbook.integrations.autoresearch.referee import tick
-from benchbook.tokens import estimate_tokens
 
 SIM = Path(__file__).resolve().parent.parent / "examples" / "autoresearch-sim"
 CMD = f"{sys.executable} train.py"

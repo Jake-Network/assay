@@ -46,11 +46,11 @@ A full loop is in `examples/sdk-loop/loop.py`.
 
 ## Running a command
 
-`benchbook.runner` is the runner behind `benchbook ar run`, with nothing of autoresearch in it. It does not touch
+`benchbook.core.runner` is the runner behind `benchbook ar run`, with nothing of autoresearch in it. It does not touch
 the ledger: it runs one shell command and says how that went.
 
 ```python
-from benchbook.runner import Interrupted, run_command
+from benchbook.core.runner import Interrupted, run_command
 
 res = run_command("uv run pytest tests/media", cwd, log_path, timeout=900, tee=True)
 res.run_status, res.exit_code, res.duration_ms, res.log_tail, res.reason, res.metrics

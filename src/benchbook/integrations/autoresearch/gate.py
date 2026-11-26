@@ -53,8 +53,8 @@ def gate_patch(settings: dict[str, Any]) -> dict[str, Any]:
 
 def gate_on(project: str, hw: str | None = None, start: Path | None = None, skill: str | None = None,
             force: bool = False) -> dict[str, Any]:
+    from ...core.ledger import Ledger
     from ...errors import BenchbookError, NotFound
-    from ...ledger import Ledger
     from . import hw as hwmod
     from . import ops, referee
     from .checkout import Checkout
@@ -110,7 +110,7 @@ def on(skill: Annotated[str | None, typer.Option(
        hw: Annotated[str | None, typer.Option("--hw", help="hardware class override")] = None,
        force: Annotated[bool, typer.Option("--force", help="overwrite the program fragment")] = False) -> None:
     """Turn the reproduction gate on for this checkout's project (creating it if needed). Safe to repeat."""
-    from ...cli import STATE, emit
+    from ...cli.main import STATE, emit
     from ...config import load
 
     pid = project or STATE["project"] or load().project or "autoresearch"

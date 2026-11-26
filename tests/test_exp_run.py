@@ -14,8 +14,10 @@ from typing import Any
 
 import pytest
 
-from benchbook import Ledger, cli, hooks
-from benchbook.exp_run import command_line, parse_output
+from benchbook import Ledger
+from benchbook.cli import main as cli
+from benchbook.cli.exp_run import command_line, parse_output
+from benchbook.hooks import citations
 from tests.conftest import make_project
 from tests.test_dedup_mode import notify_project  # noqa: F401 - fixture
 
@@ -96,7 +98,7 @@ def test_ok_run_passes_output_through_and_records_its_metrics(run, tmp_path: Pat
     assert (e["config"], e["seed"], e["code_ref"], e["run_status"]) == ({"lr": 0.1}, 4, "v1", "ok")
     assert e["metrics"] == {"score": 2.5} and e["notes"] == "first try" and e["duration_ms"] >= 0
     assert e["trace_ref"]["exit_code"] == 0 and str(tmp_path / "ok.py") in e["trace_ref"]["cmd"]
-    assert hooks._receipt(r.stdout.strip() + "\n" + r.stderr, "e", False) == rid  # the capture hook's view
+    assert citations._receipt(r.stdout.strip() + "\n" + r.stderr, "e", False) == rid  # the capture hook's view
 
 
 def test_json_mode_puts_one_json_line_after_the_output(run, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
@@ -108,7 +110,7 @@ def test_json_mode_puts_one_json_line_after_the_output(run, tmp_path: Path) -> N
     res = json.loads(lines[1])
     assert res["ok"] and res["ran"] and res["run_status"] == "ok" and res["exit_code"] == 0
     assert res["metrics"] == {"score": 1.5, "max_violation": 0.0} and res["outcome"] == "improved"
-    assert hooks._receipt(r.stdout.strip(), "e", False) == res["id"]
+    assert citations._receipt(r.stdout.strip(), "e", False) == res["id"]
 
 
 def test_invalid_result_named_by_the_output_is_recorded_as_invalid(run, tmp_path: Path, lead: Ledger) -> None:  # type: ignore[no-untyped-def]
@@ -130,7 +132,7 @@ def test_refuse_mode_does_not_run_an_exact_repeat(run, tmp_path: Path, lead: Led
     assert again.returncode == 2  # as exp record exits for a refused duplicate
     assert (tmp_path / "ran").read_text() == "x"  # not run again
     assert again.stdout.startswith(f"benchbook: not run: duplicate of {fid} by w1 (seed 0): ok improved 1.0")
-    assert hooks._receipt(again.stdout.strip(), "e", False) is None
+    assert citations._receipt(again.stdout.strip(), "e", False) is None
     js = run("--config", '{"a": 3}', "--seed", "0", "--json", "--", *argv)
     data = json.loads(js.stdout)
     assert js.returncode == 2 and data["ok"] is False and data["ran"] is False and data["duplicate_of"] == fid
@@ -241,7 +243,7 @@ def test_notify_mode_runs_a_repeat_and_names_the_earlier_run(db_url: str, notify
     again = json.loads(out.splitlines()[-1])
     assert code == 0 and (tmp_path / "ran").read_text() == "xx"  # it ran again
     assert again["id"] != first["id"] and again["duplicate_of"] == first["id"] and first["id"] in again["notice"]
-    assert hooks._receipt(out.strip(), "e", False) == again["id"]
+    assert citations._receipt(out.strip(), "e", False) == again["id"]
     monkeypatch.setitem(cli.STATE, "json", False)
     code, out, err = _cli(capsys, "--agent", "verifier", *cmd, "--", *argv)
     assert code == 0 and (tmp_path / "ran").read_text() == "xxx"
@@ -253,11 +255,11 @@ def test_notify_mode_runs_a_repeat_and_names_the_earlier_run(db_url: str, notify
 def test_hook_reads_an_exp_run_bash_call_as_a_write() -> None:
     block = {"type": "tool_use", "id": "b", "name": "Bash",
              "input": {"command": "benchbook --agent worker-3 exp run --config '{\"a\": 1}' --seed 0 -- python e.py"}}
-    assert hooks._write_tool(block) == ("e", "worker-3", False)
+    assert citations._write_tool(block) == ("e", "worker-3", False)
     text = "some output\nbenchbook: recorded e:1a2b3c4d improved score=1  ★ new best (ok, 0.1s)\nnote: x"
-    assert hooks._receipt(text, "e", False) == "e:1a2b3c4d"
-    assert hooks._receipt("benchbook: recorded e:1a2b3c4d no_change (ok, 0.1s)", "e", False) == "e:1a2b3c4d"
-    assert hooks._receipt("benchbook: not run: duplicate of e:1a2b3c4d by w (seed 0): ok", "e", False) is None
-    assert hooks._receipt("x\nbenchbook: not recorded: duplicate of e:1a2b3c4d", "e", False) is None
-    assert hooks._receipt('{"a": 1}\n{"ok": true, "ran": true, "id": "e:1a2b3c4d"}', "e", False) == "e:1a2b3c4d"
-    assert hooks._receipt("benchbook: recorded e:1a2b3c4d improved (ok, 0.1s)", "e", True) is None  # MCP: JSON only
+    assert citations._receipt(text, "e", False) == "e:1a2b3c4d"
+    assert citations._receipt("benchbook: recorded e:1a2b3c4d no_change (ok, 0.1s)", "e", False) == "e:1a2b3c4d"
+    assert citations._receipt("benchbook: not run: duplicate of e:1a2b3c4d by w (seed 0): ok", "e", False) is None
+    assert citations._receipt("x\nbenchbook: not recorded: duplicate of e:1a2b3c4d", "e", False) is None
+    assert citations._receipt('{"a": 1}\n{"ok": true, "ran": true, "id": "e:1a2b3c4d"}', "e", False) == "e:1a2b3c4d"
+    assert citations._receipt("benchbook: recorded e:1a2b3c4d improved (ok, 0.1s)", "e", True) is None  # MCP: JSON only

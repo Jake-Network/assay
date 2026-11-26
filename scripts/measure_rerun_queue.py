@@ -3,7 +3,7 @@
 Model-free. A synthetic Python repository (90 tests in 9 files over a 30-module package, one JUnit check, tests/**
 guarded) gets N pieces, each changing one module and adding one test file, so every verify also runs the check at
 the merge-base (checks.count_tests). N verify requests are queued at once the way the agent-result hook queues them,
-and the spool processor's loop (hooks.replay) drains them in this process, so the check runs can be timed: the
+and the spool processor's loop (spooler.replay) drains them in this process, so the check runs can be timed: the
 candidate commit's against the merge-base's. A few seconds in, a worker runs `benchbook check run unit` in its own
 worktree; its attempt waits in the same spool, and the time until it is recorded is the delay issue 4 asks about.
 Separately, the check command is run twice in one worktree: the difference is what a fresh worktree's missing
@@ -106,7 +106,9 @@ def pycache_share(repo: Path, rounds: int = 3) -> dict[str, float]:
 
 
 def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel: bool) -> dict[str, Any]:
-    from benchbook import Ledger, checks, hooks, verify_requests
+    from benchbook import Ledger
+    from benchbook.checks import rerun, verify_requests
+    from benchbook.hooks import spooler
     from benchbook.packs import load_pack
 
     project = f"m-{uuid.uuid4().hex[:10]}"
@@ -122,7 +124,7 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
     runs: list[dict[str, Any]] = []
     verifies: list[dict[str, Any]] = []
     recorded: list[float] = []
-    real_run_checks, real_process = checks.run_checks, verify_requests.process
+    real_run_checks, real_process = rerun.run_checks, verify_requests.process
 
     def timed_run_checks(repo_: Path, commit: str, *a: Any, **k: Any) -> Any:
         t = time.monotonic()
@@ -136,8 +138,8 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
         verifies.append({"piece": data["piece"], "start": t, "end": time.monotonic(), "result": out})
         return out
 
-    checks.run_checks, verify_requests.process = timed_run_checks, timed_process
-    real_start, hooks.start_processor = hooks.start_processor, lambda *args: None
+    rerun.run_checks, verify_requests.process = timed_run_checks, timed_process
+    real_start, spooler.start_processor = spooler.start_processor, lambda *args: None
     try:
         session = f"m-{uuid.uuid4().hex[:8]}"
         for name, sha in shas.items():
@@ -146,7 +148,7 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
                 "tool_input": {"subagent_type": "general-purpose"},
                 "tool_response": {"status": "completed", "content": [{"type": "text",
                                                                        "text": f"piece: {name}\nDONE {sha}"}]}})
-        spool = hooks._spool_dir()
+        spool = spooler._spool_dir()
         t0 = time.monotonic()
         spooled: dict[str, float] = {}
 
@@ -168,17 +170,17 @@ def one_run(db_url: str, work: Path, pieces: int, worker_delay: float, parallel:
         # The re-runs' processor, in this process so the checks can be timed: with lanes (B2 step 2b) only the verify
         # lane, and the worker's check run starts the records lane's own detached processor; without them the one
         # processor picks the attempt up on its rescan.
-        lanes = getattr(hooks, "VERIFY", None)
-        hooks.replay(spool, lanes) if lanes else hooks.replay(spool)  # type: ignore[call-arg]
+        lanes = getattr(spooler, "VERIFY", None)
+        spooler.replay(spool, lanes) if lanes else spooler.replay(spool)  # type: ignore[call-arg]
         t_end = time.monotonic()
         if lanes is None:
             th.join(timeout=0.5)
             if th.is_alive():  # the attempt landed after the last rescan: the next processor start takes it
-                hooks.replay(spool)
+                spooler.replay(spool)
         th.join()
     finally:
-        checks.run_checks, verify_requests.process = real_run_checks, real_process
-        hooks.start_processor = real_start
+        rerun.run_checks, verify_requests.process = real_run_checks, real_process
+        spooler.start_processor = real_start
     cand = [r["s"] for r in runs if r["kind"] == "candidate"]
     mb = [r["s"] for r in runs if r["kind"] == "merge-base"]
     per = [v["end"] - v["start"] for v in verifies]

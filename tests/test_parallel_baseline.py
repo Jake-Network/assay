@@ -10,10 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from benchbook import Ledger, checks
+from benchbook import Ledger
+from benchbook.checks import rerun
+from benchbook.checks import verify as checks
 from benchbook.config import VerifyPrep, parse_verify
+from benchbook.core.runner import Interrupted
 from benchbook.errors import BenchbookError
-from benchbook.runner import Interrupted
 from tests.conftest import PY, git, make_project, make_repo, piece
 
 SLOW = f"""project = "ignored"
@@ -70,16 +72,16 @@ def test_an_interrupted_commit_run_stops_the_merge_base_run(tmp_path: Path, lead
     and verify raises the interruption at once."""
     monkeypatch.setenv("SLEEP_S", "30")
     repo, sha = _repo(tmp_path / "repo", True)
-    real = checks.run_checks
+    real = rerun.run_checks
     started = time.monotonic()
 
     def commit_interrupted(repo_: Path, commit: str, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
         if commit == sha:
             time.sleep(1.0)  # the merge-base run is in its check by now
-            return [checks.CheckResult("unit", "not_run")], Interrupted(signal.SIGTERM)
+            return [rerun.CheckResult("unit", "not_run")], Interrupted(signal.SIGTERM)
         return real(repo_, commit, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(checks, "run_checks", commit_interrupted)
+    monkeypatch.setattr(rerun, "run_checks", commit_interrupted)
     with pytest.raises(Interrupted):
         checks.verify(lead, "more-tests", sha, repo=repo, reported_by="impl")
     assert time.monotonic() - started < 15

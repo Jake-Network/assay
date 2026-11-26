@@ -9,7 +9,8 @@ from typing import Any
 import psycopg
 from psycopg.conninfo import make_conninfo
 
-from benchbook import Ledger, identity
+from benchbook import Ledger
+from benchbook.core import identity
 
 WRITER_PASSWORD = "writer-login-for-tests"
 

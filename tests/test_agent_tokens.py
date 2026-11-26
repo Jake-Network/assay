@@ -13,8 +13,9 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from benchbook import Ledger, identity
+from benchbook import Ledger
 from benchbook.config import default_agent
+from benchbook.core import identity
 from benchbook.errors import BenchbookError, NotFound, PermissionDenied
 
 from .conftest import make_project
@@ -149,8 +150,8 @@ def test_notify_mode_records_a_repeat_over_the_writer_login(db_url: str, tmp_pat
                                                              monkeypatch: pytest.MonkeyPatch) -> None:
     """dedup_mode = "notify" (migration 0009) through the SDK with a token: the repeat is stored under the
     token's agent, and 0009's trigger, which reads experiments with the caller's privileges, lets it through."""
-    from benchbook import ledger as ledger_module
     from benchbook import packs
+    from benchbook.core import ledger as ledger_module
 
     from .test_dedup_mode import NOTIFY_PACK, _pack_dir
 
