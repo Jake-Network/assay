@@ -17,7 +17,7 @@ benchbook init --pack code        # same as --pack code --metric checks_passed -
 ```
 
 The pack's defaults also set `partition_key = "piece"`, so best results and outcomes are computed per piece, and
-`worker_intents = true`, so implementers can start their own pieces (path occupancy, below).
+`worker_intents = true`, so implementers can start their own pieces ([Path occupancy](#path-occupancy)).
 
 `benchbook init` proposes the checks it finds (`pyproject.toml`, `package.json`, a `Makefile`, `go.mod`,
 `Cargo.toml`) and writes them to `.benchbook/config.toml` when you confirm (`--yes` writes them without asking),
@@ -49,9 +49,9 @@ back to a default.
 `junit = true` also makes "nothing ran" visible. An exit code alone cannot tell a passing test run from one that
 stopped before any test ran (code that exits with status 0 while the tests are collected, a filter that selects
 nothing). With `junit = true`, exit code 0 is a pass only when the JUnit file exists and holds at least one testcase
-that ran and none that failed or erred; otherwise the check fails with the part `exit 0, no JUnit report` or
-`exit 0, no tests ran`. `check verify` and `check run` both apply it (`check run` still exits with the command's
-code). A check without `junit` is judged by its exit code only. The JUnit file is written by the code under test's
+that ran (not skipped) and none that failed or erred; otherwise the check fails with the part `exit 0, no JUnit
+report` or `exit 0, no tests ran`, or, when a testcase failed, the failing test's. `check verify` and `check run`
+both apply it (`check run` still exits with the command's code and records the failure). A check without `junit` is judged by its exit code only. The JUnit file is written by the code under test's
 own process, so this catches a run that ended early, not a commit written to forge the report.
 
 Guard globs are matched against the whole repository-relative path: `*`, `?` and `[...]` stay inside one
@@ -72,12 +72,13 @@ happens to come first. A completion that needs human review includes that inform
 ### In a swarm
 
 - Before launching each worker, the lead runs `benchbook piece start <branch> --paths ...` for it. That occupies the
-  paths and turns the completion gate on for the branch; a branch with no live piece is not gated (Path occupancy,
-  below). Tell each worker its branch, and to end its report with `DONE <full sha>`.
+  paths and turns the completion gate on for the branch; a branch with no live piece is not gated
+  ([Path occupancy](#path-occupancy)). Tell each worker its branch, and to end its report with `DONE <full sha>`.
 - Each `DONE` queues one re-run. Re-runs run one at a time per database and writer, in their own lane of the hook
   spool, so a worker's `check run` or Bash-hook attempt is recorded within about a second even while re-runs are
-  queued. Verdicts arrive one per re-run (`[verify] parallel_baseline` shortens each): merge the first pieces
-  without waiting for every verdict.
+  queued. Verdicts arrive one per re-run (`[verify] parallel_baseline` shortens those that need a merge-base
+  run, see [The verification worktree](#the-verification-worktree)): merge the first pieces without waiting for every
+  verdict.
 - Merge a piece after its verdict line (`re-run passed`, `tests not weakened`, `checked: re-run`), not after its
   report. With the Claude Code plugin a lead's `git merge` of a reported commit waits for the verdict and holds a
   merge the verdict does not clear (docs/claude-code.md, "the merge gate").
@@ -256,13 +257,13 @@ leaves a discarded-approach claim ([Discarded approaches](#discarded-approaches)
 ## Verified completion
 
 `verified` for a completion means exactly this: **the declared checks passed in an independent re-run** of the
-reported commit, by an agent other than the one that implemented it, with no guarded path touched and no check
-changed, and no finished attempt of that piece at that commit failed.
+reported commit, by an agent other than the one that implemented it, with no test weakened and no check changed,
+and no finished attempt of that piece at that commit failed.
 
 It does not mean the code is correct, that the checks test what the piece promised, or that a reviewer read it.
 An exit code only says a command finished; whether the checks test the claim is decided by the person who declares
-them. A commit that touched a guarded path or changed `[checks]` needs a person's judgement, however green its
-re-run.
+them. A commit that weakened a test ([Added tests and weakened tests](#added-tests-and-weakened-tests)) or changed
+`[checks]` needs a person's judgement, however green its re-run; a commit that only adds tests does not.
 
 ### The policy
 
@@ -283,9 +284,10 @@ these hold; otherwise it is refused, and the message says why and that a person 
 - at least `min_runs` of them are by agents other than the implementer (see below), from at least
   `min_authors - 1` such agents, each with every name in `checks_declared` among its `checks` (not partial),
   `checks_passed == checks_total`, `checks_total > 0`, and one `ok` result per counted check. Both
-  `guard_touched` and `checks_changed` must be stored as `false`;
-- no valid finished attempt of that piece at that commit, cited or not and by anyone, failed a check, touched a
-  guarded path or changed `[checks]`. A clean re-run does not wash out another run's guard flag, and runs that
+  `guard_weakened` and `checks_changed` must be stored as `false` (an attempt without `guard_weakened` is read by
+  `guard_touched`);
+- no valid finished attempt of that piece at that commit, cited or not and by anyone, failed a check, weakened a
+  test or changed `[checks]`. A clean re-run does not wash out another run's guard flag, and runs that
   disagree are a person's call. A lead who finds a run was broken (no network, wrong machine) invalidates it
   (`benchbook decide <attempt> invalidated --oracle human ...`) and it stops counting;
 - the deciding agent is not the implementer, whatever the oracle (`human` included).
@@ -334,7 +336,7 @@ With lead authority (the verifier has the orchestrator or human role: `--agent l
 2. **inconclusive**: an earlier valid finished attempt of the piece at the commit disagrees with the re-run, in
    either direction (the implementer's passing run against a failing re-run, or a re-run that now passes after one
    failed). The decision's evidence holds the re-run's id and the disagreeing attempts' ids.
-3. **No decision, a person decides**: the commit touched a guarded path or changed `[checks]`. The output names
+3. **No decision, a person decides**: the commit weakened a test or changed `[checks]`. The output names
    the changed files and the `benchbook decide ... --oracle human` line to run.
 
 Otherwise nothing is decided and the output says why: a check failed and no earlier pass disagrees (the refutes
@@ -408,9 +410,10 @@ A pin is a `note` claim tagged `checks-pin` and `piece:<piece>` (`piece:*` for t
 checks, the guard paths, the `[verify]` table and the sha256 of the three. Claims are append-only, so a pin is never
 edited: a new pin is a new claim, and pinning what the newest pin of that scope already holds records nothing.
 
-When the merge-base has no config, `check verify` uses the newest pin of the piece, else the newest pin of the project,
-leaving out pins written by any implementer of the piece at that commit: the checks are declared, append-only, before
-the work, by someone other than the implementer. The attempt's metrics name the pin (`checks_source = "pin"`,
+When the merge-base has no `.benchbook/config.toml`, `check verify` uses the newest pin of the piece, else the newest
+pin of the project, leaving out pins written by any implementer of the piece at that commit: the checks are declared,
+append-only, before the work, by someone other than the implementer. A config.toml at the merge-base must declare
+valid `[checks]`: with an empty or broken table `check verify` refuses, and no pin is read. The attempt's metrics name the pin (`checks_source = "pin"`,
 `checks_pin`, `checks_sha256`), and `checks_changed` is true when:
 
 - the pin was taken from config.toml (`init`, `check pin` without `--check`) and the working tree's config.toml no
@@ -820,9 +823,9 @@ recorded without a piece tag is not counted), and whether tests changed (any att
 
 | state | when |
 | --- | --- |
-| **verified** | the claim is `verified`; or no run of the commit failed, none touched a guarded path or changed `[checks]`, and at least one passing run by an agent other than the implementer (not `via` check run or the hook) satisfies the pack's rule (`Ledger.check_rerun`, the same check `decide ... verified --oracle rerun` makes). The second case is shown with the claim's status: CI records, a lead decides. |
+| **verified** | the claim is `verified`; or no run of the commit failed, none weakened a test or changed `[checks]`, and at least one passing run by an agent other than the implementer (not `via` check run or the hook) satisfies the pack's rule (`Ledger.check_rerun`, the same check `decide ... verified --oracle rerun` makes). The second case is shown with the claim's status: CI records, a lead decides. |
 | **re-run disagrees** | the claim is `refuted` or `inconclusive`, or a valid finished run of the commit failed a check (anyone's: the implementer's own failing run counts too). |
-| **claimed only** | a claim exists and none of the above: no independent re-run yet, or the commit changed tests, which a person decides. |
+| **claimed only** | a claim exists and none of the above: no independent re-run yet, or the commit weakened tests or changed `[checks]`, which a person decides. |
 | **not reported** | the ledger has no completion claim for the piece at that commit. |
 
 Piece names, agent names and paths go into the comment as inline code with backticks and `|` neutralised, and the
