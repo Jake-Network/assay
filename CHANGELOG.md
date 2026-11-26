@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- The Claude Code plugins are 0.2.4 (`benchbook`) and 0.2.2 (`benchbook-mcp`): their agent and skill descriptions say
+  "a benchbook", not "an benchbook".
 - `check verify` records in `payload.files` only the files of the piece's own commits: a commit merged into its
   range from another piece (a worker that started from an integration branch) is left out when the ledger or its
   trailer ties it to that piece, so a later change to its files no longer marks this piece `changed since`.

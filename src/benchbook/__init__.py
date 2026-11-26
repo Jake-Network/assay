@@ -1,4 +1,7 @@
-"""benchbook: your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence."""
+"""benchbook: "done" is a claim until the tests say so.
+
+A ledger that re-runs coding agents' checks on the reported commit, and records experiments for agent swarms.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

@@ -1,6 +1,6 @@
 ---
 name: benchbook-lead
-description: Run an benchbook research swarm - split a goal into tasks, launch benchbook-worker subagents in parallel, read the ledger (not their messages), decide claims, and plan the next round. Use when the user asks to run a swarm, autoresearch loop or parallel experiments with benchbook.
+description: Run a benchbook research swarm - split a goal into tasks, launch benchbook-worker subagents in parallel, read the ledger (not their messages), decide claims, and plan the next round. Use when the user asks to run a swarm, autoresearch loop or parallel experiments with benchbook.
 argument-hint: <goal> [rounds=N] [workers=K]
 ---
 

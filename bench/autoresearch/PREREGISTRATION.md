@@ -6,7 +6,7 @@
 
 ## Question
 
-With the same GPUs, the same wall-clock time and the same agent, does an benchbook swarm (arm B) do better
+With the same GPUs, the same wall-clock time and the same agent, does a benchbook swarm (arm B) do better
 than independent autoresearch agents (arm A)?
 
 ## Hypotheses

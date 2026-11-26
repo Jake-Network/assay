@@ -1,7 +1,7 @@
 [project]
 name = "benchbook"
 dynamic = ["version"]
-description = "Your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence."
+description = "\"Done\" is a claim until the tests say so: re-run your coding agents' checks on the reported commit, flag weakened tests, keep what was verified."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

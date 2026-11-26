@@ -95,7 +95,7 @@ def test_plugin_not_installed_or_disabled(env: dict[str, Any]) -> None:
     (env["claude"] / "plugins" / "installed_plugins.json").unlink()
     code, out, _ = doctor(env)
     assert code != 0 and "claude plugin install benchbook@benchbook" in failing(out, "claude code plugin")
-    # a manual install (.mcp.json with an benchbook server) is fine
+    # a manual install (.mcp.json with a benchbook server) is fine
     (env["repo"] / ".mcp.json").write_text(json.dumps({"mcpServers": {"benchbook": {"command": "benchbook"}}}))
     assert doctor(env)[2]["claude code plugin"]["ok"] is True
 

@@ -27,7 +27,7 @@ experiment count, duplicates blocked and the viewer URL.
 
 ## Scenario 4: a subagent that does not write to the ledger is still captured
 
-1. In the same repo, in Claude Code: "Use an benchbook-worker subagent to compute the sum of radii of the seed
+1. In the same repo, in Claude Code: "Use a benchbook-worker subagent to compute the sum of radii of the seed
    program (python evaluator.py seed_program.py) and report the number. Tell it not to use any benchbook tools."
 2. Expected: `benchbook claim list --kind note` shows a claim starting with `[auto-captured]`, tag `auto-captured`,
    author `hook`; `benchbook get c:...` shows the full text in `payload.text` and the session id in `payload.source`.

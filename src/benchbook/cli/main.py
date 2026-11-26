@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from ..core.ledger import Ledger
 
 app = typer.Typer(add_completion=False, no_args_is_help=True,
-                  help="benchbook: your agents' lab notebook. Nothing they find gets lost, repeated, "
-                       "or trusted without evidence.")
+                  help='benchbook: "done" is a claim until the tests say so. Re-runs your agents\' checks on the '
+                       "reported commit and keeps what was verified.")
 task_app = typer.Typer(no_args_is_help=True, help="Tasks: add, claim, finish.")
 exp_app = typer.Typer(no_args_is_help=True, help="Experiments: record, check whether tried.")
 claim_app = typer.Typer(no_args_is_help=True, help="Claims: propose, list, show.")

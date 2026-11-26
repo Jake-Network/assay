@@ -335,7 +335,7 @@ class Ledger:
         s = ref.strip().lower()
         m = _SHORT_RE.match(s)
         if not m:
-            raise NotFound(f"not an benchbook id: {ref!r} (expected e:/c:/t:/s:/d:/l: + hex, or a uuid)")
+            raise NotFound(f"not a benchbook id: {ref!r} (expected e:/c:/t:/s:/d:/l: + hex, or a uuid)")
         pfx, body = m.groups()
         search = [KIND_BY_PREFIX[pfx]] if pfx else list(kinds or TABLE.keys())
         if kinds is not None:
