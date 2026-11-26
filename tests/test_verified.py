@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -388,7 +389,7 @@ def test_cli_verify_decides_with_lead_authority(repo: Path, vtmp: Path, db_url: 
     p = run_cli(repo, env, *base, "check", "verify", "media", good, "--reported-by", "impl")
     assert p.returncode == 0, p.stderr
     assert "decision: recorded without a decision" in p.stdout
-    assert f"benchbook --agent lead check verify media {good[:12]} --reported-by impl" in p.stdout  # what to run
+    assert f"benchbook --agent lead check verify media {good} --claim " in p.stdout  # what to run
     p = run_cli(repo, env, *base, "--agent", "lead", "check", "verify", "media", good, "--reported-by", "impl",
                 "--json")
     assert p.returncode == 0, p.stderr
@@ -412,7 +413,7 @@ def test_a_nameless_rerun_names_what_decides_only_when_it_can(repo: Path, vtmp: 
     harness = open_as(db_url, code_project, "verifier@test", "harness")
     good = piece(repo, "good", {"impl.txt": "fixed\n"})
     _, rec = checks.verify(harness, "media", good, repo=repo, reported_by="impl")
-    assert rec.outcome is not None and " --reported-by impl --base " in rec.outcome.reason
+    assert rec.outcome is not None and f" {good} --claim {rec.claim_id} --base " in rec.outcome.reason
     assert rec.outcome.reason.endswith(f" --project {code_project}")
     _, rec = checks.verify(harness, "own", good, repo=repo, reported_by="lead")
     assert rec.outcome is not None and "A person decides it: benchbook decide " in rec.outcome.reason
@@ -423,6 +424,30 @@ def test_a_nameless_rerun_names_what_decides_only_when_it_can(repo: Path, vtmp: 
     worker = open_as(db_url, code_project, "impl-2")  # a named worker is not handed the lead's command
     _, rec = checks.verify(worker, "peer", good, repo=repo, reported_by="impl")
     assert rec.outcome is not None and rec.outcome.reason.endswith("(orchestrator or human role)")
+
+
+def test_the_lead_command_decides_the_claim_the_nameless_run_was_for(repo: Path, vtmp: Path, db_url: str,
+                                                                     code_project: str) -> None:
+    """Review of #18: two completions by one reporter for the same piece and commit; the nameless run was for the
+    second (--claim), and the command it prints, run as printed, must decide that one and not the first."""
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    impl = open_as(db_url, code_project, "impl")
+    first = completion(impl, good, "media")
+    second = impl.propose_claim("completion", "media is done, second report", tags=["piece:media", f"commit:{good}"],
+                                payload={"piece": "media", "commit": good}).id
+    assert first != second
+    harness = open_as(db_url, code_project, "verifier@test", "harness")
+    _, rec = checks.verify(harness, "media", good, repo=repo, claim=str(second))
+    assert rec.outcome is not None and rec.claim_id == second
+    hint = rec.outcome.reason.split("run it as the lead: ", 1)[1]
+    assert f" {good} --claim {second} --base " in hint  # the whole sha, the claim's id, a fixed base
+    env = {**{k: v for k, v in os.environ.items() if not k.startswith(("BENCHBOOK_", "ASSAY_"))},
+           "BENCHBOOK_DATABASE_URL": db_url, "TMPDIR": str(vtmp)}
+    p = subprocess.run([sys.executable, "-m", "benchbook.cli", *shlex.split(hint)[1:]], cwd=repo, env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 0 and "decision: verified" in p.stdout, p.stdout + p.stderr
+    lead = open_as(db_url, code_project, "lead")
+    assert (lead.claim_status(second), lead.claim_status(first)) == ("verified", "proposed")
 
 
 def test_cli_verify_under_a_lead_token(repo: Path, vtmp: Path, db_url: str, code_project: str) -> None:

@@ -653,9 +653,10 @@ def _next_step(lg: Ledger, v: Verification, rec: Recorded, info: dict[str, Any],
     if (mine is None or not mine["complete"] or info["status"] not in ("proposed", "supported")
             or not all(a["passed"] for a in attempts)):
         return ""
+    # the claim by id (one reporter may have several for one commit), the whole sha and the merge-base as the base:
+    # the same claim, commit and declared checks whatever has moved since
     return (f". To decide, run it as the lead: benchbook --agent lead check verify {shlex.quote(v.piece)} "
-            f"{v.commit[:12]} --reported-by {shlex.quote(rec.reported_by)} --base {shlex.quote(v.base.ref)} "
-            f"--project {shlex.quote(lg.project_id)}")
+            f"{v.commit} --claim {rec.claim_id} --base {v.base.merge_base} --project {shlex.quote(lg.project_id)}")
 
 
 def _decide(lg: Ledger, v: Verification, rec: Recorded) -> Outcome:
