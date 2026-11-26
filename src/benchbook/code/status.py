@@ -17,7 +17,7 @@ RECORDING_STOPPED = "benchbook: recording stopped: "
 COUNTS = """
 WITH reports AS (
   SELECT c.id, c.payload ->> 'piece' AS piece, c.payload ->> 'commit' AS commit,
-         s.created_at, s.status, s.last_oracle, s.n_refute, s.evidence_invalidated
+         s.created_at, s.status, s.last_oracle, s.n_support, s.n_refute, s.evidence_invalidated
   FROM benchbook.claims c JOIN benchbook.v_claim_status s ON s.project_id = c.project_id AND s.id = c.id
   WHERE c.project_id = %(project)s AND c.kind = 'completion'
     AND s.status NOT IN ('retracted', 'superseded')
@@ -29,11 +29,14 @@ WITH reports AS (
          CASE WHEN bool_or(r.status = 'refuted' OR (r.status = 'inconclusive' AND r.last_oracle = 'rerun')
                            OR (r.status <> 'verified' AND r.n_refute > 0)) THEN 'rerun_mismatch'
               WHEN bool_or(r.status = 'verified' AND NOT r.evidence_invalidated) THEN 'verified'
+              WHEN bool_or(r.status IN ('proposed', 'supported', 'inconclusive') AND r.n_support > 0)
+                THEN 'rerun_undecided'
               ELSE 'reported_only' END AS state
   FROM reports r JOIN latest l USING (piece, commit)
   GROUP BY r.piece
 )
 SELECT count(*) FILTER (WHERE state = 'verified') AS verified,
+       count(*) FILTER (WHERE state = 'rerun_undecided') AS rerun_undecided,
        count(*) FILTER (WHERE state = 'reported_only') AS reported_only,
        count(*) FILTER (WHERE state = 'rerun_mismatch') AS rerun_mismatch,
        (SELECT count(*) FROM benchbook.v_claim_status
@@ -56,8 +59,9 @@ def status(lg: Ledger, root: Path) -> dict[str, Any]:
     current = counts(lg)
     h = hook_health(root)
     return {"project": lg.project_id, "goal": lg.project.goal, "pack": "code", "pieces": {
-        "verified": current["verified"], "reported_only": current["reported_only"],
-        "rerun_mismatch": current["rerun_mismatch"]}, "open_findings": current["open_findings"],
+        "verified": current["verified"], "rerun_undecided": current["rerun_undecided"],
+        "reported_only": current["reported_only"], "rerun_mismatch": current["rerun_mismatch"]},
+        "open_findings": current["open_findings"],
         "spool": {"pending": h.pending, "dead": h.dead, "stuck": h.stuck}, "hook_failures_24h": h.failures}
 
 
@@ -65,7 +69,8 @@ def render(s: dict[str, Any]) -> str:
     p, spool = s["pieces"], s["spool"]
     return "\n".join([
         f"{s['project']}: {s['goal']}",
-        f"pieces    {p['verified']} verified, {p['reported_only']} reported only, {p['rerun_mismatch']} rerun mismatch",
+        f"pieces    {p['verified']} verified, {p['rerun_undecided']} re-run not decided, {p['reported_only']} reported "
+        f"only, {p['rerun_mismatch']} rerun mismatch",
         f"findings  {s['open_findings']} open out-of-scope",
         f"spool     {spool['pending']} pending, {spool['dead']} dead, {spool['stuck']} overdue",
         f"hooks     {s['hook_failures_24h']} failure line(s) in the last 24h",
@@ -120,7 +125,7 @@ def refresh_cache(spool: Path, project: str) -> None:
             return
         current = counts(lg)
         verified = current["verified"]
-        total = verified + current["reported_only"] + current["rerun_mismatch"]
+        total = verified + current["rerun_undecided"] + current["reported_only"] + current["rerun_mismatch"]
         line = f"benchbook: verified {verified}/{total}, open findings {current['open_findings']}\n"
         path = _cache_path(spool, project)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

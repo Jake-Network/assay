@@ -54,7 +54,7 @@ hook은 stderr에 쓰지 않고 항상 0으로 끝난다. benchbook 프로젝트
 ```bash
 benchbook --agent lead check verify media-upload a1b2c3d --reported-by implementer-1   # 리드로 재실행하고 판정. --agent lead가 없으면 기록만 하고 판정하지 않는다(CI가 그렇게 돈다)
 benchbook brief --here            # 이 브랜치가 바꾼 범위의 brief
-benchbook status                  # 검증된 조각, 보고만 된 조각, 재실행 불일치, 열린 발견, hook 상태
+benchbook status                  # 검증된 조각, 재실행했지만 판정 안 된 조각, 보고만 된 조각, 재실행 불일치, 열린 발견, hook 상태
 benchbook get c:7f3a91c2          # 레코드 하나를 400 token 이내로
 benchbook piece start media-upload --paths 'src/media/**'   # 경로를 점유해 두 구현자가 부딪히지 않게
 ```

@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- `benchbook status` counts a piece whose re-run passed but was not decided (a weakened test waiting for a person,
+  or a re-run without lead authority) as "re-run not decided", as the brief does, not as "reported only"; `--json`
+  has `pieces.rerun_undecided`, and the status line's total includes it. `init` of a code project ends with
+  `next: benchbook doctor | benchbook status | benchbook brief --here` instead of the experiment mode's commands.
 - `benchbook brief` reads without a name, as `status` and `get` do: with no `--agent`, `BENCHBOOK_AGENT` or token it
   reads (and is logged in `brief_log`) as `human`.
 - `check verify` without a name (`verifier@<host>`, harness role) still records without deciding, and now ends that

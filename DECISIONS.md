@@ -831,3 +831,11 @@ by hand, not a live session). Four are fixed; the fourth is not.
   how much), which is why it was not counted as a read; that row records a read, not a claim, so `human` is as good
   a name for it as for the other reads. The name check in the ledger, the hooks (which open the ledger in their
   own name) and the MCP tools are unchanged.
+- **status names an undecided re-run as the brief does.** A piece whose latest completion is `proposed` or
+  `inconclusive` with at least one supporting re-run was "reported only" in `status` and "Re-run, not decided" in
+  the brief, so the two screens disagreed about the same piece. status now uses the brief's condition (the RERUN
+  query of the code pack's brief: an open completion with a supporting re-run, `supported` included) as a fourth
+  state between verified and reported only; a refutation still counts as a rerun mismatch first. status still looks
+  at each piece's latest reported commit only, so a re-run of an older commit that the brief lists does not count.
+  A code project's `init` names the code commands next; the experiment mode's `exp record` line is kept for the
+  other packs.

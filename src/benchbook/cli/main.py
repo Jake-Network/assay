@@ -159,11 +159,12 @@ def init(
     extra, out = "", {"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack}
     if p.pack == "code":
         extra = _init_code(root, p.id, out, yes)
+    nxt = ("benchbook doctor   |   benchbook status   |   benchbook brief --here" if p.pack == "code" else
+           "BENCHBOOK_AGENT=me benchbook exp record --config '{\"x\":1}' --metrics '{...}'   |   benchbook ui")
     emit(out, f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
               f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
               f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n{extra}"
-              f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   "
-              "benchbook ui")
+              f"next: {nxt}")
 
 
 def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:

@@ -57,7 +57,7 @@ Details: [docs/code.md](docs/code.md).
 ```bash
 benchbook --agent lead check verify media-upload a1b2c3d --reported-by implementer-1   # re-run and decide as the lead; without --agent lead it only records (as CI does)
 benchbook brief --here            # the brief for what this branch changed
-benchbook status                  # pieces verified, reported only and re-run mismatched; open findings; hook health
+benchbook status                  # pieces verified, re-run but not decided, reported only and re-run mismatched; open findings; hook health
 benchbook get c:7f3a91c2          # one record in at most 400 tokens
 benchbook piece start media-upload --paths 'src/media/**'   # occupy paths so two implementers do not collide
 ```

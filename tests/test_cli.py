@@ -90,6 +90,16 @@ def test_brief_reads_without_a_name(tmp_path: Path, db_url: str) -> None:
     assert r.stdout.startswith(f"# benchbook brief · {pid}")
 
 
+def test_code_init_points_to_the_code_commands(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """A code project's init ends with its own next steps, not the experiment mode's exp record."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    r = cli("init", "--project", f"cli-{uuid.uuid4().hex[:6]}", "--pack", "code", "--yes")
+    assert r.returncode == 0, r.stderr
+    last = r.stdout.rstrip("\n").splitlines()[-1]
+    assert last == "next: benchbook doctor   |   benchbook status   |   benchbook brief --here"
+    assert "exp record" not in r.stdout
+
+
 def test_module_entry_shares_global_options(tmp_path: Path) -> None:
     """`python -m benchbook.cli --json ar ...` must see --json/--project (one STATE, not two)."""
     for mod in ("benchbook", "benchbook.cli"):
