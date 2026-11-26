@@ -77,9 +77,9 @@ def emit(data: Any, text: str | None = None) -> None:
 
 
 def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
-    """Writes need a name: --agent, BENCHBOOK_AGENT or (for decide) --as. Reads that write nothing fall back to
-    'human' so a person can look around without naming themselves (I1). With BENCHBOOK_TOKEN the token names the
-    agent, so there is no fallback."""
+    """Writes need a name: --agent, BENCHBOOK_AGENT or (for decide) --as. Reads that record nothing, and brief (which
+    logs only who read it, in brief_log), fall back to 'human' so a person can look around without naming themselves
+    (I1). With BENCHBOOK_TOKEN the token names the agent, so there is no fallback."""
     from ..config import default_agent
     from ..core.ledger import Ledger
 
@@ -299,7 +299,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
         from ..packs.code.brief import changed_scope
 
         scope = [*changed_scope(_repo_root()), *scope]
-    lg = ledger()
+    lg = ledger(read_only=True)
     b = lg.brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
                  tags=scope or None, repo=_repo_root() if here else None)
     if lg.pack.name == "code":

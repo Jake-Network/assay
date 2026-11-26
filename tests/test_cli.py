@@ -74,6 +74,22 @@ def test_cli_flow(cli, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     assert cli("--agent", "w3", "task", "claim", t2).returncode == 3
 
 
+def test_brief_reads_without_a_name(tmp_path: Path, db_url: str) -> None:
+    """brief, like status and get, reads as 'human' when neither --agent nor a name in the environment is given."""
+    env = {**os.environ, "BENCHBOOK_DATABASE_URL": db_url}
+    for k in ("BENCHBOOK_PROJECT", "BENCHBOOK_AGENT", "ASSAY_AGENT", "BENCHBOOK_TOKEN", "ASSAY_TOKEN"):
+        env.pop(k, None)
+    pid = f"cli-{uuid.uuid4().hex[:6]}"
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, "-m", "benchbook.cli", *args], capture_output=True, text=True,
+                              cwd=tmp_path, env=env, timeout=60)
+    assert run("init", "--project", pid, "--metric", "loss", "--direction", "min").returncode == 0
+    r = run("brief")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.startswith(f"# benchbook brief · {pid}")
+
+
 def test_module_entry_shares_global_options(tmp_path: Path) -> None:
     """`python -m benchbook.cli --json ar ...` must see --json/--project (one STATE, not two)."""
     for mod in ("benchbook", "benchbook.cli"):

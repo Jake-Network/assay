@@ -826,3 +826,8 @@ by hand, not a live session). Four are fixed; the fourth is not.
   transitions (proposed to supported to verified) and so two commands; the price is running the checks twice,
   minutes in a repository with slow checks. Under a token there is no hint: the token names one agent, and
   `--agent lead` would contradict it.
+- **brief reads without a name.** `benchbook brief --here` is what a person types first to see the state, and
+  it failed with "no agent name" while `status` and `get` worked. brief writes one row, to `brief_log` (who read
+  how much), which is why it was not counted as a read; that row records a read, not a claim, so `human` is as good
+  a name for it as for the other reads. The name check in the ledger, the hooks (which open the ledger in their
+  own name) and the MCP tools are unchanged.

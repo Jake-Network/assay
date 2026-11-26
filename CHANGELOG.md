@@ -2,6 +2,8 @@
 
 ## Unreleased: code pack
 
+- `benchbook brief` reads without a name, as `status` and `get` do: with no `--agent`, `BENCHBOOK_AGENT` or token it
+  reads (and is logged in `brief_log`) as `human`.
 - `check verify` without a name (`verifier@<host>`, harness role) still records without deciding, and now ends that
   line with the command that decides: the same re-run as the lead, or `benchbook decide ... --as human` when the
   commit weakened tests. The README and docs/code.md show the lead's form.
