@@ -1,8 +1,9 @@
 """`benchbook doctor` checks for the Claude Code connection. Each failing check carries the one command that fixes it.
 
 Claude Code starts `benchbook mcp` and `benchbook hook` itself, with its own PATH and the `env` of its settings
-files. When those differ from the shell the user tests in, the MCP server does not connect or the hook exits 127 at
-every subagent stop, and Claude Code does not say why. These checks compare the two sides.
+files. When those differ from the shell the user tests in, the MCP server does not connect or every hook is skipped
+(the plugin's script notes it in missing-cli and exits 0), and Claude Code does not say why. These checks compare
+the two sides.
 """
 from __future__ import annotations
 
