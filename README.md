@@ -1,7 +1,7 @@
 # benchbook: a Postgres ledger for agent swarms
 
-**Your subagents write their results to Postgres, not into the lead's context. The lead reads them back by SQL, so a
-swarm can grow without filling the lead's context window.**
+**Your subagents write their results to Postgres, not into the lead's context. The lead reads them back by SQL
+instead of from the subagents' reports.**
 
 A lead agent that fans work out to dozens of subagents gets every result back as natural-language text. With enough
 workers those reports fill its context window, and what they said is lost at the next compaction or session.
@@ -27,8 +27,8 @@ to watch at http://127.0.0.1:7466.
 - **Results in the ledger, ids in the context.** Workers record every run, failures included, and hand back a
   short summary with record ids. The lead reads a budgeted brief (best result, open work, what not to repeat) and
   queries details by SQL when it needs them.
-- **Nothing lost.** Every check run and evaluation is a row the moment it ends. A hook captures a subagent's report
-  even when the agent ignored the rules.
+- **Nothing lost.** Every evaluation a worker records, and every run of a declared check the hooks can read, is a
+  row the moment it ends. A hook keeps a subagent's report even when the agent ignored the rules.
 - **Nothing repeated.** The same config, code and seed is refused; a new seed counts as a replicate. A failed
   approach stays in the brief with its failure signature.
 - **Across sessions and compaction** (experimental): a new or compacted session starts from the brief, not from
@@ -37,7 +37,8 @@ to watch at http://127.0.0.1:7466.
   agents replicate it, and a worker's `DONE <sha>` is re-run on that commit in a clean worktree
   ([coding work](docs/code.md)).
 
-Hooks never write to stderr and always exit 0; outside a benchbook project they do nothing.
+Hooks never write to stderr and exit 0, except the completion gate, which exits 2 to keep a task open; outside a
+benchbook project they do nothing.
 
 ## Commands for the lead
 
@@ -54,10 +55,10 @@ Python SDK and the CLI work without any harness.
 
 ## Measured so far
 
-- **The lead reads less than half the report tokens, but its peak context is not lower yet.** Circle packing at 8,
-  16 and 30 workers: 6.9k, 13.8k and 22.3k report tokens reached the lead with benchbook, against 15.4k, 31.1k and
-  59.1k with plain subagents. Peak lead context was 55.2k against 47.2k at 8 workers and 85.9k against 83.5k at 16
-  (at 30 the runs are not like for like).
+- **The lead reads less than half the report tokens, but its peak context is not lower yet.** Circle packing at 8
+  and 16 workers: 6.9k and 13.8k report tokens reached the lead with benchbook, against 15.4k and 31.1k with plain
+  subagents; peak lead context was 55.2k against 47.2k and 85.9k against 83.5k. At 30 workers both benchbook runs
+  ran under other conditions (Haiku workers, or 28 of 90 workers), so they are observations, not a comparison.
 - **Swarms lose nothing.** No lost results and fewer duplicate evaluations than plain subagents (22.5% vs 29.4%,
   within one standard deviation), at 1.8x the API cost.
 - **Memory across restarts is not proven.** In four one-trial pilots a lead reading the brief answered fewer state

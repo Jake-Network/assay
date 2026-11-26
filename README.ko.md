@@ -1,7 +1,7 @@
 # benchbook: 에이전트 swarm을 위한 Postgres 원장
 
-**subagent의 결과는 리드의 context가 아니라 Postgres에 쌓인다. 리드는 SQL로 꺼내 읽으므로 swarm이 커져도 리드의
-context window가 차지 않는다.**
+**subagent의 결과는 리드의 context가 아니라 Postgres에 쌓인다. 리드는 subagent의 보고 대신 SQL로 결과를 꺼내
+읽는다.**
 
 수십 개의 subagent에게 일을 나눠 주는 리드 에이전트는 모든 결과를 자연어 텍스트로 돌려받는다. worker가 많아지면 그
 보고가 context window를 채우고, 다음 compaction이나 세션에서 그 내용은 사라진다. benchbook은 저장소 옆에 원장을 둔다.
@@ -25,14 +25,16 @@ Code에서 `/benchbook-mcp:benchbook-lead Minimise val_loss of train.py; 3 round
 
 - **결과는 원장에, context에는 id만.** worker는 실패를 포함해 모든 실행을 기록하고 record id가 담긴 짧은 요약만
   돌려준다. 리드는 예산이 정해진 brief(최고 결과, 남은 일, 반복하지 말 것)를 읽고 필요할 때 SQL로 자세히 묻는다.
-- **잃는 것이 없다.** 검사 실행과 평가는 끝나는 순간 한 행이 된다. 규칙을 무시한 subagent의 보고도 hook이 잡아 둔다.
+- **잃는 것이 없다.** worker가 기록한 평가와 hook이 읽을 수 있는 선언된 검사의 실행은 끝나는 순간 한 행이 된다. 규칙을
+  무시한 subagent의 보고도 hook이 잡아 둔다.
 - **반복하지 않는다.** 같은 config, 코드, seed는 거절되고 seed만 다르면 replicate로 센다. 실패한 접근은 실패
   signature와 함께 brief에 남는다.
 - **세션과 compaction 너머**(실험 단계): 새 세션이나 compaction 뒤의 세션은 누군가의 기억이 아니라 brief에서 시작한다.
 - **결과는 쌓아 올리기 전에 확인한다.** 실험 결과는 다른 에이전트가 재현한 뒤에야 기준이 되고, worker의 `DONE <sha>`는
   그 commit의 깨끗한 worktree에서 다시 돌린다([코딩 작업](docs/code.md)).
 
-hook은 stderr에 쓰지 않고 항상 0으로 끝나며, benchbook 프로젝트 밖에서는 아무것도 하지 않는다.
+hook은 stderr에 쓰지 않고 0으로 끝난다. 예외는 task를 열어 두려고 2로 끝나는 완료 게이트다. benchbook 프로젝트
+밖에서는 아무것도 하지 않는다.
 
 ## 리드가 쓰는 명령
 
@@ -49,9 +51,10 @@ Gemini CLI, OpenCode, Pi도 brief와 검사 기록을 받는다([하네스](docs
 
 ## 지금까지 잰 것
 
-- **리드가 읽는 보고 token은 절반 이하지만, context 최대치는 아직 낮지 않다.** worker 8, 16, 30명의 circle packing:
-  리드에게 간 보고 token은 benchbook이 6.9k, 13.8k, 22.3k, 일반 subagent가 15.4k, 31.1k, 59.1k였다. 리드 context
-  최대치는 8명에서 55.2k 대 47.2k, 16명에서 85.9k 대 83.5k였다(30명은 조건이 달라 비교할 수 없다).
+- **리드가 읽는 보고 token은 절반 이하지만, context 최대치는 아직 낮지 않다.** worker 8명과 16명의 circle packing:
+  리드에게 간 보고 token은 benchbook이 6.9k, 13.8k, 일반 subagent가 15.4k, 31.1k였고, 리드 context 최대치는 55.2k 대
+  47.2k, 85.9k 대 83.5k였다. 30명에서는 benchbook 실행 둘 다 다른 조건(Haiku worker, 또는 90명 중 28명)으로 돌아서
+  비교가 아니라 관측값이다.
 - **swarm은 잃는 것이 없다.** 잃은 결과 0, 중복 평가는 일반 subagent보다 적었다(22.5% 대 29.4%, 표준편차 안). 대신
   API 비용은 1.8배였다.
 - **재시작 너머의 기억은 증명되지 않았다.** 한 번씩 돌린 파일럿 네 번에서 brief를 읽은 리드는 진행 파일을 쓴 리드보다
