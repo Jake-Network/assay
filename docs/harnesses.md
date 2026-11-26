@@ -1,23 +1,10 @@
 # Hooks across coding harnesses
 
 The [Claude Code plugin](claude-code.md) shares its boundary brief, pending notes and check recorder with other
-harnesses. Install the command manifests with `benchbook install --harness codex|cursor|gemini` or follow the
-project-local instructions in [Codex](../integrations/codex/README.md), [Cursor](../integrations/cursor/README.md)
-and [Gemini CLI](../integrations/gemini/README.md). [OpenCode](../integrations/opencode/README.md) and
-[Pi](../integrations/pi/README.md) use native project extensions.
-
-`SessionStart` or its equivalent loads the scoped brief and writes `.benchbook/STATE.md`. Tool boundaries deliver
-pending notes once and record declared shell checks through the same match, spool and attempt paths as Claude Code.
-An unknown exit code is observed as `unrecordable`. Shell output passes through memory to compute a failure
-signature. The ledger and spool store the signature and check metadata.
-
-For a harness without compatible hooks, add this line to the project's `AGENTS.md`:
-
-> Read `.benchbook/STATE.md` at session start when the file exists.
-
-The shell and worker-report details below for Codex, Cursor and Gemini CLI refer to the 2026-11-21 documentation
-copies in `04-sources/harness-docs/`. The boundary sections and the native extension inputs refer to the official
-sources linked with each section.
+harnesses. `benchbook install --harness codex|cursor|gemini` merges a harness's manifest into its user-level file;
+to install in one project instead, follow [Codex](../integrations/codex/README.md),
+[Cursor](../integrations/cursor/README.md) or [Gemini CLI](../integrations/gemini/README.md).
+[OpenCode](../integrations/opencode/README.md) and [Pi](../integrations/pi/README.md) use native project extensions.
 
 ## At a glance
 
@@ -25,19 +12,31 @@ sources linked with each section.
 |---|---|---|---|---|
 | Claude Code | `benchbook install` | SessionStart, also after compaction | UserPromptSubmit, PostToolUse | Bash |
 | Codex | `benchbook install --harness codex` | SessionStart, also after compaction | PostToolUse | Bash, when the output carries the exit code |
-| Cursor | `benchbook install --harness cursor` | sessionStart | postToolUse | Shell |
+| Cursor | `benchbook install --harness cursor` | sessionStart | postToolUse, postToolUseFailure | Shell |
 | Gemini CLI | `benchbook install --harness gemini` | SessionStart | AfterTool | `run_shell_command` |
 | OpenCode V2 | copy [index.ts](../integrations/opencode/README.md) | first model request | next model request | `shell` |
 | Pi | copy [benchbook.ts](../integrations/pi/README.md) | before the first agent turn | tool results | `bash` |
 
 The automatic re-run after a report is Claude Code only. Elsewhere, `benchbook check verify` does the same.
 
+Shell checks go through the same match, spool and attempt paths as on Claude Code. An unknown exit code is observed
+as `unrecordable`. The output passes through memory to compute a failure signature; the ledger and spool store only
+the signature and check metadata.
+
+For a harness without compatible hooks, add this line to the project's `AGENTS.md`:
+
+> Read `.benchbook/STATE.md` at session start when the file exists.
+
+**Sources.** Quotes name a file and section of each harness's documentation as read on 2026-11-21: codex_hooks.md,
+cursor_hooks.md and gemini_hooks_ref.md are the hook references, codex_context.rs and gemini_shell.ts Codex and Gemini
+CLI source files. These copies are not in the repository; each section links the official page.
+
 ## How the hook learns its harness
 
 The manifest's command carries it: `benchbook hook bash-result --harness codex` (also `--harness=codex`). Without
 the option the hook reads Claude Code's input, so the Claude Code plugin is unchanged. An unknown name is a line in
-`hook.log`; the hook still exits 0. Telling harnesses apart by the shape of the input was not chosen: Codex and
-Claude Code both name the shell tool `Bash` and send `tool_input.command`, and a guess would read one as the other.
+`hook.log`; the hook still exits 0. The hook does not guess the harness from the input: Codex and Claude Code both
+name the shell tool `Bash` and send `tool_input.command`.
 
 ## Codex CLI
 
@@ -63,9 +62,11 @@ fields": "`session_id` | `string` | Current Codex session id", "`cwd` | `string`
 session".
 
 - Exit code: not documented as a field. The model-facing text of a command starts with a header that
-  codex_context.rs (`ExecCommandToolOutput::response_header`) builds as `Wall time: ... seconds`, `Process exited
-  with code {exit_code}` (when there is one), and `Output:` before the output. benchbook reads the exit code only
-  from a `tool_response` string that starts with that header. The same file's `post_tool_use_response` for
+  codex_context.rs (`ExecCommandToolOutput::response_header`) builds, then `Output:` and the output. benchbook reads
+  the exit code only from a `tool_response` string whose lines before `Output:` are all header lines (`Chunk ID:
+  ...`, `Wall time: ... seconds`, `Process exited with code {exit_code}`, `Process running with session ID ...`,
+  `Original token count: ...`), one of them `Wall time:`. A header without `Process exited with code` (the command
+  may still be running) gives no exit code. The same file's `post_tool_use_response` for
   `exec_command` returns `self.truncated_output_with_policy(...)`, the output alone: those runs, and any other
   `tool_response` without the header, are observed as `unrecordable` ("Codex sent the output without its exit
   code"). Whether the classic shell path sends the header is not shown in these copies; expect most Codex check runs
@@ -139,12 +140,18 @@ same field. Whether a follow-up can hold a piece open is to be confirmed.
 
 ## Gemini CLI
 
-gemini_hooks_ref.md, "Configuration schema": "Hooks are defined in `settings.json` within the `hooks` object".
-"Matchers and tool names": "Built-in Tools: You can match
-any built-in tool (for example, `read_file`, `run_shell_command`)". "`AfterTool`": "`tool_input`: (`object`) The
-original arguments", "`tool_response`: (`object`) The result containing `llmContent`, `returnDisplay`, and
-optional `error`". "Base input schema": `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `timestamp`.
-"Global hook mechanics": "`0`: Success. `stdout` is parsed as JSON" (the hook prints `{}`).
+**Boundary context.** `SessionStart` on startup, resume or clear accepts `hookSpecificOutput.additionalContext`.
+Gemini adds it to history in interactive mode and prepends it to the prompt in non-interactive mode. `AfterTool`
+accepts the same field for pending notes. `PreCompress` is advisory and “cannot block or modify the compression
+process”. [Gemini CLI hooks reference](https://geminicli.com/docs/hooks/reference/)
+
+**Manifest.** gemini_hooks_ref.md, "Configuration schema": "Hooks are defined in `settings.json` within the `hooks`
+object". "Global hook mechanics": "`0`: Success. `stdout` is parsed as JSON" (the hook prints `{}`).
+
+**Shell result.** "Matchers and tool names": "Built-in Tools: You can match any built-in tool (for example,
+`read_file`, `run_shell_command`)". "`AfterTool`": "`tool_input`: (`object`) The original arguments",
+"`tool_response`: (`object`) The result containing `llmContent`, `returnDisplay`, and optional `error`". "Base input
+schema": `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `timestamp`.
 
 - Exit code: gemini_shell.ts builds `llmContent` as `Output: ${result.output || '(empty)'}`, then
   `Error: ...` when there was an error, `Exit Code: ${result.exitCode}` "if (result.exitCode !== null &&
@@ -158,12 +165,8 @@ optional `error`". "Base input schema": `session_id`, `transcript_path`, `cwd`, 
 - Working directory: the session `cwd`, joined with `tool_input.dir_path` when given (gemini_shell.ts resolves
   `this.params.dir_path` against the target directory).
 - Tool call id, duration, version: not documented.
-- Subagent reports: spec §7 says Gemini has no dedicated event; not wired.
 
-**Boundary context.** `SessionStart` on startup, resume or clear accepts `hookSpecificOutput.additionalContext`.
-Gemini adds it to history in interactive mode and prepends it to the prompt in non-interactive mode. `AfterTool`
-accepts the same field for pending notes. `PreCompress` is advisory and “cannot block or modify the compression
-process”. [Gemini CLI hooks reference](https://geminicli.com/docs/hooks/reference/)
+**Subagent report: not wired.** The manifest has no report hook; worker reports are not captured.
 
 ## OpenCode V2
 
@@ -195,12 +198,15 @@ on an actual process exit. A result without a structured exit code remains unrec
 
 ## Doctor
 
-`benchbook doctor` adds a `harness hook input` line once a non-Claude hook has observed a declared
-check run in the last 24 hours (for this shell's database). It fails when some of those inputs were not shaped as
-the documentation and the stored fixtures say (Cursor's `tool_output` without an integer `exitCode`, an unknown
-`failure_type`, a Codex `tool_response` that is not text, a Gemini `llmContent` that does not start with
-`Output: `), and names the harness version that sent them next to the fixtures' version: only Cursor's input carries
-one (`cursor_version`; the fixtures are of 1.7.2, the documentation's example). Other harnesses say "no version in its input". A Codex output without its exit code is the documented shape and does not count.
+`benchbook doctor` adds a `harness hook input` line once a non-Claude hook has observed a declared check run in the
+last 24 hours (for this shell's database). It fails when some of those inputs were not shaped as the documentation
+and the stored fixtures say: Cursor's `tool_output` without an integer `exitCode`, an unknown `failure_type`, a
+Codex `tool_response` that is not text, a Gemini `llmContent` that does not start with `Output: `, an OpenCode
+result without a structured output or whose `exitCode` is neither an integer nor null, a Pi result with
+`structuredContent` but no integer `exit_code`, or with neither while not an error. The line names the harness
+version that sent them next to the fixtures' version: only Cursor's input carries one (`cursor_version`; the
+fixtures are of 1.7.2, the documentation's example). Other harnesses say "no version in its input". A Codex output
+without its exit code is the documented shape and does not count.
 
 ## Fixtures
 
