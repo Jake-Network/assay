@@ -49,25 +49,24 @@ def test_readmes_say_what_benchbook_fits() -> None:
 
 def test_benchmark_tables_are_filled_with_a_gate_verdict() -> None:
     root = Path(__file__).resolve().parent.parent
-    for name, head, gate in (("README.md", "## Benchmark", "Release gate"),
-                             ("README.ko.md", "## 벤치마크", "출시 게이트")):
-        text = (root / name).read_text()
-        section = text[text.index(head):]
-        section = section[:section.index("\n## ", 1)]
-        assert "_tbd_" not in section and gate in section, name
-        assert "bench/results/" in section and section.count("**") >= 6, name
-        report = re.search(r"(bench/results/\S+/report\.md)", section)
-        assert report and (root / report.group(1)).is_file(), name
+    text = (root / "docs" / "results.md").read_text()
+    section = text[text.index("## Benchmark"):]
+    section = section[:section.index("\n## ", 1)]
+    assert "_tbd_" not in section and "Release gate" in section
+    assert "bench/results/" in section and section.count("**") >= 6
+    report = re.search(r"(bench/results/\S+/report\.md)", section)
+    assert report and (root / report.group(1)).is_file()
+    for name in ("README.md", "README.ko.md"):
+        assert "docs/results.md" in (root / name).read_text(), name
 
 
-def test_readmes_link_every_boundary_pilot() -> None:
-    """Each published boundary pilot is linked from both READMEs, so a later pilot cannot replace an earlier one."""
+def test_results_link_every_boundary_pilot() -> None:
+    """Each published boundary pilot is linked from docs/results.md, so a later pilot cannot replace an earlier one."""
     root = Path(__file__).resolve().parent.parent
     pilots = sorted(p.name for p in (root / "bench" / "results").iterdir() if "boundary-pilot" in p.name)
     assert pilots
-    for name in ("README.md", "README.ko.md"):
-        text = (root / name).read_text()
-        assert [p for p in pilots if f"bench/results/{p}/" not in text] == [], name
+    text = (root / "docs" / "results.md").read_text()
+    assert [p for p in pilots if f"bench/results/{p}/" not in text] == []
 
 
 def test_worker_instructions_prefer_exp_run_and_keep_the_mcp_pair() -> None:

@@ -3,6 +3,43 @@
 benchbook is the record of a research community made of agents: workers are contributors, the lead is the editor,
 the database is the journal. It does not pass messages between agents and it does not run them.
 
+## How the ledger works
+
+```
+ worker-1 ─┐  report, check run, record_experiment (+ claims with evidence)
+ worker-2 ─┼──────────────────────────────►  Postgres ledger  (append-only)
+ worker-3 ─┘                                       │  SQL: re-runs, dedup, replicates, failures
+                                                   ▼
+ lead  ◄── brief (budgeted: verified, only reported, discarded, open findings) + ids
+   └──► decide: supported / refuted / verified (non-LLM oracle + evidence only)
+```
+
+- **Nothing lost.** Every check run and every evaluation is a row the moment it ends. A hook captures any subagent
+  output that cites no record, so even an agent that ignores the rules leaves a note.
+- **Nothing repeated.** A failed approach is listed in the brief with its failure signature. For experiments, the
+  same config + code + seed is refused, and a different seed counts as a replicate.
+- **Nothing trusted without evidence.** Agents propose claims. The lead, a hook or a person verifies them with a
+  non-LLM oracle and evidence ids: a clean re-run for code, replicated seeds that still beat the baseline for
+  experiments.
+
+What these rest on, and what they do not: database triggers refuse UPDATE, DELETE and TRUNCATE on records
+and keep each agent's role fixed, so an honest mistake (an agent "cleaning up test data") cannot rewrite
+history. They do not stop someone who holds the database owner's credentials, which every agent on a shared
+URL has today, and agent names are self-declared: an agent that lies about its name can pose as the lead or as
+"another agent". Treat the guarantees as protection against mistakes, not against a hostile agent, on a shared
+owner URL. Giving each machine the `benchbook_writer` login and a per-agent token binds every write to its agent
+([Several machines](multi-machine.md#per-agent-tokens)); the owner's own connection can still bypass it. See
+[Honest limits](#honest-limits).
+
+Without Claude Code, the CLI and the [Python SDK](sdk.md) do the same:
+
+```bash
+export BENCHBOOK_AGENT=worker-1                                                     # who is writing
+benchbook exp tried  --config '{"lr": 3e-4, "warmup": 500}'                         # before running
+benchbook exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
+benchbook brief
+```
+
 ## Records
 
 | record | meaning | written by |

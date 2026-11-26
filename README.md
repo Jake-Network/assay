@@ -1,268 +1,102 @@
 # benchbook: "done" is a claim until the tests say so
 
-**Your coding agents report "done". benchbook re-runs the checks on that commit, flags tests that were weakened to
-get there, and carries what was verified across subagents, sessions and compaction.**
+**Your coding agents report "done". benchbook re-runs the checks on that exact commit, flags tests weakened to get
+green, and keeps what was verified across subagents, sessions and compaction.**
 
-A lead agent that splits work into pieces gets text back: "DONE a1b2c3d, all tests pass." Some of those reports are
-wrong. Some got green by deleting an assert or adding a skip. The ones that were right are forgotten at the next
-compaction or the next session, and a fresh agent tries the approach that already failed. benchbook keeps a Postgres
-ledger beside the repository. A report becomes a completion claim, and only an independent re-run of the declared
-checks on that exact commit, in a clean worktree, turns it into `verified`. Every session starts from what the ledger
-says, not from what someone remembered.
+On SWE-bench Verified, 7 of 39 tasks Claude Code reported done failed the benchmark's tests when re-run, and only 3
+of the 39 agents had run a test first ([results](docs/results.md)). benchbook keeps a Postgres ledger beside your
+repository. A report becomes a claim; only an independent re-run of your declared checks, in a clean worktree, makes
+it `verified`.
 
-## 60-second start (Claude Code)
+## Start (Claude Code)
 
 ```bash
-uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook   # `uv tool install benchbook` once v0.1.0 is on PyPI; no Docker needed
-benchbook install --no-cli       # the benchbook hook plugin (--mcp adds the MCP server and the worker agent)
-cd your-repo && benchbook init   # proposes the repository's test and lint commands as checks; .benchbook/ stays out of git
+uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook   # no Docker needed
+benchbook install --no-cli       # the hook plugin; --mcp adds the MCP server and the worker agent
+cd your-repo && benchbook init   # proposes your test and lint commands as checks
 ```
 
-Then work as you do now. The one convention: an implementer ends its report with `DONE <sha>` (or a `commit: <sha>`
-line), and the piece is its branch name, a `piece: <name>` line or a `Benchbook-Piece:` commit trailer.
+Then work as usual. The one convention: an implementer ends its report with `DONE <sha>`, and the piece is named by
+its branch, a `piece: <name>` line or a `Benchbook-Piece:` commit trailer.
 
-## What happens in a session
+## What you get
 
-| when | what benchbook does |
-|---|---|
-| a session starts, resumes or is compacted | gives the brief for what this branch changed (at most 1,500 tokens): verified pieces and how they were checked, re-runs nobody decided and why, "reported done, not re-run", discarded approaches, open findings, occupied paths. It is also written to `.benchbook/STATE.md` |
-| right before compaction | asks the summary to keep the record ids and statuses verbatim |
-| a subagent reports `DONE <sha>` | re-runs the declared checks on that commit in a clean worktree, in the background, as `rerun@<host>` (an orchestrator, so a pass decides `verified`) |
-| the next prompt, Bash call or agent result | delivers the outcome once: `benchbook: media-upload a1b2c3d: re-run passed (2 checks, 14.2s), tests not weakened, checked: re-run (c:7f3a91c2)` |
-| an agent runs a declared check in Bash | records the run against the piece and the commit |
-| an agent marks a task completed on a piece's branch (`piece start`) | keeps it open until every declared check has a passing run at HEAD, and says which command to run |
-| recording breaks (a dead report, hook failures) | starts the brief with `benchbook: recording stopped: ...` and the fix |
-
-The brief at session start and after compaction is experimental: in four pilots a lead that read it did not know
-more than one that kept progress files ([Measured so far](#measured-so-far)). The re-run of a reported commit and the
-weakened-test guard do not depend on it.
-
-Hooks never write to stderr and always exit 0. Outside a benchbook project they leave without touching the database.
-
-## What "verified" means
-
-- **Checks are declared once and pinned.** `.benchbook/config.toml` `[checks]` names the commands, and the ledger pins
-  them, so an implementer cannot redefine "passing" for its own piece. A commit that changes a check definition goes
-  to a person.
-- **The re-run is independent.** A clean worktree of the reported commit, run by the lead or by the hook's processor.
-  The implementer's own runs are recorded too, but never count as the re-run.
-- **Weakened tests go to a person, however green.** Deleted or changed assertions, new `skip`/`xfail` markers, any
-  `conftest.py` change, a check running fewer tests than at the merge-base. Added tests are fine.
-- **The environment is not the commit's fault.** A failure counts as an environment failure (a missing `.env`, a
-  service that is down) only when the implementer's own clean run passed and the merge-base fails the same way. A goal
-  test that fails at the base by design still counts against the piece.
+- **Every "done" is re-run.** A subagent's `DONE <sha>` starts the declared checks on that commit in a clean
+  worktree, in the background. The next turn hears the outcome once:
+  `benchbook: media-upload a1b2c3d: re-run passed (2 checks, 14.2s), tests not weakened`.
+- **Weakened tests go to a person, however green.** Deleted or changed asserts, new `skip`/`xfail`, a
+  `conftest.py` change, fewer tests run than at the merge-base.
+- **"Passing" cannot be redefined.** Checks are declared once in `.benchbook/config.toml` and pinned in the ledger.
+  An implementer's own runs are recorded but never count as the re-run.
 - **Failures are remembered.** A failed re-run leaves a discarded approach with its failure signature, and the next
-  agent's brief says not to repeat it.
+  agent is told not to repeat it.
+- **A brief at session start and after compaction** (experimental): verified pieces, undecided re-runs, discarded
+  approaches and occupied paths in at most 1,500 tokens.
 
-Details: [docs/code.md](docs/code.md).
+Hooks never write to stderr and always exit 0; outside a benchbook project they do nothing.
+[What happens when](docs/claude-code.md#what-happens-in-a-session) · [the verification policy](docs/code.md)
 
 ## Commands for the lead
 
 ```bash
-benchbook --agent lead check verify media-upload a1b2c3d --reported-by implementer-1   # re-run and decide as the lead; without --agent lead it only records (as CI does)
+benchbook --agent lead check verify media-upload a1b2c3d --reported-by implementer-1   # re-run and decide
 benchbook brief --here            # the brief for what this branch changed
-benchbook status                  # pieces verified, re-run but not decided, reported only and re-run mismatched; open findings; hook health
-benchbook get c:7f3a91c2          # one record in at most 400 tokens
+benchbook status                  # verified, undecided, reported only, mismatched; open findings; hook health
 benchbook piece start media-upload --paths 'src/media/**'   # occupy paths so two implementers do not collide
 ```
 
-`benchbook statusline` prints a one-line count for a status line. The [GitHub Action](integrations/github-action/README.md)
-re-runs each piece a pull request completes and keeps one comment saying which completions an independent re-run
-confirmed. Without `database-url` it runs with a ledger of that workflow run only and needs nothing but the
-`[checks]` committed in `.benchbook/config.toml`.
-
-## Other harnesses
-
-| harness | install | brief at session start | notes after tools | check runs recorded |
-|---|---|---|---|---|
-| Claude Code | `benchbook install` | SessionStart, also after compaction | UserPromptSubmit, PostToolUse | Bash |
-| Codex | `benchbook install --harness codex` | SessionStart, also after compaction | PostToolUse | Bash, when the output carries the exit code |
-| Cursor | `benchbook install --harness cursor` | sessionStart | postToolUse | Shell |
-| Gemini CLI | `benchbook install --harness gemini` | SessionStart | AfterTool | `run_shell_command` |
-| OpenCode V2 | copy [index.ts](integrations/opencode/README.md) | first model request | next model request | `shell` |
-| Pi | copy [benchbook.ts](integrations/pi/README.md) | before the first agent turn | tool results | `bash` |
-
-The automatic re-run after a report is Claude Code only. Elsewhere, `benchbook check verify` does the same.
-[docs/harnesses.md](docs/harnesses.md) quotes each harness's documentation for every field read.
+The [GitHub Action](integrations/github-action/README.md) re-runs each piece a pull request completes and keeps one
+comment saying which completions were confirmed. Codex, Cursor, Gemini CLI, OpenCode and Pi get the brief and the
+check recording too ([harnesses](docs/harnesses.md)); the automatic re-run is Claude Code only.
 
 ## Measured so far
 
-**How often "done" is not done (SWE-bench Verified, 2026-11-23):** 7 of 39 completions that Claude Code
-(`claude-sonnet-5-5`) reported done failed the benchmark's declared checks (visible and hidden tests, the registered
-measure) when benchbook re-ran them: **17.9%, 95% CI 9.0% to 32.7%**
-(the hidden tests alone: 5 of 39, 12.8%). Only 3 of the 39 implementers ran a test before reporting done. The interval
-contains the 10% threshold of the plan; the point estimate is above it.
-Post hoc, re-running only the visible checks a project declares, which is what benchbook does in real use, refuted
-3 of 39 (7.7%, 2.7% to 20.3%); in two of those the reference fix fails the same visible test, which leaves 1 of 39 (2.6%,
-0.5% to 13.2%). The four completions that only the hidden tests refuted need a better check, not a re-run.
-Details, including two refutations caused by
-the visible check itself: [bench/results/2026-11-23-swe-verified/](bench/results/2026-11-23-swe-verified/README.md).
-`bench/code/` is the harness. `bench/boundary/` measures what a lead still knows after compaction and restarts, across
-six arms ([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
+- **"Done" is often not done.** SWE-bench Verified with `claude-sonnet-5-5`: 7 of 39 reported completions failed the
+  benchmark's checks on re-run (17.9%, 95% CI 9.0% to 32.7%). Re-running only the visible tests, as benchbook does in
+  real use, caught 3 of them (in two the reference fix fails the same test).
+- **Memory across restarts is not proven yet.** In four one-trial pilots, a lead reading the brief answered fewer
+  state questions than one keeping progress files or one resuming its session. No pilot reached compaction.
+- **Experiment swarms lose nothing.** Circle packing: no lost results and fewer duplicate evaluations than plain
+  subagents (22.5% vs 29.4%, within one standard deviation), at 1.8x the API cost and a higher peak lead context.
 
-**What a lead still knows after a restart (four boundary pilots, 2026-11-25):** one task (boltons) and one trial per
-arm in each pilot, so directions only. Asked five state questions after each of two phases (in a new session for F
-and C, in the resumed session for A), benchbook's boundary mode (F) answered 1, 4, 4 and 6 of 10 across the four
-pilots, a single resumed session (A) 6, 8, 7 and 8, and progress files (C) 6, 6, 6 and 7. Each pilot fixed what the
-one before found in benchbook (a test import edit counted as a weakening, validity marks, the brief's scope on an
-integration branch, the `applies at HEAD` mark); F has not been above progress files in any of them. No pilot reached compaction (largest lead prompt 27.4k tokens of
-a 100k window), so compaction is still unmeasured; repeated dead ends (H3) and trust in the stale check (H6) were
-counted and were 0 in every arm, so they show no difference yet. Per completed trial F cost about the same as C (USD
-0.42 to 0.55 against 0.52 to 0.58) and 1.6 to 2.2 times A (0.25 to 0.30); the third pilot also spent USD 0.56 on an
-A trial that stopped. Details: pilots
-[1](bench/results/2026-11-25-boundary-pilot/README.md), [2](bench/results/2026-11-25-boundary-pilot-2/README.md),
-[3](bench/results/2026-11-25-boundary-pilot-3/README.md), [4](bench/results/2026-11-25-boundary-pilot-4/README.md).
+Methods, every pilot and the raw reports: [docs/results.md](docs/results.md).
 
 ## Experiment swarms
 
-benchbook started as a lab notebook for agents that run experiments, and that mode is unchanged. Workers record each
-experiment the moment it finishes (failures too). They check what was already tried before running anything, and
-hand the lead a short summary with record ids. The lead reads a budgeted brief built by SQL (best result,
-verified claims, what not to repeat) instead of transcripts.
+benchbook started as a lab notebook for agents that run experiments. Workers record every run, failures included,
+and check what was tried before running; the same config, code and seed is refused and a new seed counts as a
+replicate. The lead reads a budgeted brief instead of transcripts.
 
 ```bash
 cd your-repo && benchbook init --goal "Minimise validation loss" --metric val_loss --direction min
 benchbook install --no-cli --mcp
 ```
 
-Then in Claude Code `/benchbook-mcp:benchbook-lead Minimise val_loss of train.py; 3 rounds, 4 workers`, and
-`benchbook serve` to watch it at http://127.0.0.1:7466. Without Claude Code, the CLI and the Python SDK do the same:
-
-```bash
-export BENCHBOOK_AGENT=worker-1                                                     # who is writing
-benchbook exp tried  --config '{"lr": 3e-4, "warmup": 500}'                         # before running
-benchbook exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_loss": 2.91}' --seed 0
-benchbook brief
-```
-
-### autoresearch on many GPUs
-
-**Run autoresearch on many GPUs as one lab: no repeated runs, nothing lost, and the swarm only builds on
-results that replicated.**
-
-<!-- 30-second GIF: the viewer's verified-best staircase while candidates pass or fail replication.
-     Record with: python examples/autoresearch-sim/run_sim_swarm.py --agents 4 --minutes 5 --keep, then benchbook serve -->
-
-```bash
-cd autoresearch && uv run prepare.py                         # karpathy/autoresearch or any fork
-bash /path/to/benchbook/integrations/autoresearch/launch_local.sh 4   # benchbook ar init + one worktree and agent per GPU
-benchbook serve                                                  # watch it at http://127.0.0.1:7466
-```
-
-Each agent follows `program.benchbook.md` (upstream `program.md` with a shared loop). The same code never runs
-twice on the same hardware; every run is recorded, crashes included; a result only becomes the shared
-baseline after two other agents re-run it and the mean still wins. Self-hosted, no API key: several machines
-need one Postgres URL. Details: [docs/autoresearch.md](docs/autoresearch.md).
-
-The pre-registered comparison with independent autoresearch agents has not been run yet
-([bench/autoresearch/PREREGISTRATION.md](bench/autoresearch/PREREGISTRATION.md) is still a template), so there are no
-numbers for this mode.
-
-## Benchmark
-
-<!-- Report: bench/results/2026-11-21-claude-sonnet-5-5-rerun/report.md (bench at d65441a, claude-sonnet-5-5,
-     Claude Code 2.1.330, 3 runs per arm, USD 5 cap per run). The first batch is in
-     bench/results/2026-11-20-claude-sonnet-5-5/; the rerun's README says what differs. -->
-
-Circle packing (n=26) with the same model, API budget, worker count, and wall-clock limit (mean ± sd over 3 runs):
-
-| | lost results | duplicate evaluations | lead context (max) | best per 1k tokens |
-|---|---|---|---|---|
-| A: subagents report as text | 0 | 29.4% ± 15 | 30.5k ± 1.3k | 0.0281 ± 0.0012 |
-| B: subagents write JSON files | 0.33 ± 0.58 | 16.1% ± 5.4 | 35.6k ± 3.1k | 0.0139 ± 0.0011 |
-| C: benchbook | 0 | 22.5% ± 10 | 33.1k ± 2.0k | 0.0085 ± 0.0020 |
-
-Release gate (MANUAL_QA.md), C against A:
-
-- Lost results 0: **pass** (0 in every C run; A also lost nothing, B lost one evaluation in one run).
-- Duplicate ratio below A: **pass** on the means (22.5% vs 29.4%, within one standard deviation at three runs; B's
-  result files did better at 16.1%).
-- Peak lead context below A: **fail** (33.1k vs 30.5k tokens).
-
-All arms reached the same best (2.636). Counting the lead and its subagents, C used 4.2x the tokens of A and 1.8x
-its API cost (B: 3.2x and 1.5x). Where C's tokens go is broken down in
-[cost-breakdown.md](bench/results/2026-11-21-claude-sonnet-5-5-rerun/cost-breakdown.md): mostly more model calls,
-each re-reading its context, rather than large tool results.
-
-**Fan-in (H5, 2026-11-25).** The same task at 8, 16 and 30 requested workers per round, A against C, USD 5 cap per
-run (mean over completed runs: 3 per configuration at 8 and 16; at 30, 2 for A and 1 for C):
-
-| workers | lead context (max), A | lead context (max), C | report tokens to the lead, A | report tokens to the lead, C |
-|---|---|---|---|---|
-| 8 | 47.2k | 55.2k | 15.4k | 6.9k |
-| 16 | 83.5k | 85.9k | 31.1k | 13.8k |
-| 30 | 150.8k | 130.7k (Haiku workers) | 59.1k | 22.3k (Haiku workers) |
-
-Pre-registered H5 gate, C lower than A at every width and growing more slowly: **not met**. C's lead reads less than
-half of A's report tokens, but its peak context is higher at 8 and 16. At 30 neither C run is a like-for-like sample:
-to stay under USD 5, one lead ran its workers on Haiku and the other ran 28 of 90 workers. Width 30 ran on Claude Code
-2.1.331. Details: [bench/results/2026-11-25-h5-sweep/](bench/results/2026-11-25-h5-sweep/README.md).
-
-`python -m bench.run --dry` reproduces the pipeline without model calls.
-
-## How the ledger works
-
-```
- worker-1 ─┐  report, check run, record_experiment (+ claims with evidence)
- worker-2 ─┼──────────────────────────────►  Postgres ledger  (append-only)
- worker-3 ─┘                                       │  SQL: re-runs, dedup, replicates, failures
-                                                   ▼
- lead  ◄── brief (budgeted: verified, only reported, discarded, open findings) + ids
-   └──► decide: supported / refuted / verified (non-LLM oracle + evidence only)
-```
-
-- **Nothing lost.** Every check run and every evaluation is a row the moment it ends. A hook captures any subagent
-  output that cites no record, so even an agent that ignores the rules leaves a note.
-- **Nothing repeated.** A failed approach is listed in the brief with its failure signature. For experiments, the
-  same config + code + seed is refused, and a different seed counts as a replicate.
-- **Nothing trusted without evidence.** Agents propose claims. The lead, a hook or a person verifies them with a
-  non-LLM oracle and evidence ids: a clean re-run for code, replicated seeds that still beat the baseline for
-  experiments.
-
-What these rest on, and what they do not: database triggers refuse UPDATE, DELETE and TRUNCATE on records
-and keep each agent's role fixed, so an honest mistake (an agent "cleaning up test data") cannot rewrite
-history. They do not stop someone who holds the database owner's credentials, which every agent on a shared
-URL has today, and agent names are self-declared: an agent that lies about its name can pose as the lead or as
-"another agent". Treat the guarantees as protection against mistakes, not against a hostile agent, on a shared
-owner URL. Giving each machine the `benchbook_writer` login and a per-agent token binds every write to its agent
-([Several machines](docs/multi-machine.md#per-agent-tokens)); the owner's own connection can still bypass it. See
-[Honest limits](docs/concepts.md#honest-limits).
+Then `/benchbook-mcp:benchbook-lead Minimise val_loss of train.py; 3 rounds, 4 workers` in Claude Code, and
+`benchbook serve` to watch at http://127.0.0.1:7466. On many GPUs, a result becomes the shared baseline only after
+two other agents replicate it: [autoresearch](docs/autoresearch.md).
 
 ## What it fits
 
-benchbook pays off in two kinds of work.
-
-- **Coding work with a test suite.** Pieces handed to agents, each ending at a commit that declared checks can
-  judge. The more agents and sessions a change spans, the more a "done" needs a re-run behind it.
-- **Experiments**, when all three hold:
-  - **A number per attempt.** Every attempt yields a metric (`val_bpb`, `sum_radii`).
-  - **Re-runnable.** The same config and code can run again with only the seed changed, so a rerun can verify a
-    result.
-  - **One space, explored together.** Several workers search the same space at the same time, so reading each
-    other's results removes repeats.
+- **Coding work with a test suite**, split across agents or sessions, each piece ending at a commit the checks can
+  judge.
+- **Experiments** that are all three: **A number per attempt** (every attempt yields a metric), **Re-runnable** (the
+  same config runs again with only the seed changed) and **One space, explored together** (several workers search
+  it at once).
 
 ## What it is not
 
-- Not a code reviewer or a test writer. It re-runs the checks you declared. If they do not cover a requirement, a
-  green re-run says nothing about it.
-- Not a duplicate blocker for code implementation. Approaches are free text, so exact-hash dedup and seed replicates
-  apply to experiments only. For code, what is remembered is which approaches failed and why.
-- Not a memory layer for one agent or user (mem0, Letta).
-- Not an orchestrator: it does not run, schedule or route agents. It sits under Claude Code, Codex, Cursor or your
-  own loop.
-- Not an observability tool: traces stay in Langfuse/MLflow/Phoenix; records can carry a `trace_ref`.
+- Not a code reviewer or test writer: a green re-run says nothing about what your checks do not cover.
+- Not a duplicate blocker for code implementation: for code it remembers which approaches failed, not exact repeats.
+- Not an orchestrator, a single-agent memory (mem0, Letta) or an observability tool (records can carry a `trace_ref`).
+- Not a defence against a hostile agent on a shared owner URL: the guarantees catch mistakes
+  ([honest limits](docs/concepts.md#honest-limits)).
 
 ## Docs
 
 [Coding work](docs/code.md) · [Claude Code](docs/claude-code.md) · [Other harnesses](docs/harnesses.md) ·
-[Concepts](docs/concepts.md) · [Schema and SQL examples](docs/schema.md) · [Several machines](docs/multi-machine.md) ·
-[Python SDK](docs/sdk.md) · [Circle-packing demo](examples/circle-packing/README.md) ·
-[autoresearch on many GPUs](docs/autoresearch.md) · [Releasing](docs/releasing.md)
-
-## Roadmap
-
-What comes next is decided by measurements, not features: the false completion rate in real delegate work, and a
-boundary pilot that reaches compaction ([bench/boundary/PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
-Semantic near-duplicate warnings, row-level security for teams and new domain packs wait for a measured need.
+[Results](docs/results.md) · [Concepts](docs/concepts.md) · [Schema and SQL](docs/schema.md) ·
+[Several machines](docs/multi-machine.md) · [Python SDK](docs/sdk.md) · [autoresearch](docs/autoresearch.md) ·
+[Circle-packing demo](examples/circle-packing/README.md) · [Releasing](docs/releasing.md)
 
 License: Apache-2.0.

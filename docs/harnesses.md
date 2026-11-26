@@ -19,6 +19,19 @@ The shell and worker-report details below for Codex, Cursor and Gemini CLI refer
 copies in `04-sources/harness-docs/`. The boundary sections and the native extension inputs refer to the official
 sources linked with each section.
 
+## At a glance
+
+| harness | install | brief at session start | notes after tools | check runs recorded |
+|---|---|---|---|---|
+| Claude Code | `benchbook install` | SessionStart, also after compaction | UserPromptSubmit, PostToolUse | Bash |
+| Codex | `benchbook install --harness codex` | SessionStart, also after compaction | PostToolUse | Bash, when the output carries the exit code |
+| Cursor | `benchbook install --harness cursor` | sessionStart | postToolUse | Shell |
+| Gemini CLI | `benchbook install --harness gemini` | SessionStart | AfterTool | `run_shell_command` |
+| OpenCode V2 | copy [index.ts](../integrations/opencode/README.md) | first model request | next model request | `shell` |
+| Pi | copy [benchbook.ts](../integrations/pi/README.md) | before the first agent turn | tool results | `bash` |
+
+The automatic re-run after a report is Claude Code only. Elsewhere, `benchbook check verify` does the same.
+
 ## How the hook learns its harness
 
 The manifest's command carries it: `benchbook hook bash-result --harness codex` (also `--harness=codex`). Without
