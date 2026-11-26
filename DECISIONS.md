@@ -338,6 +338,12 @@ bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boun
 
 - **`junit = true` means "a test ran".** Exit 0 with no report, no testcase or only skipped ones is a failed check;
   `check run` keeps the command's exit code.
+- **A JUnit pass counts only from a report path of its own.** `check run` and `check verify` give each invocation its
+  own report path and validate it. The Bash hook records a raw JUnit check's failure or timeout and observes a raw pass
+  as `unrecordable`, and the completion gate ignores raw Bash passes of JUnit checks. Three fixes tried to tell whether
+  a shared report was written by this command (a time window, an mtime after the start with a fingerprint, a PreToolUse
+  before-and-after snapshot); each let through a report written by something else, because a shared path cannot name its
+  writer.
 
 ### Signatures and discarded approaches
 
