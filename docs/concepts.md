@@ -1,7 +1,10 @@
 # Concepts
 
-benchbook is the record of a research community made of agents: workers are contributors, the lead is the editor,
-the database is the journal. It does not pass messages between agents and it does not run them.
+benchbook is a Postgres ledger for agent swarms. Workers write what they did (experiments, check runs, completions,
+findings) to the ledger the moment it ends and hand back record ids. The lead reads the ledger, not the workers'
+messages: a brief within a token budget, one record by id, anything else by read-only SQL. So the lead's context
+holds conclusions and ids, and a swarm can grow without filling it. benchbook does not pass messages between agents
+and it does not run them.
 
 ## How the ledger works
 
@@ -18,18 +21,12 @@ the database is the journal. It does not pass messages between agents and it doe
   output that cites no record, so even an agent that ignores the rules leaves a note.
 - **Nothing repeated.** A failed approach is listed in the brief with its failure signature. For experiments, the
   same config + code + seed is refused, and a different seed counts as a replicate.
-- **Nothing trusted without evidence.** Agents propose claims. The lead, a hook or a person verifies them with a
+- **Checked before it is built on.** Agents propose claims. The lead, a hook or a person verifies them with a
   non-LLM oracle and evidence ids: a clean re-run for code, replicated seeds that still beat the baseline for
   experiments.
 
-What these rest on, and what they do not: database triggers refuse UPDATE, DELETE and TRUNCATE on records
-and keep each agent's role fixed, so an honest mistake (an agent "cleaning up test data") cannot rewrite
-history. They do not stop someone who holds the database owner's credentials, which every agent on a shared
-URL has today, and agent names are self-declared: an agent that lies about its name can pose as the lead or as
-"another agent". Treat the guarantees as protection against mistakes, not against a hostile agent, on a shared
-owner URL. Giving each machine the `benchbook_writer` login and a per-agent token binds every write to its agent
-([Several machines](multi-machine.md#per-agent-tokens)); the owner's own connection can still bypass it. See
-[Honest limits](#honest-limits).
+Triggers keep the records append-only, so an agent "cleaning up test data" cannot rewrite history. That protects
+against mistakes, not against a hostile agent holding the owner's URL: see [Honest limits](#honest-limits).
 
 Without Claude Code, the CLI and the [Python SDK](sdk.md) do the same:
 
@@ -40,15 +37,40 @@ benchbook exp record --config '{"lr": 3e-4, "warmup": 500}' --metrics '{"val_los
 benchbook brief
 ```
 
+## Two modes, one ledger
+
+A project's pack decides which mode it is in. Both write the same records (below).
+
+**Experiment swarms** (packs `core` and `ml-research`; `benchbook init --metric ...`). An attempt is an experiment:
+a config, a code_ref and a seed, with its metrics. A duplicate config, code and seed is refused, another seed is a
+replicate, and a result is `verified` once replicated runs by other agents still beat the baseline
+([Claim lifecycle](#claim-lifecycle)). [autoresearch](autoresearch.md) runs on the `ml-research` pack.
+
+**Coding swarms** (pack `code`; `benchbook init` without `--metric`). The work is split into pieces, and an
+attempt is a commit of a piece judged by the declared checks ([code.md](code.md)):
+
+| in coding work | record |
+|---|---|
+| a piece | a task: a worker intent tagged `intent`, `piece` and `piece:<name>`, whose spec holds the paths it occupies |
+| a check run (`check verify`, `check run`) | an experiment: config `{"piece", "checks"}`, code_ref the commit, metrics `checks_passed` and `checks_total`; the piece is the partition |
+| a re-run of a commit already checked | an experiment too: the code pack's `dedup_mode` is `notify`, so it is stored and names the first run |
+| a worker's `DONE <sha>` | a `completion` claim `<piece> is complete at <sha12>`, tagged `piece:` and `commit:`, in the implementer's name |
+| verifying it | a decision `verified`, oracle `rerun`, under the pack's `all_pass` rule |
+| the checks pinned for a project or piece | a `note` claim tagged `checks-pin` |
+| a discarded approach | an `observation` claim tagged `discarded` and `piece:<piece>`, with the failure signature |
+| an out-of-scope finding | an `observation` claim tagged `out-of-scope` |
+| a subagent report that cites no record | a `note` claim tagged `auto-captured` |
+| the verifier | the agent `rerun@<host>` (orchestrator); the hooks write as `hook` (harness) |
+
 ## Records
 
 | record | meaning | written by |
 |---|---|---|
-| project | one research goal: goal sentence, primary metric and direction, pack | a human or the lead (`benchbook init`) |
+| project | a goal, a primary metric and its direction (code: `checks_passed`, per piece), a pack | a human or the lead (`benchbook init`) |
 | agent | a contributor: worker, orchestrator, human or harness | registered on first use |
 | task | a unit of work, held by one agent at a time through a lease | lead creates, worker claims |
 | experiment | what was tried (config, code_ref, seed) and what happened (metrics, outcome, notes), failures included | workers, scripts |
-| claim | a statement that can be supported or refuted: hypothesis, observation, conclusion, note | anyone proposes |
+| claim | a statement that can be supported or refuted; the pack sets its kinds: `hypothesis`, `observation`, `conclusion`, `note` (`core`), plus `result` and `calibration` (`ml-research`); `completion`, `observation`, `note` (`code`) | anyone proposes |
 | link | a relation between records: supports, refutes, derived_from, depends_on, supersedes, replicates, cites | anyone |
 | decision | a status change of a claim, or the invalidation of an experiment, with oracle and evidence | lead or human only |
 | source | external evidence: a URL, file or paper page | anyone |
@@ -146,26 +168,18 @@ away. No LLM is involved.
 
 By default identity is self-declared. An MCP caller names itself with the `agent` argument and a CLI caller with
 `BENCHBOOK_AGENT`/`--agent`, and an unknown name is registered with the role it asks for, so a malicious agent
-could claim to be the lead, or make up several names to look like independent replicators. The CLI no longer
-falls back to `human` when no name is given; a person deciding by hand passes `--as human`.
+could claim to be the lead, or make up several names to look like independent replicators. A CLI write without a
+name is refused; a person deciding by hand passes `--as human`.
 
 What the database enforces for every connection: append-only tables (UPDATE, DELETE and TRUNCATE are refused by
 triggers), fixed agent roles (an agent row cannot be re-roled or deleted), and the decision-role check. The owner can
-disable triggers (`ALTER TABLE ... DISABLE TRIGGER`), so while agents connect as the owner these hold against
-mistakes, not against an agent that sets out to break them.
+disable triggers (`ALTER TABLE ... DISABLE TRIGGER`), so while agents connect as the owner, as every agent on a
+shared owner URL does, these hold against mistakes, not against an agent that sets out to break them.
 
-A team can make names checked (migration 0008): the operator issues each agent a token (`benchbook agent add`, only
-its SHA-256 is stored) and gives machines the `benchbook_writer` login instead of the owner's. On that login a row is
-accepted only under the name of the agent whose token the transaction presented, and lead-only actions (decisions,
-settings, open tasks, cancellations) only from an orchestrator or human token, so an agent cannot record or decide
-as someone else, and "replicated by another author" means another token. It does not stop a token holder from
-recording false results under its own name, nor anyone holding the owner's URL. The threat model is in
-[multi-machine.md](multi-machine.md#per-agent-tokens).
+A team can bind every write to its agent: machines get the `benchbook_writer` login and each agent a token, and the
+database accepts a row only under the token's agent and lead-only actions only from an orchestrator or human token.
+A token holder can still record false results under its own name. Setup and threat model:
+[Several machines](multi-machine.md#per-agent-tokens).
 
-`benchbook_sql` runs as `benchbook_reader` in a read-only transaction over the per-project `benchbook_q` views. The reader
-cannot call `set_config` (revoked when the migration runs as a superuser), the query text may not use
-`set_config`, `U&` escapes, the `*_to_xml` functions or `pg_settings`, and a query that changes the project or
-role is discarded. When `benchbook_reader` cannot log in, the weaker `SET ROLE` fallback needs
-`BENCHBOOK_SQL_ALLOW_SET_ROLE=1`.
-
-Planned for v0.2: row-level security per project (today a writer reads every project of its database).
+`benchbook_sql` reads only the per-project views, as a read-only role ([schema.md](schema.md#views)). There is no
+row-level security: a writer reads every project of its database.
