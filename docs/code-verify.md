@@ -66,9 +66,9 @@ A pin is a `note` claim tagged `checks-pin` and `piece:<piece>` (`piece:*` for t
 checks, the guard paths, the `[verify]` table and the sha256 of the three. Claims are append-only, so a pin is never
 edited: a new pin is a new claim, and pinning what the newest pin of that scope already holds records nothing.
 
-When the merge-base has no `.benchbook/config.toml`, `check verify` uses the newest pin of the piece, else the newest
+When the merge-base has neither `.benchbook/config.toml` nor the pre-rename `.assay/config.toml`, `check verify` uses the newest pin of the piece, else the newest
 pin of the project, leaving out pins written by any implementer of the piece at that commit: the checks are declared,
-append-only, before the work, by someone other than the implementer. A config.toml at the merge-base must declare
+append-only, before the work, by someone other than the implementer. A config.toml at the merge-base, at either path, must declare
 valid `[checks]`: with an empty or broken table `check verify` refuses, and no pin is read. The attempt's metrics name the pin (`checks_source = "pin"`,
 `checks_pin`, `checks_sha256`), and `checks_changed` is true when:
 
