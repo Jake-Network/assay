@@ -249,10 +249,10 @@ bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boun
 ### Declarations and the guard
 
 - **check verify runs the merge-base's declarations,** never the commit's or the verifier's checkout's, so a piece
-  cannot choose its own checks; guard and `checks_changed` use the same merge-base. With no `.benchbook/config.toml`
-  at the merge-base, verify uses the newest ledger pin of the piece, else of the project, leaving out pins by the
-  piece's implementers, and refuses without one. A config.toml there must declare valid `[checks]`: a pin does not
-  stand in for an empty or broken table. Default `[guard] paths`: `tests/**`, `**/conftest.py`,
+  cannot choose its own checks; guard and `checks_changed` use the same merge-base. With neither `.benchbook/config.toml`
+  nor the pre-rename `.assay/config.toml` at the merge-base, verify uses the newest ledger pin of the piece, else of the project, leaving out pins by the
+  piece's implementers, and refuses without one. A config.toml there (at either path) must declare valid `[checks]`: a pin
+  does not stand in for an empty or broken table. Default `[guard] paths`: `tests/**`, `**/conftest.py`,
   `.benchbook/config.toml`.
 - **Pins (T01).** `checks_source`, `checks_pin` and `checks_sha256` are written only on pinned runs, so other runs keep
   exactly their metrics. The newest pin is in effect; a re-pin counts as a `[checks]` change only when the pin in effect

@@ -113,6 +113,22 @@ def test_the_cli_is_installed_again_only_from_a_source_that_reproduces_it() -> N
     assert cmd("0.0.0+action", None) is None
 
 
+def test_a_development_build_from_a_subdirectory_is_reinstalled_from_that_subdirectory() -> None:
+    # One commit holds a benchbook at the root (0.3.dev1) and another under nested/ (0.2.dev1). The nested one is
+    # reinstalled from nested/; dropping #subdirectory would replace it with the root's.
+    commit = "c" * 40
+    nested = {**git_source(commit), "subdirectory": "nested"}
+    assert install.cli_install_command("0.2.dev1+gccccccc", nested) == [
+        "uv", "tool", "install", "--from",
+        f"git+https://github.com/Jake-Network/benchbook@{commit}#subdirectory=nested", "benchbook"]
+    assert install.cli_install_command("0.3.dev1+gccccccc", git_source(commit))[4].endswith("@" + commit)  # type: ignore[index]
+    # A source that cannot be written back as a uv requirement keeps the current CLI.
+    for odd in ({**git_source(commit), "subdirectory": ["nested"]}, {**git_source(commit), "subdirectory": "a b"},
+                {**git_source(commit), "url": "https://example.com/repo#frag"},
+                {**git_source(commit), "vcs_info": {"vcs": "git", "commit_id": "main"}}):
+        assert install.cli_install_command("0.2.dev1+gccccccc", odd) is None
+
+
 def test_a_build_without_a_source_keeps_the_current_cli(path_with_fakes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(install, "version", lambda: "0.1.dev3+gccccccc.d20261126")
     monkeypatch.setattr(install, "install_source", lambda: None)

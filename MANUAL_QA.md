@@ -17,7 +17,7 @@ A scratch repository with one non-JUnit check, a piece and a worktree for its br
 ```bash
 mkdir -p /tmp/bb-qa && cd /tmp/bb-qa && git init -q -b main
 printf 'def f():\n    return 1\n' > app.py
-printf 'test:\n\tpython3 -c "import app; assert app.f() == 1"\n' > Makefile
+printf 'test:\n\tpython3 -B -c "import app; assert app.f() == 1"\n' > Makefile   # -B: no __pycache__, the tree stays clean
 git add app.py Makefile && git commit -qm init
 benchbook init --yes                                    # declares check unit = make test; .benchbook/ stays out of git
 benchbook --agent lead piece start qa-worker --paths app.py
@@ -30,14 +30,16 @@ Then:
   a task completed: it is held (exit 2) and the message names `benchbook check run unit --piece qa-worker`. Run that
   command there and mark the task completed again: it goes through.
 - **Re-run and verdict.** In a session in `/tmp/bb-qa`, have an implementer subagent change `app.py` in
-  `../bb-qa-worker`, commit, and end its report with `DONE <full sha>`: the "re-running" line and then the verdict
-  each arrive once.
-- **Merge gate, verdict in time.** Right after that report the lead runs `git merge qa-worker`: the re-run passes
-  within 30 s, so the merge goes through with the verdict as context.
-- **Merge gate, verdict late.** A second commit adds `import time; time.sleep(45)` at the top of `app.py` and is
-  reported the same way. The lead's first `git merge qa-worker` is denied once with the wait as the reason; the next
-  one goes through.
-- **Bash check.** `make test` run in Bash shows in `observed.jsonl` (kind `direct`) and as an attempt with
+  `../bb-qa-worker`, commit, and end its report with `DONE <full sha>`. Let the lead do something else than merging
+  until the verdict arrives: the "re-running" line and then the verdict each arrive once. A `git merge qa-worker`
+  after that goes through and does not repeat the verdict.
+- **Merge gate, verdict in time.** Repeat with a new commit, and have the lead run `git merge qa-worker` as its first
+  tool call after the report: the merge waits for the re-run (at most 30 s), goes through with the verdict as context,
+  and the verdict does not arrive a second time afterwards.
+- **Merge gate, verdict late.** A third commit adds `import time; time.sleep(120)` at the top of `app.py` and is
+  reported the same way; the lead runs `git merge qa-worker` within a minute of the report, so the 30 s wait ends
+  before the re-run does. That merge is denied once with the wait as the reason; the next one goes through.
+- **Bash check.** `make test` run in Bash on a clean tree shows in `observed.jsonl` (kind `direct`) and as an attempt with
   `via = bash-hook`.
 - **Doctor.** `benchbook doctor` passes (with an installed plugin). With `benchbook` removed from PATH, a hook run
   makes `hook cli` fail.
@@ -82,9 +84,10 @@ column; the fixture list is there too.
 ## Other harnesses
 
 For Codex, Cursor and Gemini CLI: `benchbook install --no-cli --harness <name> --dry-run`, then without
-`--dry-run`, and `benchbook doctor` shows `harness hook input`. In Cursor and Gemini CLI one declared check run in
-the shell is recorded. In Codex, trust the benchbook hooks in `/hooks` first; a raw run through `exec_command` carries
-no exit code and is observed as `unrecordable`, so check the ledger with `benchbook check run NAME`.
+`--dry-run`. In Cursor and Gemini CLI one declared check run in the shell is recorded. In Codex, trust the benchbook
+hooks in `/hooks` first; a raw run through `exec_command` carries no exit code and is observed as `unrecordable`, so
+check the ledger with `benchbook check run NAME`. After that observation, `benchbook doctor` shows
+`harness hook input` (the line appears only once a hook has observed a declared check).
 `benchbook uninstall --dry-run` lists the manifests it would rewrite without benchbook's entries. For OpenCode and Pi,
 install the extension as its README says (`integrations/opencode/`, `integrations/pi/`) and check that the first
 model request carries the brief.
