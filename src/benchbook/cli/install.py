@@ -76,14 +76,40 @@ def version() -> str:
 
 
 GIT_SOURCE = "git+https://github.com/Jake-Network/benchbook"
+RELEASE = re.compile(r"\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?")
+_UNREAD = object()
 
 
-def cli_install_command(v: str | None = None) -> list[str]:
-    """A release is on PyPI under its version; a development build (`0.1.devN+g<commit>`) never is."""
+def install_source() -> dict[str, Any] | None:
+    """Where this benchbook was installed from (PEP 610 direct_url.json); None for an index install or when unknown."""
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        raw = distribution("benchbook").read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def cli_install_command(v: str | None = None, source: Any = _UNREAD) -> list[str] | None:
+    """The command that installs this build's CLI again, or None when no source reproduces it.
+
+    A release is on PyPI under its version. A development build (`0.1.devN+g<commit>`) never is: it is reinstalled
+    from the git repository and commit it was installed from. A build from a local directory, a modified checkout or
+    an unknown source has nothing to pin, and its CLI is left as it is."""
     v = version() if v is None else v
-    if re.fullmatch(r"\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?", v):
+    if RELEASE.fullmatch(v):
         return ["uv", "tool", "install", f"benchbook=={v}"]
-    return ["uv", "tool", "install", "--from", GIT_SOURCE, "benchbook"]
+    src = install_source() if source is _UNREAD else source
+    vcs = (src or {}).get("vcs_info") or {}
+    url, commit = (src or {}).get("url"), vcs.get("commit_id")
+    if vcs.get("vcs") == "git" and isinstance(url, str) and url and isinstance(commit, str) and commit:
+        return ["uv", "tool", "install", "--from", f"git+{url}@{commit}", "benchbook"]
+    return None
 
 
 def manifest(harness: str) -> dict[str, Any]:
@@ -152,14 +178,20 @@ def install(harness: str = "claude-code", *, dry_run: bool = False, mcp: bool = 
         raise BenchbookError(f"--harness: one of {', '.join(HARNESSES)}")
     plan = Plan(dry_run)
     if cli:
-        plan.run(cli_install_command(), optional=True)
+        if (cmd := cli_install_command()) is not None:
+            plan.run(cmd, optional=True)
+        else:
+            plan.done.append(f"kept the current benchbook CLI: build {version()} has no source to install it from "
+                             f"again (a local or modified checkout); install one with uv tool install --from "
+                             f"{GIT_SOURCE} benchbook, or pass --no-cli")
     if harness == "claude-code":
+        plugins = [PLUGINS[0], *([PLUGINS[1]] if mcp else [])]
         if plan.run(["claude", "plugin", "marketplace", "add", MARKETPLACE]):
-            plan.run(["claude", "plugin", "install", PLUGINS[0]])
-            if mcp:
-                plan.run(["claude", "plugin", "install", PLUGINS[1]])
+            for name in plugins:
+                plan.run(["claude", "plugin", "install", name])
         elif not dry_run:
-            plan.done.append(f"run yourself: claude plugin install {PLUGINS[0]}")
+            plan.done.append("run yourself: " + " && ".join(
+                [f"claude plugin marketplace add {MARKETPLACE}", *(f"claude plugin install {n}" for n in plugins)]))
     else:
         target = manifest_target(harness)
         current = json.loads(target.read_text(encoding="utf-8")) if target.is_file() else {}

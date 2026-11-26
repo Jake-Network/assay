@@ -59,7 +59,7 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
 - `benchbook get <id>` prints at most 400 tokens (status, `checked:` label, links, last decisions); lookups go to
   `lookups.jsonl`. `benchbook task claim <id>` claims one task.
 - `benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--no-cli] [--dry-run]` (the CLI from PyPI for
-  a release, from git for a development build) and `benchbook uninstall [--purge] [--dry-run]`; uninstall keeps `.benchbook/` when git cannot say whether it is tracked, and `--purge` removes only a
+  a release, from the git commit a development build was installed from, or left as it is when that is unknown) and `benchbook uninstall [--purge] [--dry-run]`; uninstall keeps `.benchbook/` when git cannot say whether it is tracked, and `--purge` removes only a
   cluster `benchbook db stop` confirmed stopped.
 - `benchbook mcp` (stdio) and `benchbook serve` (HTTP at `/mcp`, a token for non-loopback binds) with worker and
   orchestrator tool sets and `benchbook://schema`; it starts before the project is initialized, and a worktree finds the
