@@ -1,4 +1,4 @@
-"""`benchbook pr`: the pieces a pull request's commits complete and the evidence summary posted on it (docs/code.md,
+"""`benchbook pr`: the pieces a pull request's commits complete and the evidence summary posted on it (docs/code-ci.md,
 "CI evidence and the PR summary"; integrations/github-action calls these). Exit codes: 0 ok, 1 an error."""
 from __future__ import annotations
 

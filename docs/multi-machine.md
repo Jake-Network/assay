@@ -135,7 +135,7 @@ Not prevented:
   human review address that; tokens only make "who" checkable.
 - **Rules that live in the SDK.** The database binds rows to the token's agent and role; some rules about their
   content are the SDK's only, and a writer that sends its own SQL skips them: whether an intent's piece or paths
-  overlap a live one's (path occupancy, docs/code.md; the overlapping row is in the writer's name and lasts at most
+  overlap a live one's (path occupancy, docs/code-pieces.md; the overlapping row is in the writer's name and lasts at most
   the lease cap) and `statement_hash`, which the client computes (the database checks only that it is unique per
   project, so nothing takes a claim's identity from it).
 - **Reads and disruption.** A writer reads every project in the database (there is no row-level security), sees the

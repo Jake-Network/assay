@@ -256,9 +256,9 @@ bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boun
   Only a pin taken from config.toml is compared with the working tree.
 - **The guard diff uses `--no-renames`,** so a test moved out of a guarded folder shows as the deletion it is.
 - **Added tests are not weakened tests (T04).** A piece usually adds tests, so the guard splits changed guarded files
-  into added and weakened (table in docs/code.md, "Added tests and weakened tests"); only a weakening or a `[checks]`
-  change sends a piece to a person. `guard_weakened` is written on every attempt. Any change to a conftest.py is a
-  weakening: an autouse fixture or a collection hook can weaken every test without deleting any.
+  into added and weakened (table in docs/code-verify.md, "Added tests and weakened tests"); only a weakening or a
+  `[checks]` change sends a piece to a person. `guard_weakened` is written on every attempt. Any change to a
+  conftest.py is a weakening: an autouse fixture or a collection hook can weaken every test without deleting any.
 - **Names added to an import are lines added.** A Python test file whose deleted lines all sit inside import statements,
   and that still imports every (module, level, name, alias) it did, counts as appended; otherwise adding one name to a
   multi-line import sends a verified piece to a person. Both versions are parsed: a textual rule also passes

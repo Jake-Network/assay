@@ -1,6 +1,6 @@
-"""Out-of-scope findings captured from an implementer's final report (spec §8 P1, docs/code.md): the parser on
+"""Out-of-scope findings captured from an implementer's final report (spec §8 P1, docs/code-findings.md): the parser on
 real-shaped SubagentStop and SubagentHandback inputs, the claims the hook writes, dedup across reports, the token
-path, and the accept/reject commands with the open-findings query of docs/code.md."""
+path, and the accept/reject commands with the open-findings query of docs/code-findings.md."""
 from __future__ import annotations
 
 import hashlib
@@ -32,7 +32,7 @@ from .conftest import make_project
 from .writer import as_writer, issue
 
 FX = Path(__file__).parent / "fixtures" / "hooks" / "findings"
-DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
+DOC = Path(__file__).resolve().parent.parent / "docs" / "code-findings.md"
 THUMB = "src/app/modules/media/thumbnail.py"
 
 
@@ -360,7 +360,7 @@ def test_under_a_token_the_hook_writes_as_its_agent(ko_repo: Path, code_project:
     assert [a["author"] for a in authors] == ["hook", "lead-2"]
 
 
-# ---------------------------------------------------------------------- deciding, and the query of docs/code.md
+# ------------------------------------------------------------------ deciding, and the query of docs/code-findings.md
 
 
 def _doc_queries() -> list[str]:

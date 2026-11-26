@@ -1,6 +1,6 @@
 # benchbook evidence for pull requests: re-run the declared checks of each piece the pull request's commits complete
 # (trailer "Benchbook-Piece: <piece>"), record the re-runs in the shared ledger, and keep one summary comment on the
-# pull request. README.md in this folder has a sample workflow; docs/code.md has what is recorded and why.
+# pull request. README.md in this folder has a sample workflow; docs/code-ci.md has what is recorded and why.
 name: benchbook evidence
 description: Re-run each completed piece's declared checks, record them in the benchbook ledger, and keep one summary comment on the pull request.
 author: benchbook

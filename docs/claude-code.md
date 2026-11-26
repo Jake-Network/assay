@@ -176,12 +176,12 @@ without a plugin prefix) decides which are captured (`assay-worker`, the worker'
 `benchbook-worker`); `BENCHBOOK_HOOK_AGENTS=*` captures every subagent. To capture your own worker types too, set
 `BENCHBOOK_HOOK_AGENTS=benchbook-worker,implementer` in your shell and in the `env` of Claude Code's `settings.json`.
 Other subagents (Explore, general-purpose, ...) are not captured, unless `BENCHBOOK_HOOK_AGENTS` is unset and
-`[report] agents` lists them: then only their out-of-scope findings are recorded (docs/code.md, "Which reports are
-read"). An event without an agent type is not captured, and neither is the compaction summarizer (a SubagentStop
+`[report] agents` lists them: then only their out-of-scope findings are recorded (docs/code-findings.md,
+"Which reports are read"). An event without an agent type is not captured, and neither is the compaction summarizer (a SubagentStop
 with an empty `agent_type`), even with `*`. This works the same for the plugin and the manual install.
 
 In a code-pack project, `[report] out_of_scope_heading` in `.benchbook/config.toml` makes the same processor record
-each item of that section of the report as an out-of-scope finding claim (docs/code.md, "Out-of-scope findings").
+each item of that section of the report as an out-of-scope finding claim (docs/code-findings.md, "Out-of-scope findings").
 
 The hook uses the project selected by `.benchbook/config.toml` or `BENCHBOOK_PROJECT`; when it finds neither (for
 example a worktree without a committed `.benchbook/`) it writes a "no benchbook project" line to the log. It writes
@@ -195,7 +195,7 @@ replay` captures it. After an outage or a fix, `benchbook hook replay` retries p
 foreground using the same database settings. See `~/.local/state/benchbook/hook.log` for capture and retry status.
 
 When there are dead or overdue spool entries or recent hook failures, the code brief opens with a recording warning
-and the replay command (docs/code.md, "The brief").
+and the replay command (docs/code-brief.md, "The brief").
 
 ## Declared checks: the Bash hook and the completion gate
 
@@ -254,9 +254,9 @@ A `direct` match (the command is the check) is queued in the spool and recorded 
 wrapper records it itself. A check inside a pipeline or list (`check | tail`, `make && check`), run outside the
 repository root or in the background, interrupted, or without an exit code, piece or commit is `unrecordable`:
 observed, not recorded. Every match is appended to `observed.jsonl` in the
-spool directory (docs/code.md, "Record coverage").
+spool directory (docs/code-brief.md, "Record coverage").
 
-A failed attempt gets a failure signature from the tool result's error text (docs/code.md, "Failure signatures"); the
+A failed attempt gets a failure signature from the tool result's error text (docs/code-verify.md, "Failure signatures"); the
 output itself is never stored. A command that is not a declared check leaves nothing behind (no spool entry, no log
 line) and the handler finishes within 50 ms (`tests/test_hooks.py`). The hook always exits 0.
 

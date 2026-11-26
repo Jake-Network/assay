@@ -26,7 +26,7 @@ from benchbook.packs import load_pack
 from tests.conftest import make_project
 from tests.writer import token_ledger
 
-DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
+DOC = Path(__file__).resolve().parent.parent / "docs" / "code-pieces.md"
 FILES = ["src/media/upload.py", "src/media/store.py", "src/auth/login.py", "app/[id]/page.tsx", "README.md"]
 
 
@@ -274,7 +274,7 @@ def test_pieces_are_read_through_v_inflight(db_url: str, code: str, repo: Path) 
     held = pieces.held(lead, ["mod:auth"])
     assert [(h["piece"], h["agent"], h["tags"], h["declared"]) for h in held] == [
         ("auth", "a", ["mod:auth"], ["src/auth/login.py"])]
-    # the query docs/code.md gives for a brief (not a sql block: tests/test_checks.py reads the only one)
+    # the query docs/code-pieces.md gives for a brief (not a sql block: tests/test_checks.py reads the only one)
     [query] = re.findall(r"```\n(SELECT spec ->> 'piece'.*?)```", DOC.read_text(), re.S)
     assert [(r["piece"], r["agent"], r["paths"]) for r in lead.sql(query)["rows"]] == [
         ("media", "a", ["src/media/store.py", "src/media/upload.py"])]

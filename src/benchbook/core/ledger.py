@@ -512,7 +512,7 @@ class Ledger:
         Needs settings.worker_intents for workers. For each spec field named in `exclusive`, another live
         intent with the same value is a conflict (raises Conflict, CLI exit 2). Each field named in
         `exclusive_paths` holds a list of path globs (globs.py, a file escaped with globs.escape); another live
-        intent whose same field can match a common path is a conflict too (path occupancy, docs/code.md)."""
+        intent whose same field can match a common path is a conflict too (path occupancy, docs/code-pieces.md)."""
         with self._intent_transaction() as conn:
             return self._create_intent(conn, title, spec, tags, lease_seconds, exclusive, exclusive_paths)
 

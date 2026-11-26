@@ -360,7 +360,7 @@ def test_coverage_counts_from_the_documented_query(gate_repo: Path, tmp_path: Pa
     lines = observed(tmp_path)
     assert [o["kind"] for o in lines] == ["direct", "unrecordable", "wrapped"]
     assert all(o["project"] == lg.project_id for o in lines)
-    doc = (ROOT / "docs" / "code.md").read_text()
+    doc = (ROOT / "docs" / "code-brief.md").read_text()
     section = doc[doc.index("## Record coverage"):]
     [query] = re.findall(r'benchbook sql "(.*?)"', section, re.S)
     rows = lg.sql(query.replace("<since>", "2000-01-01"))["rows"]

@@ -1,6 +1,6 @@
 """`benchbook piece`: start a piece of coding work on the paths it will change, release it, list who holds what
-(docs/code.md, "Path occupancy"). Exit codes: 0 ok, 1 user error, 2 refused (another live piece holds the piece or
-overlapping paths; the message names its task id)."""
+(docs/code-pieces.md, "Path occupancy"). Exit codes: 0 ok, 1 user error, 2 refused (another live piece holds the
+piece or overlapping paths; the message names its task id)."""
 from __future__ import annotations
 
 from pathlib import Path

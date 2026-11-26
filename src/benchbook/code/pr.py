@@ -1,4 +1,4 @@
-"""Pull-request evidence (docs/code.md, "CI evidence and the PR summary"): which pieces a range of commits
+"""Pull-request evidence (docs/code-ci.md, "CI evidence and the PR summary"): which pieces a range of commits
 completes, by their `Benchbook-Piece:` trailer, what the ledger knows about each, and the one PR comment that
 carries it. The GitHub Action (integrations/github-action) is a thin shell around these and `check verify`."""
 from __future__ import annotations

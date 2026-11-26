@@ -18,7 +18,7 @@ Workers:
 | `next_task(tags=None, lease_seconds=None, spec_match=None, task_id=None)` | `Task` or `None`; the lease defaults to `settings.lease_seconds` (900); skips tasks whose `spec.exclude_agents` lists you, and a task with `spec.distinct_agents_for = "<key>"` when you already claimed one with the same `spec[<key>]`; `spec_match` keeps tasks whose spec contains that JSON; `task_id` claims that one task if it is claimable |
 | `claim_task(task_id, lease_seconds=None)` | `Task`; raises `Conflict` when that task is not claimable by you |
 | `heartbeat(task_id, lease_seconds=None)` | new expiry (default lease as above); raises `LeaseLost` (also once the lease has run out) |
-| `brief(task_id=None, budget_tokens=2000, partition=None, tags=None, repo=None, max_chars=None)` | markdown; `tags`, `repo` and `max_chars` are for the code pack's brief ([code.md](code.md#the-brief)) |
+| `brief(task_id=None, budget_tokens=2000, partition=None, tags=None, repo=None, max_chars=None)` | markdown; `tags`, `repo` and `max_chars` are for the code pack's brief ([code-brief.md](code-brief.md#the-brief)) |
 | `check_tried(config, code_ref=None)` | `TriedResult(exact, replicates, best_value, dedup_key)` |
 | `record_experiment(config, metrics, run_status="ok", seed=None, code_ref=None, notes=None, artifacts=None, task_id=None, trace_ref=None, duration_ms=None, tokens=None, cost_usd=None)` | `RecordResult(id, outcome, is_new_best, duplicate_of, notice)`; an exact duplicate has `id=None`, or a new `id` plus `duplicate_of` and `notice` in a `dedup_mode = "notify"` pack ([concepts.md](concepts.md#duplicates-and-replicates)) |
 | `propose_claim(kind, statement, payload=None, tags=None, task_id=None, evidence=[(id, "supports")])` | `ClaimResult(id, duplicate_of)` |

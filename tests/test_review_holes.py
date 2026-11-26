@@ -446,7 +446,7 @@ def test_a_lease_is_capped_by_max_lease_seconds(db_url: str) -> None:
 
 
 def test_path_overlap_is_checked_by_the_sdk_only(db_url: str) -> None:
-    """The documented limit (docs/code.md, docs/multi-machine.md): a raw writer with worker_intents on can still
+    """The documented limit (docs/code-pieces.md, docs/multi-machine.md): a raw writer with worker_intents on can still
     hold a piece and paths another agent holds, within the lease cap. The SDK refuses it."""
     project = code_project(db_url)
     b, _ = tok(db_url, project, "impl-b", "worker")
