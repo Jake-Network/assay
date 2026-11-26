@@ -1,6 +1,6 @@
-"""benchbook: "done" is a claim until the tests say so.
+"""benchbook: a Postgres ledger for agent swarms.
 
-A ledger that re-runs coding agents' checks on the reported commit, and records experiments for agent swarms.
+Subagents write results to the ledger instead of the lead's context, and the lead reads them back by SQL.
 """
 from __future__ import annotations
 
