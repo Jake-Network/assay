@@ -59,13 +59,17 @@ class PieceState:
 
 # ---------------------------------------------------------------------------------------------------- git
 
-def pieces(repo: Path, base: str, head: str) -> tuple[list[Piece], list[str]]:
+def pieces(repo: Path, base: str, head: str, *, whole_as: str | None = None) -> tuple[list[Piece], list[str]]:
     """The pieces the commits in base..head complete, oldest first, and the trailer values skipped as unusable. A
     piece's commit is the last commit of the range carrying its trailer (`git log --topo-order` lists no commit
-    before its descendants, so the first one met is the last)."""
+    before its descendants, so the first one met is the last). With whole_as, head is also a piece of that name when
+    no trailer names head's commit, so every pull request's head is re-run (the GitHub Action without a ledger
+    passes pr-<number>)."""
     from ..checks.declarations import PIECE
     from ..checks.gitrepo import resolve_commit, toplevel
 
+    if whole_as is not None and not PIECE.fullmatch(whole_as):
+        raise BenchbookError(f"--whole-as {whole_as[:200]!r} is not a piece name (1-100 characters, no spaces)")
     root = toplevel(repo)
     b, h = resolve_commit(root, base), resolve_commit(root, head)
     fmt = f"%H%x00%(trailers:key={TRAILER},valueonly,separator=%x1f)%x1e"
@@ -75,9 +79,11 @@ def pieces(repo: Path, base: str, head: str) -> tuple[list[Piece], list[str]]:
         raise BenchbookError(f"git log {b[:12]}..{h[:12]}: {p.stderr.strip()}")
     seen: dict[str, tuple[int, int, str]] = {}  # piece -> (commit index, newest first; trailer index; sha)
     skipped: list[str] = []
+    commits = 0
     for i, entry in enumerate(e.strip("\n") for e in p.stdout.split("\x1e")):
         if not entry:
             continue
+        commits += 1
         sha, _, values = entry.partition("\x00")
         for j, raw in enumerate(v.strip() for v in values.split("\x1f")):
             if not raw:
@@ -87,7 +93,12 @@ def pieces(repo: Path, base: str, head: str) -> tuple[list[Piece], list[str]]:
             elif raw not in seen:
                 seen[raw] = (i, j, sha.strip())
     order = sorted(seen.items(), key=lambda kv: (-kv[1][0], kv[1][1]))
-    return [Piece(name, sha) for name, (_, _, sha) in order], skipped
+    found = [Piece(name, sha) for name, (_, _, sha) in order]
+    # whole_as: the head is re-run too when no trailer names it (a fix after the last trailered commit); a range
+    # without commits completes nothing
+    if whole_as is not None and commits and h not in {p.commit for p in found}:
+        found.append(Piece(whole_as, h))
+    return found, skipped
 
 
 # ---------------------------------------------------------------------------------------------------- the ledger

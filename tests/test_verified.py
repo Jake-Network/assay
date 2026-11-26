@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -388,6 +389,7 @@ def test_cli_verify_decides_with_lead_authority(repo: Path, vtmp: Path, db_url: 
     p = run_cli(repo, env, *base, "check", "verify", "media", good, "--reported-by", "impl")
     assert p.returncode == 0, p.stderr
     assert "decision: recorded without a decision" in p.stdout
+    assert f"benchbook --agent lead check verify media {good} --claim " in p.stdout  # what to run
     p = run_cli(repo, env, *base, "--agent", "lead", "check", "verify", "media", good, "--reported-by", "impl",
                 "--json")
     assert p.returncode == 0, p.stderr
@@ -402,6 +404,136 @@ def test_cli_verify_decides_with_lead_authority(repo: Path, vtmp: Path, db_url: 
     assert Ledger.open(project=code_project, agent="lead", database_url=db_url).claim_status(
         claim[0]["id"]) == "proposed"
     assert uuid.UUID(str(claim[0]["id"]))
+
+
+def test_a_nameless_rerun_names_what_decides_only_when_it_can(repo: Path, vtmp: Path, db_url: str,
+                                                             code_project: str) -> None:
+    """After a re-run without lead authority: the lead's re-run (with the same base and project) only when it would
+    decide, a person when the lead reported the piece itself, and no command after a failed run."""
+    harness = open_as(db_url, code_project, "verifier@test", "harness")
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    _, rec = checks.verify(harness, "media", good, repo=repo, reported_by="impl")
+    assert rec.outcome is not None and f" {good} --claim {rec.claim_id} --base " in rec.outcome.reason
+    assert rec.outcome.reason.endswith(f" --project {code_project}")
+    _, rec = checks.verify(harness, "own", good, repo=repo, reported_by="lead")
+    assert rec.outcome is not None and "A person decides it: benchbook decide " in rec.outcome.reason
+    bad = piece(repo, "bad", {"impl.txt": "almost\n"})
+    _, rec = checks.verify(harness, "broken", bad, repo=repo, reported_by="impl")
+    assert rec.relation == "refutes" and rec.outcome is not None
+    assert rec.outcome.reason.endswith("(orchestrator or human role)")  # a lead's re-run would not decide either
+    worker = open_as(db_url, code_project, "impl-2")  # a named worker is not handed the lead's command
+    _, rec = checks.verify(worker, "peer", good, repo=repo, reported_by="impl")
+    assert rec.outcome is not None and rec.outcome.reason.endswith("(orchestrator or human role)")
+
+
+def test_a_piece_started_from_an_integration_branch_lists_only_its_own_files(repo: Path, vtmp: Path, db_url: str,
+                                                                            code_project: str) -> None:
+    """Fourth boundary pilot: the worker of one piece branched from an integration branch where another piece was
+    merged; the merge-base diff listed the other piece's file too, which a later change then marked changed since."""
+    lead = open_as(db_url, code_project, "lead")
+    first = piece(repo, "alpha", {"a.py": "a = 1\n"})
+    checks.verify(lead, "alpha", first, repo=repo, reported_by="impl-a")
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "integration", "main"], check=True)
+    subprocess.run(["git", "-C", str(repo), "merge", "-q", "--no-ff", "-m", "merge alpha", "alpha"], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "beta", "integration"], check=True)
+    (repo / "b.py").write_text("b = 1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "b.py"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "beta"], check=True)
+    second = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+                            text=True).stdout.strip()
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+    v, rec = checks.verify(lead, "beta", second, repo=repo, reported_by="impl-b")  # [guard] base: main
+    assert v.base.merge_base == subprocess.run(["git", "-C", str(repo), "rev-parse", "main"], check=True,
+                                               capture_output=True, text=True).stdout.strip()
+    [row] = lead.sql_internal("SELECT payload FROM benchbook.claims WHERE id = %s", (rec.claim_id,))
+    assert row["payload"]["files"] == ["b.py"]
+    assert v.paths == ["a.py", "b.py"]  # the scope (file: tags) still comes from the merge-base diff
+
+
+def test_a_piece_keeps_its_own_commits_below_another_pieces_commit(repo: Path, vtmp: Path, db_url: str,
+                                                                    code_project: str) -> None:
+    """One line mixes two pieces (alpha's a.py, then beta reported at its commit, then alpha's a2.py): only beta's
+    commit is left out of alpha's files, not alpha's first commit below it, or a later change to a.py would not mark
+    alpha changed since (review of the first version)."""
+    lead = open_as(db_url, code_project, "lead")
+
+    def commit(path: str) -> str:
+        (repo / path).write_text("x\n")
+        subprocess.run(["git", "-C", str(repo), "add", path], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", path], check=True)
+        return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "mixed", "main"], check=True)
+    commit("a.py")
+    b1 = commit("b.py")
+    checks.verify(lead, "beta", b1, repo=repo, reported_by="impl-b")
+    a2 = commit("a2.py")
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+    _, rec = checks.verify(lead, "alpha", a2, repo=repo, reported_by="impl-a")
+    [row] = lead.sql_internal("SELECT payload FROM benchbook.claims WHERE id = %s", (rec.claim_id,))
+    assert sorted(row["payload"]["files"]) == ["a.py", "a2.py"]
+
+
+@pytest.mark.parametrize("case", ["merge adjusts a file", "file name with newlines"])
+def test_a_piece_lists_what_its_merges_change_and_names_as_git_has_them(repo: Path, vtmp: Path, db_url: str,
+                                                                         code_project: str, case: str) -> None:
+    """Review of #22: a file the piece's merge commit changed itself (beta's shared.txt, adjusted while merging beta
+    in) is the piece's too, or a later change to it would leave the verification marked current; and a path is kept
+    byte for byte, newlines included, as the brief's comparison reads it."""
+    lead = open_as(db_url, code_project, "lead")
+
+    def git_(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    if case == "merge adjusts a file":
+        beta = piece(repo, "beta", {"shared.txt": "beta\n"})
+        checks.verify(lead, "beta", beta, repo=repo, reported_by="impl-b")
+        git_("checkout", "-q", "-b", "alpha", "main")
+        (repo / "a.py").write_text("a = 1\n")
+        git_("add", "a.py")
+        git_("commit", "-q", "-m", "alpha")
+        git_("merge", "-q", "--no-ff", "--no-commit", "beta")
+        (repo / "shared.txt").write_text("adjusted\n")
+        git_("add", "shared.txt")
+        git_("commit", "-q", "-m", "merge beta, adjusting shared.txt")
+        want = ["a.py", "shared.txt"]
+    else:
+        git_("checkout", "-q", "-b", "alpha", "main")
+        (repo / "\ntrailing.txt\n").write_text("x\n")
+        git_("add", "-A")
+        git_("commit", "-q", "-m", "an odd name")
+        want = ["\ntrailing.txt\n"]
+    head = git_("rev-parse", "HEAD")
+    git_("checkout", "-q", "main")
+    _, rec = checks.verify(lead, "alpha", head, repo=repo, reported_by="impl-a")
+    [row] = lead.sql_internal("SELECT payload FROM benchbook.claims WHERE id = %s", (rec.claim_id,))
+    assert sorted(row["payload"]["files"]) == want
+
+
+def test_the_lead_command_decides_the_claim_the_nameless_run_was_for(repo: Path, vtmp: Path, db_url: str,
+                                                                     code_project: str) -> None:
+    """Review of #18: two completions by one reporter for the same piece and commit; the nameless run was for the
+    second (--claim), and the command it prints, run as printed, must decide that one and not the first."""
+    good = piece(repo, "good", {"impl.txt": "fixed\n"})
+    impl = open_as(db_url, code_project, "impl")
+    first = completion(impl, good, "media")
+    second = impl.propose_claim("completion", "media is done, second report", tags=["piece:media", f"commit:{good}"],
+                                payload={"piece": "media", "commit": good}).id
+    assert first != second
+    harness = open_as(db_url, code_project, "verifier@test", "harness")
+    _, rec = checks.verify(harness, "media", good, repo=repo, claim=str(second))
+    assert rec.outcome is not None and rec.claim_id == second
+    hint = rec.outcome.reason.split("run it as the lead: ", 1)[1]
+    assert f" {good} --claim {second} --base " in hint  # the whole sha, the claim's id, a fixed base
+    env = {**{k: v for k, v in os.environ.items() if not k.startswith(("BENCHBOOK_", "ASSAY_"))},
+           "BENCHBOOK_DATABASE_URL": db_url, "TMPDIR": str(vtmp)}
+    p = subprocess.run([sys.executable, "-m", "benchbook.cli", *shlex.split(hint)[1:]], cwd=repo, env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 0 and "decision: verified" in p.stdout, p.stdout + p.stderr
+    lead = open_as(db_url, code_project, "lead")
+    assert (lead.claim_status(second), lead.claim_status(first)) == ("verified", "proposed")
 
 
 def test_cli_verify_under_a_lead_token(repo: Path, vtmp: Path, db_url: str, code_project: str) -> None:

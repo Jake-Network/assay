@@ -2,6 +2,25 @@
 
 ## Unreleased: code pack
 
+- `check verify` records in `payload.files` only the files of the piece's own commits: a commit merged into its
+  range from another piece (a worker that started from an integration branch) is left out when the ledger or its
+  trailer ties it to that piece, so a later change to its files no longer marks this piece `changed since`.
+- `bench.boundary.run` takes `--force-compact` (send `/compact` after each phase's work call, in every arm) and
+  `--compact-pct N` (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`); the `discarded` probe asks for the failure signature
+  only; the report adds an "H1 Session answers (contains)" sensitivity column, recomputed from stored answers.
+- The GitHub Action runs without `database-url`: it keeps a ledger of that workflow run only, re-runs the checks
+  committed at the merge-base (a notice when there are none), re-runs the pull request's head as piece `pr-<number>`
+  (reported by its author) when no trailer names it, and says in the comment that there was no shared ledger. Before, it failed
+  with "no ledger". `pr pieces` and `pr summary` take `--whole-as NAME` for that piece.
+- `benchbook status` counts a piece whose re-run passed but was not decided (a weakened test waiting for a person,
+  or a re-run without lead authority) as "re-run not decided", as the brief does, not as "reported only"; `--json`
+  has `pieces.rerun_undecided`, and the status line's total includes it. `init` of a code project ends with
+  `next: benchbook doctor | benchbook status | benchbook brief --here` instead of the experiment mode's commands.
+- `benchbook brief` reads without a name, as `status` and `get` do: with no `--agent`, `BENCHBOOK_AGENT` or token it
+  reads (and is logged in `brief_log`) as `human`.
+- `check verify` without a name (`verifier@<host>`, harness role) still records without deciding, and now ends that
+  line with the command that decides: the same re-run as the lead, or `benchbook decide ... --as human` when the
+  commit weakened tests. The README and docs/code.md show the lead's form.
 - The package is arranged by function: `benchbook.core` (ledger, models, ids, brief, the command runner),
   `benchbook.checks` (declared checks and the re-run that verifies a completion), `benchbook.code` (pieces,
   findings, PR evidence, status line), `benchbook.hooks` and `benchbook.cli`. Code that imported a module by its old

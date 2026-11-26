@@ -50,13 +50,14 @@ class Batch:
 
     def capture(
         self, arm: str, work: Path, env: dict[str, str], target: Path, prompt: str, session: str, *,
-        resume: bool, probe: bool,
+        resume: bool, probe: bool, compact: bool = False,
     ) -> list[tuple[int, dict[str, Any]]]:
-        cap = self.args.probe_budget_usd if probe else self.args.max_budget_usd
+        small = probe or compact  # a probe, or the /compact call of --force-compact: the small cap and turn limit
+        cap = self.args.probe_budget_usd if small else self.args.max_budget_usd
         if self.spent + cap > self.args.total_budget_usd + USD_TOLERANCE:
             raise real.BenchRunError(f"total budget reached before {target.name}")
         cmd = arms.command(arm, prompt, session, resume=resume, model=self.args.model, budget=cap,
-                           max_turns=self.args.probe_turns if probe else self.args.max_turns,
+                           max_turns=self.args.probe_turns if small else self.args.max_turns,
                            claude_mem=self.args.claude_mem_plugin, schema=probes.SCHEMA if probe else None)
         cmd[0] = real.claude_bin(self.args)
         target.mkdir()
@@ -66,7 +67,8 @@ class Batch:
         started = time.monotonic()
         self.execute_call(real.PreparedRun(work, cmd, env, None, None, session), target, self.args.wall_clock)
         events = real._read_stream(target)
-        metrics = own_spend(read_call(events, session), self.sessions.get(session) if resume else None)
+        metrics = own_spend(read_call(events, session, lead_context=not compact),
+                            self.sessions.get(session) if resume else None)
         self.sessions[session] = (metrics["session_cost_usd"], metrics["session_tokens"],
                                   metrics["reported_session_cost_usd"], metrics["reported_session_tokens"])
         self.spent += metrics["cost_usd"] - cap
@@ -81,7 +83,8 @@ class Batch:
         write_json(self.out / "spend.json", {"counted_usd": round(self.spent, 8)})
 
 
-def read_call(events: list[tuple[int, dict[str, Any]]], session: str) -> dict[str, Any]:
+def read_call(events: list[tuple[int, dict[str, Any]]], session: str, *, lead_context: bool = True) -> dict[str, Any]:
+    """A call's receipt. lead_context=False for a /compact call, which need not stream a lead message."""
     results = [e for _, e in events if e.get("type") == "result"]
     if len(results) != 1 or results[0].get("session_id") != session:
         raise real.BenchRunError("missing, duplicate, or mismatched session receipt")
@@ -94,10 +97,10 @@ def read_call(events: list[tuple[int, dict[str, Any]]], session: str) -> dict[st
               for usage in model_usage.values()] if isinstance(model_usage, dict) else []
     contexts = [usage[0] for lead, msg in real.stream_messages(events)
                 if lead and (usage := real._usage(msg.get("usage"))) is not None]
-    if not real._number(costs) or costs < 0 or not counts or None in counts or not contexts:
+    if not real._number(costs) or costs < 0 or not counts or None in counts or (lead_context and not contexts):
         raise real.BenchRunError("Claude invocation lacks full cost, session usage, or lead context evidence")
     receipt = {"cost_usd": costs, "tokens": sum(sum(n) for n in counts if n is not None),
-               "lead_context_max": max(contexts)}
+               "lead_context_max": max(contexts, default=0)}
     if OWN_USAGE in result:
         own = usage_totals(result[OWN_USAGE])
         if own is None:
@@ -146,10 +149,22 @@ def own_spend(receipt: dict[str, Any], before: tuple[float, int, float, int] | N
             "session_cost_usd": cost + own_cost, "session_tokens": tokens + own_tokens}
 
 
+def boundaries(events: list[tuple[int, dict[str, Any]]], session: str, trigger: str | None = None) -> list[int]:
+    """Indexes of this session's compact_boundary events, of one trigger (auto, manual) when given."""
+    return [i for i, (_, e) in enumerate(events)
+            if (e.get("type"), e.get("subtype")) == ("system", "compact_boundary") and e.get("session_id") == session
+            and (trigger is None or (e.get("compact_metadata") or {}).get("trigger") == trigger)]
+
+
 def compile_env(arm: str, target: Path, args: argparse.Namespace) -> dict[str, str]:
     env = ledger_env(target, None)
-    for key in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "DISABLE_AUTOUPDATER"):
+    # the host's compaction settings never reach a run: DISABLE_AUTO_COMPACT and DISABLE_COMPACT would turn off what
+    # --compact-pct and --force-compact measure (code.claude.com/docs/en/env-vars)
+    for key in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "DISABLE_AUTO_COMPACT",
+                "DISABLE_COMPACT", "DISABLE_AUTOUPDATER"):
         env.pop(key, None)
+    if getattr(args, "compact_pct", None) is not None:  # compact earlier than the window's default point
+        env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(args.compact_pct)
     env.update(
         CLAUDE_CODE_AUTO_COMPACT_WINDOW=str(args.compact_window),
         CLAUDE_CODE_SUBAGENT_MODEL=args.model,
@@ -184,12 +199,12 @@ class Trial:
     run_data: dict[str, Any] = field(default_factory=lambda: {"calls": [], "phases": [], "probes": []})
 
     def invoke(self, name: str, prompt: str, session: str, *, resume: bool,
-               probe: bool = False) -> list[tuple[int, dict[str, Any]]]:
+               probe: bool = False, compact: bool = False) -> list[tuple[int, dict[str, Any]]]:
         path = self.target / name
         new_call = not path.exists()
         try:
             events = self.batch.capture(
-                self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe,
+                self.arm, self.work, self.env, path, prompt, session, resume=resume, probe=probe, compact=compact,
             )
         except BaseException:
             if new_call and (path / "command.json").is_file():
@@ -200,7 +215,7 @@ class Trial:
             raise
         self.transcripts(session, path)
         measured = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
-        self.run_data["calls"].append({**measured, "kind": "probe" if probe else "work"})
+        self.run_data["calls"].append({**measured, "kind": "probe" if probe else "compact" if compact else "work"})
         return events
 
     def probe(self, name: str, session: str, phase: Phase, expected: dict[str, str], *, resume: bool,
@@ -228,11 +243,22 @@ class Trial:
             events = self.invoke(name, prompt, session, resume=resume)
             if self.arm == "F" and not self.batch.args.dry:
                 real._flush_hooks(real.PreparedRun(self.work, [], self.env, None, "boundary", session))
+            auto = len(boundaries(events, session, "auto"))
+            if self.batch.args.force_compact:
+                # every arm compacts once at the same point of every phase (DECISIONS.md, pilot tools); the forced
+                # boundary is then the last one, so it is the phase's sample (auto_compactions keeps the others)
+                forced = self.invoke(f"{name}-compact-cmd", "/compact", session, resume=True, compact=True)
+                if not boundaries(forced, session, "manual"):
+                    raise real.BenchRunError(f"{name}-compact-cmd: /compact emitted no compact_boundary with trigger "
+                                             "manual; this Claude Code does not compact on a headless /compact, so "
+                                             "use --compact-pct instead")
+                events = [*events, *forced]
             state = inspect(self.task, self.work, i, "checkpoint", self.target)
             compact_at = [index for index, (_, e) in enumerate(events)
                           if (e.get("type"), e.get("subtype")) == ("system", "compact_boundary")
                           and e.get("session_id") == session]
             state["compactions"] = len(compact_at)
+            state["auto_compactions"] = auto
             if compact_at:
                 # Only the CLI emits the boundary event. The next invocation is a --resume probe.
                 state["post_compaction_turns"] = sum(
@@ -340,6 +366,10 @@ def options() -> argparse.ArgumentParser:
     p.add_argument("--max-turns", type=int, default=80)
     p.add_argument("--probe-turns", type=int, default=8)
     p.add_argument("--compact-window", type=int, default=100_000)
+    p.add_argument("--compact-pct", type=int,
+                   help="CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: compact at this percentage (1-100) of the window")
+    p.add_argument("--force-compact", action="store_true",
+                   help="send /compact in the same session right after each phase's work call")
     p.add_argument("--claude-version", type=real.version_arg,
                    help="stop before any paid call unless claude --version is this (X.Y.Z)")
     p.add_argument("--claude-bin", help="the Claude Code binary to run (default: claude on PATH)")
@@ -354,6 +384,8 @@ def main() -> None:
         p.error("--arms must be distinct arm letters separated by commas")
     if min(args.runs, args.wall_clock, args.max_turns, args.probe_turns) < 1 or args.compact_window < 100_000:
         p.error("run limits must be positive and --compact-window must be at least 100000")
+    if args.compact_pct is not None and not 1 <= args.compact_pct <= 100:
+        p.error("--compact-pct must be between 1 and 100")
     try:
         run(args, chosen)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, real.BenchRunError) as exc:
@@ -395,7 +427,7 @@ def run(args: argparse.Namespace, chosen: list[str]) -> None:
 
     out.mkdir(parents=True, exist_ok=False)
     data: dict[str, Any] = {"dry": args.dry, "trials": [], "fan_in": [], "compact_window": args.compact_window,
-                            "arms": chosen}
+                            "compact_pct": args.compact_pct, "force_compact": args.force_compact, "arms": chosen}
     if args.dry:
         from .scripted import capture, fixture, scripted_fan_in
 

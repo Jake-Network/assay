@@ -811,3 +811,87 @@ by hand, not a live session). Four are fixed; the fourth is not.
   (`rerun.run_checks`, the spooler's functions) is called through its module everywhere, so replacing it reaches
   every caller, as it did when they shared a module. The Ledger class stays in one file: its methods share one
   connection and transaction discipline, and splitting it is a separate change.
+
+## First-run fixes, the action without a ledger, pilot tools (2026-11-26)
+
+- **A re-run without lead authority says what decides it.** The README's first lead command, run as written, ended in
+  "recorded without a decision" and left `status` at 0 verified; a pilot's lead stopped at the same line. The rule
+  stays (CI depends on a nameless run only recording); for the nameless `verifier@<host>` (harness role; a named
+  worker is not shown how to decide as the lead) the line now ends with the command to run next: the same `check
+  verify` with `--agent lead` (naming the claim by id, the whole commit, the merge-base as `--base` and the project,
+  so it decides the same claim against the same checks), but only when that run would decide verified: this run passed
+  every declared check, no run of the commit failed, and the claim is proposed or supported. When an attempt weakened
+  tests or the lead is an implementer the line names the `decide --as human` command instead, and after a failed or
+  partial run nothing, since a lead's re-run would not decide either (a review of the first version found it pointing
+  to re-runs that could not decide). It names a re-run, not `decide --oracle rerun` on the stored attempts, because
+  that needs two transitions (proposed to supported to verified) and so two commands; the price is running the checks
+  twice, minutes in a repository with slow checks. Under a token there is no hint: the token names one agent, and
+  `--agent lead` would contradict it.
+- **brief reads without a name.** `benchbook brief --here` is what a person types first to see the state, and
+  it failed with "no agent name" while `status` and `get` worked. brief writes one row, to `brief_log` (who read
+  how much), which is why it was not counted as a read; that row records a read, not a claim, so `human` is as good
+  a name for it as for the other reads. The name check in the ledger, the hooks (which open the ledger in their
+  own name) and the MCP tools are unchanged.
+- **status names an undecided re-run as the brief does.** A piece whose latest completion is `proposed` or
+  `inconclusive` with at least one supporting re-run was "reported only" in `status` and "Re-run, not decided" in
+  the brief, so the two screens disagreed about the same piece. status now uses the brief's condition (the RERUN
+  query of the code pack's brief: `proposed` or `inconclusive` with a supporting re-run) as a fourth state between
+  verified and reported only; a refutation still counts as a rerun mismatch first. A `supported` completion (the
+  first of the two rerun decisions) is in neither, and stays "reported only" until both change together. status
+  still looks at each piece's latest reported commit only, so a re-run of an older commit that the brief lists does
+  not count.
+  A code project's `init` names the code commands next; the experiment mode's `exp record` line is kept for the
+  other packs.
+- **The GitHub Action without a ledger.** Trying the action meant a shared Postgres, a secret and a commit trailer
+  in every agent's commits; without them it failed or commented nothing. The part of benchbook that is worth having
+  from CI alone, an independent re-run that also marks weakened tests, needs none of that. Without `database-url`
+  the action now creates a ledger for the workflow run and re-runs the pull request's head as one piece
+  `pr-<number>`, reported by its author, whenever no trailer names the head commit (so the summary has a claim to
+  show as verified or claimed only; a second review found that a head after the last trailered commit was not re-run
+  at all). Each invocation keeps its ledger in a folder of its own, and a run with nothing to re-run updates an
+  earlier comment instead of leaving its old verdict standing. The checks come from the config committed at the merge-base only, as `check verify` reads them;
+  proposing them from the pull request's files or falling back to a ledger pin would let the pull request choose
+  its own checks, so a repository without a committed config gets a notice instead. For the same reason init runs in
+  an empty repository under `RUNNER_TEMP`, not in the checkout, where it would pin the pull request's config, which
+  `check verify` falls back to for a piece whose own merge-base has no config (it also left the checkout modified);
+  and the pre-rename `ASSAY_*` variables are unset with the others, since benchbook still reads them and one would
+  lead back to a shared ledger (both from the review). Deciding and tokens are for a
+  shared ledger and are ignored with a warning. Fork and Dependabot pull requests are skipped as before, and the
+  shared ledger mode is unchanged, including not starting a comment on a pull request without trailers.
+- **Pilot tools: compaction at a fixed point, an identifier-only question, a contains column.** The boundary
+  brief is meant for compaction, and four pilots had no compaction sample: the largest lead prompt was 27.4k tokens
+  of a 100k window, and the window cannot go below 100,000. `--compact-pct` makes automatic compaction come
+  earlier, but the pilot task compacts only at 25% or below, where little is left to summarise, and since each arm
+  carries a different context (F a brief, C its progress files) one percentage would compact them at different
+  points and mix that difference into the comparison. `--force-compact` sends `/compact` at the same point of
+  every phase in every arm, and the event's `trigger: manual` keeps it a real boundary event, which the
+  registration requires for a sample. Both are built because only a paid smoke run can tell whether headless
+  `/compact` compacts; the owner chooses. The `discarded` question asked "and why?", which led arms A and C to
+  answer in sentences that contain the right signature and are scored wrong by the exact match; the pilot READMEs
+  recounted them by hand. The question now asks for the signature only (the next pilot registers it in an
+  Amendment). Counting an answer that contains the identifier stays a sensitivity column, not the registered
+  measure: changing the measure after four pilots would let the measure follow the results, and the contains
+  column moves only A and C (pilot 1: A 6 to 8, C 6 to 7, F 1 to 1), so it does not change the comparison. It
+  matches the identifier as a whole token, so `control-1` is not found in `control-12`. From the review: the
+  /compact call runs with the probe's cap and turn limit (a work call's cap would reserve USD 3 of the total budget
+  per phase), a /compact that emits no `compact_boundary` with trigger `manual` stops the run instead of passing as
+  a work call without a sample, and a phase's own automatic compactions are kept as `auto_compactions`, since the
+  forced boundary, being the last, is the phase's sample (with `--force-compact` the delayed column stays empty).
+  A second review added: the host's `DISABLE_AUTO_COMPACT` and `DISABLE_COMPACT` are removed from a run's
+  environment, and boundaries count only the call's own session and the expected trigger.
+- **A piece's files are its own commits' files.** In the fourth boundary pilot the worker of one piece started
+  from the integration branch where another piece had been merged; `payload.files` was the merge-base diff, which
+  held the other piece's file, and when that file changed the brief marked this piece `changed since` too, one of
+  F's four misses ("coarser than its own changes", after the second pilot). The first version left out every commit
+  another piece's reported commit reaches. A review found what that hides: on one line that mixes pieces (alpha's
+  a.py, beta reported at b.py, alpha's a2.py), alpha lost a.py, and a later change to a.py would leave a stale
+  verification unmarked. Which piece a commit belongs to is not in git, and the two errors are not equal: a file
+  listed in excess adds a `changed since` mark a reader can check, a file left out hides one. So `check verify` now
+  leaves out a commit only when something says it is another piece's and nothing says it is this one's: it is
+  another piece's reported commit (a completion whose tags and payload agree), its `Benchbook-Piece` trailer names
+  another piece, or the ledger has another piece's check runs at it; and only commits that another piece's reported
+  commit in the range reaches (merged in). A commit nothing attributes stays. A merge commit contributes the files
+  it changed itself (those that differ from every parent: a conflict resolution, an adjustment while merging); the
+  first version listed no merge at all and called that a limit, until a second review showed it hiding a stale
+  verification, which is the error this rule exists to avoid. Paths are kept as git has them (only NUL separates
+  them). When no own commit changed a file, the merge-base diff is recorded as before. The directory scope, the weakened-test and `[checks]` checks and the brief's comparison are unchanged.

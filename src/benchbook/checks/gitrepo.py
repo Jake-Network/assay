@@ -91,6 +91,51 @@ def changed_paths(repo: Path, merge_base: str, commit: str) -> list[str]:
     return [p for p in out.split("\0") if p]
 
 
+def _git_in(repo: Path, stdin: str, *args: str) -> str:
+    p = subprocess.run(["git", "-C", str(repo), *args], input=stdin, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
+    if p.returncode != 0:
+        raise BenchbookError(f"git {' '.join(args)}: {p.stderr.strip() or f'exit {p.returncode}'}")
+    return p.stdout
+
+
+def merged_from(repo: Path, merge_base: str, commit: str, others: Sequence[str]) -> list[str]:
+    """The commits of merge_base..commit that one of others (other pieces' reported commits) reaches, when that
+    commit is itself in the range: the work merged in from other pieces, oldest first; [] when none is."""
+    in_range = set(_git(repo, "rev-list", f"{merge_base}..{commit}").stdout.split())
+    tips = [s for s in dict.fromkeys(others) if s in in_range and s != commit]
+    if not tips:
+        return []
+    return _git(repo, "rev-list", "--reverse", *tips, f"^{merge_base}").stdout.split()
+
+
+def trailer_pieces(repo: Path, commits: Sequence[str], key: str = "Benchbook-Piece") -> dict[str, set[str]]:
+    """The piece names each commit's trailer carries."""
+    if not commits:
+        return {}
+    fmt = f"%H%x00%(trailers:key={key},valueonly,separator=%x1f)%x1e"
+    out = _git_in(repo, "".join(c + "\n" for c in commits), "log", "--no-walk=unsorted", f"--format={fmt}", "--stdin")
+    found: dict[str, set[str]] = {}
+    for entry in (e.strip("\n") for e in out.split("\x1e")):
+        if entry:
+            sha, _, values = entry.partition("\x00")
+            found[sha.strip()] = {v.strip() for v in values.split("\x1f") if v.strip()}
+    return found
+
+
+def paths_of(repo: Path, merge_base: str, commit: str, leave_out: set[str]) -> list[str]:
+    """Files changed by the commits of merge_base..commit other than leave_out, newest first. A merge commit
+    contributes what it changed itself, the files that differ from every parent (--cc: a conflict resolution or an
+    adjustment made while merging), not what it brought in. Paths are kept as git has them: only NUL separates them,
+    so a name that starts or ends with a newline stays that name."""
+    commits = [c for c in _git(repo, "rev-list", f"{merge_base}..{commit}").stdout.split() if c not in leave_out]
+    if not commits:
+        return []
+    out = _git_in(repo, "".join(c + "\n" for c in commits), "diff-tree", "--stdin", "--root", "--no-commit-id", "-r",
+                  "--name-only", "--no-renames", "-z", "--cc")
+    return list(dict.fromkeys(f for f in out.split("\0") if f))
+
+
 def _diff_u0(repo: Path, merge_base: str, commit: str, path: str) -> str:
     return _git(repo, "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", merge_base, commit,
                 "--", path).stdout

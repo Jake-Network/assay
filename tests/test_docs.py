@@ -60,6 +60,16 @@ def test_benchmark_tables_are_filled_with_a_gate_verdict() -> None:
         assert report and (root / report.group(1)).is_file(), name
 
 
+def test_readmes_link_every_boundary_pilot() -> None:
+    """Each published boundary pilot is linked from both READMEs, so a later pilot cannot replace an earlier one."""
+    root = Path(__file__).resolve().parent.parent
+    pilots = sorted(p.name for p in (root / "bench" / "results").iterdir() if "boundary-pilot" in p.name)
+    assert pilots
+    for name in ("README.md", "README.ko.md"):
+        text = (root / name).read_text()
+        assert [p for p in pilots if f"bench/results/{p}/" not in text] == [], name
+
+
 def test_worker_instructions_prefer_exp_run_and_keep_the_mcp_pair() -> None:
     """Workers with a shell check, run and record in one command; the MCP tools stay as the fallback."""
     root = Path(__file__).resolve().parent.parent

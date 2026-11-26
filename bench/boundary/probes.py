@@ -1,6 +1,7 @@
 """Score five boundary questions and inject one post-verification file change."""
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from ..code.run import IDENTITY, git
 
 QUESTIONS = {
     "verified": "Which piece was most recently independently verified? Give its piece id.",
-    "discarded": "Which failed approach was discarded, and why? Give its failure signature.",
+    "discarded": "Which failed approach was discarded? Answer with its failure signature only, without the reason.",
     "finding": "Which out-of-scope finding is still open? Give its finding key.",
     "stale": "Is the prior verification for piece {stale} applicable to the current checkout?",
     "fresh": "Is the prior verification for piece {fresh} applicable to the current checkout?",
@@ -31,6 +32,25 @@ def score(expected: dict[str, str], answers: object) -> dict[str, bool]:
         answers = {}
     return {field: isinstance(value := answers.get(field), str)
             and value.strip().casefold() == expected[field].casefold() for field in QUESTIONS}
+
+
+def contains(expected: dict[str, str], answers: object) -> dict[str, bool]:
+    """A sensitivity score, not the registered one: an identifier answer counts when it contains the expected
+    identifier (case-insensitive), as the pilot READMEs counted by hand; stale and fresh stay exact."""
+    exact = score(expected, answers)
+    if not isinstance(answers, dict):
+        answers = {}
+    return {field: exact[field] if field in ("stale", "fresh") else
+            isinstance(value := answers.get(field), str) and _mentions(value, expected[field])
+            for field in QUESTIONS}
+
+
+def _mentions(text: str, identifier: str) -> bool:
+    """identifier as a whole token of text, case-insensitive: not a part of a longer id ("control-1" in
+    "control-12"); a sentence may end right after it ("... was split-camel.")."""
+    before = r"(?<![A-Za-z0-9_:/.-])"
+    after = r"(?![A-Za-z0-9_:/-]|\.[A-Za-z0-9_])"
+    return re.search(before + re.escape(identifier) + after, text, re.I) is not None
 
 
 def inject(repo: Path, relative: str, suffix: str) -> tuple[str, str]:

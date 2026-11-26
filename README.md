@@ -33,6 +33,10 @@ line), and the piece is its branch name, a `piece: <name>` line or a `Benchbook-
 | an agent marks a task completed on a piece's branch (`piece start`) | keeps it open until every declared check has a passing run at HEAD, and says which command to run |
 | recording breaks (a dead report, hook failures) | starts the brief with `benchbook: recording stopped: ...` and the fix |
 
+The brief at session start and after compaction is experimental: in four pilots a lead that read it did not know
+more than one that kept progress files ([Measured so far](#measured-so-far)). The re-run of a reported commit and the
+weakened-test guard do not depend on it.
+
 Hooks never write to stderr and always exit 0. Outside a benchbook project they leave without touching the database.
 
 ## What "verified" means
@@ -55,16 +59,17 @@ Details: [docs/code.md](docs/code.md).
 ## Commands for the lead
 
 ```bash
-benchbook check verify media-upload a1b2c3d --reported-by implementer-1   # the re-run by hand (CI, other harnesses)
+benchbook --agent lead check verify media-upload a1b2c3d --reported-by implementer-1   # re-run and decide as the lead; without --agent lead it only records (as CI does)
 benchbook brief --here            # the brief for what this branch changed
-benchbook status                  # pieces verified, reported only and re-run mismatched; open findings; hook health
+benchbook status                  # pieces verified, re-run but not decided, reported only and re-run mismatched; open findings; hook health
 benchbook get c:7f3a91c2          # one record in at most 400 tokens
 benchbook piece start media-upload --paths 'src/media/**'   # occupy paths so two implementers do not collide
 ```
 
 `benchbook statusline` prints a one-line count for a status line. The [GitHub Action](integrations/github-action/README.md)
 re-runs each piece a pull request completes and keeps one comment saying which completions an independent re-run
-confirmed.
+confirmed. Without `database-url` it runs with a ledger of that workflow run only and needs nothing but the
+`[checks]` committed in `.benchbook/config.toml`.
 
 ## Other harnesses
 
@@ -83,19 +88,30 @@ The automatic re-run after a report is Claude Code only. Elsewhere, `benchbook c
 ## Measured so far
 
 **How often "done" is not done (SWE-bench Verified, 2026-11-23):** 7 of 39 completions that Claude Code
-(`claude-sonnet-5-5`) reported done failed a declared check when benchbook re-ran it: **17.9%, 95% CI 9.0% to 32.7%**
+(`claude-sonnet-5-5`) reported done failed the benchmark's declared checks (visible and hidden tests, the registered
+measure) when benchbook re-ran them: **17.9%, 95% CI 9.0% to 32.7%**
 (the hidden tests alone: 5 of 39, 12.8%). Only 3 of the 39 implementers ran a test before reporting done. The interval
-contains the 10% threshold of the plan; the point estimate is above it. Details, including two refutations caused by
+contains the 10% threshold of the plan; the point estimate is above it.
+Post hoc, re-running only the visible checks a project declares, which is what benchbook does in real use, refuted
+3 of 39 (7.7%, 2.7% to 20.3%); in two of those the reference fix fails the same visible test, which leaves 1 of 39 (2.6%,
+0.5% to 13.2%). The four completions that only the hidden tests refuted need a better check, not a re-run.
+Details, including two refutations caused by
 the visible check itself: [bench/results/2026-11-23-swe-verified/](bench/results/2026-11-23-swe-verified/README.md).
 `bench/code/` is the harness. `bench/boundary/` measures what a lead still knows after compaction and restarts, across
 six arms ([PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
 
-**What a lead still knows after a restart (boundary pilot, 2026-11-25):** one task and one trial per arm, so directions
-only. Asked five state questions in a new session after each phase, benchbook's boundary mode (F) answered 1 of 10,
-against 6 of 10 for a single resumed session (A) and for progress files (C). Most of F's misses come from benchbook: a
-test file whose import line a worker edited counted as weakened, so three of the four pieces never became verified in
-the brief. No compaction happened (largest lead prompt 24k of a 100k window), and no arm trusted the stale check.
-Details: [bench/results/2026-11-25-boundary-pilot/](bench/results/2026-11-25-boundary-pilot/README.md).
+**What a lead still knows after a restart (four boundary pilots, 2026-11-25):** one task (boltons) and one trial per
+arm in each pilot, so directions only. Asked five state questions after each of two phases (in a new session for F
+and C, in the resumed session for A), benchbook's boundary mode (F) answered 1, 4, 4 and 6 of 10 across the four
+pilots, a single resumed session (A) 6, 8, 7 and 8, and progress files (C) 6, 6, 6 and 7. Each pilot fixed what the
+one before found in benchbook (a test import edit counted as a weakening, validity marks, the brief's scope on an
+integration branch, the `applies at HEAD` mark); F has not been above progress files in any of them. No pilot reached compaction (largest lead prompt 27.4k tokens of
+a 100k window), so compaction is still unmeasured; repeated dead ends (H3) and trust in the stale check (H6) were
+counted and were 0 in every arm, so they show no difference yet. Per completed trial F cost about the same as C (USD
+0.42 to 0.55 against 0.52 to 0.58) and 1.6 to 2.2 times A (0.25 to 0.30); the third pilot also spent USD 0.56 on an
+A trial that stopped. Details: pilots
+[1](bench/results/2026-11-25-boundary-pilot/README.md), [2](bench/results/2026-11-25-boundary-pilot-2/README.md),
+[3](bench/results/2026-11-25-boundary-pilot-3/README.md), [4](bench/results/2026-11-25-boundary-pilot-4/README.md).
 
 ## Experiment swarms
 
@@ -138,14 +154,9 @@ twice on the same hardware; every run is recorded, crashes included; a result on
 baseline after two other agents re-run it and the mean still wins. Self-hosted, no API key: several machines
 need one Postgres URL. Details: [docs/autoresearch.md](docs/autoresearch.md).
 
-| launch experiment (same GPUs, time and agent) | A: independent | B: benchbook |
-|---|---|---|
-| replicated best val_bpb | _tbd_ | _tbd_ |
-| duplicate runs | _tbd_ | _tbd_ |
-| keeps that did not reproduce / refuted | _tbd_ | _tbd_ |
-| GPU time spent on replication | 0% | _tbd_ |
-
-<!-- Filled from bench/autoresearch report.md after the pre-registered run (MANUAL_QA.md). -->
+The pre-registered comparison with independent autoresearch agents has not been run yet
+([bench/autoresearch/PREREGISTRATION.md](bench/autoresearch/PREREGISTRATION.md) is still a template), so there are no
+numbers for this mode.
 
 ## Benchmark
 
@@ -250,8 +261,8 @@ benchbook pays off in two kinds of work.
 
 ## Roadmap
 
-v0.2: semantic near-duplicate warnings (pgvector), live MCP resource subscriptions, the automatic re-run for
-harnesses other than Claude Code, OpenEvolve/ShinkaEvolve adapters, row-level security for teams. Later: domain packs
-(ML research, Lean mathematics, lab science, finance close).
+What comes next is decided by measurements, not features: the false completion rate in real delegate work, and a
+boundary pilot that reaches compaction ([bench/boundary/PREREGISTRATION.md](bench/boundary/PREREGISTRATION.md)).
+Semantic near-duplicate warnings, row-level security for teams and new domain packs wait for a measured need.
 
 License: Apache-2.0.

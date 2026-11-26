@@ -83,12 +83,65 @@ fork's pieces.
 | `python` | `python3` | The interpreter benchbook is installed with. |
 | `working-directory` | `.` | The checkout with `.benchbook/config.toml`. |
 
+## Without a ledger
+
+Without `database-url` the action still adds to your CI's test run the one thing a test run does not show: whether
+the pull request weakened the tests to get green (an assert deleted or changed, a skip marker, a conftest change,
+fewer tests run, or a changed `[checks]` table). It re-runs the checks declared at the merge-base, from a clean
+worktree of the pull request's head, in a ledger it creates for this workflow run only (an embedded Postgres under
+`RUNNER_TEMP`, project `pr-<number>` unless `project` is set, stopped at the end; the checkout is not touched). No
+secret, no shared Postgres, no commit trailer. The log says so in a notice, so a workflow whose `database-url`
+secret is missing by mistake is visible.
+
+What it needs: `.benchbook/config.toml` committed on the base branch, and one workflow file. `benchbook init` keeps
+`.benchbook/` out of git (`.git/info/exclude`), so commit that one file by name:
+
+```bash
+benchbook init                          # proposes and writes the checks
+git add -f .benchbook/config.toml       # the project line and the [report] table go in with [checks] and [guard]
+git commit -m "Declare the checks benchbook re-runs"
+```
+
+The checks come only from the config committed at the merge-base, so a pull request cannot choose its own checks.
+The pull request that first adds the config therefore ends with a notice ("no config committed at the
+merge-base"); the pull requests after it is merged get the comment.
+
+The workflow is the [sample](#sample-workflow) without the `database-url` and `token` lines:
+
+```yaml
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Jake-Network/benchbook/integrations/github-action@<full commit sha>
+```
+
+**What the comment shows.** Each `Benchbook-Piece:` trailer's piece is its own row, as with a shared ledger, and the
+pull request's head is always re-run: when no trailer names the head commit (no trailers at all, or a fix after the
+last trailered commit) it is the row `pr-<number>`, reported by the pull request's author. A run that has nothing to
+re-run (no config at the merge-base, for example after the base branch changed) updates an earlier comment to say so. Per piece: **verified** when every declared check passed in the re-run and no test was
+weakened; **claimed only** with `tests weakened: <files>` when the commit touched a guarded test in a way that can
+weaken it (a person decides; the job does not fail for it); **re-run disagrees** when a check failed (the job
+fails). The comment ends with a paragraph saying that this run had no shared ledger.
+
+**What it cannot show.** Nothing from agent sessions: discarded approaches, out-of-scope findings and earlier runs
+live in a shared ledger, and this one is gone when the job ends. `decide` and `token` are ignored with a warning.
+
+**Trust.** As with a shared ledger, the checks run the pull request's code in the same job, as the same user, that
+writes the comment: a pull request written to do so can change what the comment says. The comment is evidence
+against agents that misreport their work, not against a hostile pull request. A fork's pull request is skipped as
+before.
+
 ## Pull requests from forks, and Dependabot
 
 GitHub gives a workflow run for a fork's pull request no secrets and a read-only `GITHUB_TOKEN`, and treats
 Dependabot's pull requests the same way. The action then prints a notice saying so and exits 0: nothing is re-run,
 recorded or commented, and the pull request is not failed for it. A same-repository pull request without
-`database-url` is a configuration error and fails.
+`database-url` runs with a ledger of its own ([Without a ledger](#without-a-ledger)).
 
 ## Who the re-runs are by
 

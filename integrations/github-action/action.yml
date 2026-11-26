@@ -6,7 +6,7 @@ description: Re-run each completed piece's declared checks, record them in the b
 author: benchbook
 inputs:
   database-url:
-    description: The shared ledger's Postgres URL. Pass it from a secret (secrets.BENCHBOOK_DATABASE_URL); never write it in the workflow. Prefer a benchbook_writer login with a token over the owner's URL.
+    description: The shared ledger's Postgres URL. Pass it from a secret (secrets.BENCHBOOK_DATABASE_URL); never write it in the workflow. Prefer a benchbook_writer login with a token over the owner's URL. Empty runs with a ledger of this run only (needs .benchbook/config.toml committed at the merge-base; README.md, "Without a ledger").
     required: false
     default: ""
   token:
@@ -63,6 +63,7 @@ runs:
         BB_INSTALL: ${{ inputs.benchbook }}
         BB_PYTHON: ${{ inputs.python }}
         BB_PR: ${{ github.event.pull_request.number }}
+        BB_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         BB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         BB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         BB_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}

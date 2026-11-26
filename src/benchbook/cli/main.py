@@ -77,9 +77,9 @@ def emit(data: Any, text: str | None = None) -> None:
 
 
 def ledger(agent: str | None = None, *, read_only: bool = False) -> Ledger:
-    """Writes need a name: --agent, BENCHBOOK_AGENT or (for decide) --as. Reads that write nothing fall back to
-    'human' so a person can look around without naming themselves (I1). With BENCHBOOK_TOKEN the token names the
-    agent, so there is no fallback."""
+    """Writes need a name: --agent, BENCHBOOK_AGENT or (for decide) --as. Reads that record nothing, and brief (which
+    logs only who read it, in brief_log), fall back to 'human' so a person can look around without naming themselves
+    (I1). With BENCHBOOK_TOKEN the token names the agent, so there is no fallback."""
     from ..config import default_agent
     from ..core.ledger import Ledger
 
@@ -159,11 +159,12 @@ def init(
     extra, out = "", {"ok": True, "project": p.id, "created": created, "config": str(cfg), "pack": p.pack}
     if p.pack == "code":
         extra = _init_code(root, p.id, out, yes)
+    nxt = ("benchbook doctor   |   benchbook status   |   benchbook brief --here" if p.pack == "code" else
+           "BENCHBOOK_AGENT=me benchbook exp record --config '{\"x\":1}' --metrics '{...}'   |   benchbook ui")
     emit(out, f"{'created' if created else 'using existing'} project {p.id} (pack {p.pack})\n"
               f"  goal:   {p.goal}\n  metric: {p.primary_metric or '(none)'} {p.metric_direction or ''}\n"
               f"  config: {cfg}\nagents: lead (orchestrator), human (human), hook (harness)\n{extra}"
-              f"next: BENCHBOOK_AGENT=me benchbook exp record --config '{{\"x\":1}}' --metrics '{{...}}'   |   "
-              "benchbook ui")
+              f"next: {nxt}")
 
 
 def _init_code(root: Path, project: str, out: dict[str, Any], yes: bool = False) -> str:
@@ -299,7 +300,7 @@ def brief(task: Annotated[str | None, typer.Option("--task")] = None,
         from ..packs.code.brief import changed_scope
 
         scope = [*changed_scope(_repo_root()), *scope]
-    lg = ledger()
+    lg = ledger(read_only=True)
     b = lg.brief(task_id=task, budget_tokens=load().default_budget_tokens if budget is None else budget,
                  tags=scope or None, repo=_repo_root() if here else None)
     if lg.pack.name == "code":

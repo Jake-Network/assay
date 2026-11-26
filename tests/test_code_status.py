@@ -50,6 +50,10 @@ def test_status_counts_current_pieces_and_queue(db_url: str, project: str, tmp_p
     rerun = agent(db_url, project, "verifier", "harness")
     result = attempt(rerun, "failed", sha="4" * 40, failed=[["tests/test_piece.py::fails", "AssertionError"]])
     rerun.link(result.experiment_id, "refutes", failed.id)
+    undecided = lg.propose_claim("completion", "Passed a re-run nobody decided",
+                                 payload={"piece": "undecided", "commit": "5" * 40})
+    passed = attempt(rerun, "undecided", status="ok", sha="5" * 40)
+    rerun.link(passed.experiment_id, "supports", undecided.id)
     lg.propose_claim("observation", "Another module has a race", tags=["out-of-scope"])
     closed = lg.propose_claim("observation", "Another module has a typo", tags=["out-of-scope"])
     agent(db_url, project, "human", "human").decide(closed.id, "retracted", "human", "Fixed")
@@ -61,12 +65,12 @@ def test_status_counts_current_pieces_and_queue(db_url: str, project: str, tmp_p
 
     status = json.loads(cli(repo, "--json", "status"))
     assert status["project"] == project and status["pack"] == "code"
-    assert status["pieces"] == {"verified": 1, "reported_only": 1, "rerun_mismatch": 1}
+    assert status["pieces"] == {"verified": 1, "rerun_undecided": 1, "reported_only": 1, "rerun_mismatch": 1}
     assert status["open_findings"] == 1
     assert status["spool"] == {"pending": 1, "dead": 1, "stuck": 0}
     assert status["hook_failures_24h"] == 1
     text = cli(repo, "status")
-    assert "1 verified, 1 reported only, 1 rerun mismatch" in text
+    assert "1 verified, 1 re-run not decided, 1 reported only, 1 rerun mismatch" in text
     assert "1 pending, 1 dead" in text
 
 

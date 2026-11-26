@@ -82,7 +82,7 @@ happens to come first. A completion that needs human review includes that inform
 In the integration step, for each piece an implementer reported done:
 
 ```bash
-benchbook check verify <piece> <commit> --reported-by <implementer>
+benchbook --agent lead check verify <piece> <commit> --reported-by <implementer>
 ```
 
 Options: `--base REF` (default `[guard] base`, else `origin/main`), `--checks a,b` (a subset of the declared
@@ -116,7 +116,7 @@ What it does:
 6. Prints the table and the decision.
 
 The verifier is `--agent` or `BENCHBOOK_AGENT` when set (with `BENCHBOOK_TOKEN`, the token's agent), else
-`verifier@<host>` (registered with the harness role). It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
+`verifier@<host>` (registered with the harness role), so a re-run without a name is recorded and not decided. It must be a different agent from `--reported-by`; the command refuses to verify an agent's own report.
 The hook's automatic re-run of a reported `DONE <sha>` runs as another name, `rerun@<host>` (registered with the
 orchestrator role), or as the token's agent under `BENCHBOOK_TOKEN`.
 
@@ -720,8 +720,12 @@ It shows, in this order:
 The footer names `benchbook get <id>` for one record's details (at most 400 tokens).
 
 **Changed since the check.** With `--here` (and from the boundary hooks) the brief compares each verified line with
-the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are the files the commit changed
-since its merge-base (`payload.files`, recorded by `check verify` when there are at most 200), else those the
+the checkout's HEAD: `git diff --quiet <commit> HEAD -- <paths>`, where the paths are the files the piece's own
+commits changed since the merge-base (`payload.files`, recorded by `check verify` when there are at most 200: the
+commits of merge-base..commit, a merge commit counting with the files it changed itself, leaving out a commit merged
+in from another piece when it is that piece's reported commit, carries its trailer or has its check runs, and nothing
+ties it to this piece; so a piece
+started from an integration branch does not list the pieces merged there), else those the
 piece's newest task occupies (`piece start`), else the directories its completion recorded. Directories are too
 coarse on an integration branch: in the second boundary pilot two pieces shared `boltons/` and `tests/`, so each
 merge marked the other piece changed. A line whose paths changed ends in
@@ -818,8 +822,8 @@ request completes and keeps one comment on the pull request that says which comp
 confirmed. The logic is in three commands, which run anywhere:
 
 ```bash
-benchbook pr pieces --base BASE [--head HEAD] [--claims]   # piece<TAB>commit[<TAB>reporter<TAB>claim], one per piece
-benchbook pr summary --base BASE [--head HEAD] [--run-url URL]   # the markdown, starting with the marker
+benchbook pr pieces --base BASE [--head HEAD] [--claims] [--whole-as NAME]   # piece<TAB>commit[<TAB>reporter<TAB>claim]
+benchbook pr summary --base BASE [--head HEAD] [--run-url URL] [--whole-as NAME]   # the markdown, starting with the marker
 benchbook pr comment --repo OWNER/NAME --pr N --body-file F [--author LOGIN] [--update-only]
 ```
 
@@ -838,6 +842,15 @@ tags and its payload names that piece and commit; with several, a verified one, 
 reported*: CI never reports a completion on someone's behalf. Then `pr summary` and `pr comment`. The job fails when
 a re-run failed a check. A pull request rebased after the lead's `check verify` has new commit ids, so its pieces
 have no claim at the new commits until someone reports them there.
+
+**Without a ledger.** With no `database-url` the action creates a ledger for the workflow run only (an embedded
+Postgres in `RUNNER_TEMP`, `benchbook init --pack code` run in an empty repository there, so nothing is pinned from
+the pull request's files), and it passes `--whole-as pr-<number>` to `pr pieces` and `pr summary`, so the head is
+re-run as that piece, reported by the pull request's author, when no trailer names the head commit. The checks still come only from the config committed at the merge-base;
+without one the action ends with a notice (commit it with `git add -f .benchbook/config.toml`, see
+[Set up](#set-up)). It always records with `--no-decide`, and the comment says the run had no shared ledger, so
+no discarded approach or finding from agent sessions shows. What it adds to a plain CI test run is the weakened-test
+mark (the action's README, "Without a ledger").
 
 **The summary**, per piece: the state, the runs of its commit (passed, failed, and the independent authors), the
 number of discarded approaches (`observation` claims tagged `discarded` and `piece:<piece>`, any status), the open
