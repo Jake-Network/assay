@@ -405,7 +405,8 @@ def check_hook_cli() -> Check | None:
     lines = [x for p in found for x in p.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
     return Check("hook cli", False, f"{len(lines)} hook run(s) found no benchbook command on PATH ({found[0]}); "
                                     "nothing was recorded for them",
-                 f"uv tool install benchbook (then remove {found[0]})")
+                 "uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook "
+                 f"(then remove {found[0]})")
 
 
 def check_plugin_hooks() -> Check | None:
@@ -458,7 +459,7 @@ def claude_code_checks(root: Path) -> list[Check]:
     else:
         checks.append(Check("claude code", True, f"{claude_dir()} not found; connection checks skipped"))
     checks += _guarded("hook failures", check_hook_log, root.resolve())
-    checks += _guarded("harness hook input", check_harness_input)  # Codex, Cursor, Gemini (docs/harnesses.md)
+    checks += _guarded("harness hook input", check_harness_input)  # every harness but Claude Code (docs/harnesses.md)
     return checks
 
 

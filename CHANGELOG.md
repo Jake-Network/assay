@@ -58,8 +58,8 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
   each failure prints the command that fixes it.
 - `benchbook get <id>` prints at most 400 tokens (status, `checked:` label, links, last decisions); lookups go to
   `lookups.jsonl`. `benchbook task claim <id>` claims one task.
-- `benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--dry-run]` and `benchbook uninstall [--purge]
-  [--dry-run]`; uninstall keeps `.benchbook/` when git cannot say whether it is tracked, and `--purge` removes only a
+- `benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--no-cli] [--dry-run]` (the CLI from PyPI for
+  a release, from git for a development build) and `benchbook uninstall [--purge] [--dry-run]`; uninstall keeps `.benchbook/` when git cannot say whether it is tracked, and `--purge` removes only a
   cluster `benchbook db stop` confirmed stopped.
 - `benchbook mcp` (stdio) and `benchbook serve` (HTTP at `/mcp`, a token for non-loopback binds) with worker and
   orchestrator tool sets and `benchbook://schema`; it starts before the project is initialized, and a worktree finds the
@@ -101,7 +101,7 @@ context, and the lead reads them back as a budgeted brief and by SQL; a reported
 
 ### Hooks and plugins
 
-- Claude Code plugins `benchbook` 0.2.4 (hooks only) and `benchbook-mcp` 0.2.2 (the MCP server, the `benchbook-worker`
+- Claude Code plugins `benchbook` 0.2.5 (hooks only) and `benchbook-mcp` 0.2.2 (the MCP server, the `benchbook-worker`
   subagent and the lead skill `/benchbook-mcp:benchbook-lead`). Manual install files and an AGENTS.md snippet cover
   other setups. Worker instructions use `exp run` where a shell exists.
 - `hook subagent-stop` captures the types in `BENCHBOOK_HOOK_AGENTS` (default `benchbook-worker`) and confirms cited ids

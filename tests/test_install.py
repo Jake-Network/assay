@@ -82,12 +82,19 @@ def path_with_fakes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_install_runs_uv_and_the_claude_plugin_commands(path_with_fakes: Path) -> None:
     plan = install.install()
     calls = path_with_fakes.read_text().splitlines()
-    assert calls == [f"uv tool install benchbook=={install.version()}",
+    assert calls == [" ".join(install.cli_install_command()),
                      "claude plugin marketplace add Jake-Network/benchbook",
                      "claude plugin install benchbook@benchbook"]
     assert any("benchbook init" in s for s in plan.done)
     install.install(mcp=True, cli=False)
     assert path_with_fakes.read_text().splitlines()[-1] == "claude plugin install benchbook-mcp@benchbook"
+
+
+def test_a_development_build_installs_the_cli_from_git() -> None:
+    assert install.cli_install_command("0.1.0") == ["uv", "tool", "install", "benchbook==0.1.0"]
+    assert install.cli_install_command("0.2.0rc1") == ["uv", "tool", "install", "benchbook==0.2.0rc1"]
+    for dev in ("0.1.dev412+g9000825", "0.1.0+action", "0.0.0+action"):
+        assert install.cli_install_command(dev) == ["uv", "tool", "install", "--from", install.GIT_SOURCE, "benchbook"]
 
 
 def test_dry_run_runs_nothing(path_with_fakes: Path) -> None:

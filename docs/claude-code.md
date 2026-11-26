@@ -27,9 +27,9 @@ uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook
 benchbook install --no-cli          # the marketplace and the hook plugin; --mcp adds benchbook-mcp
 ```
 
-`benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--no-cli] [--dry-run]` installs the CLI from
-PyPI at its own version (`uv tool install benchbook==<version>`; until the first release, install from git as above
-and pass `--no-cli`), adds the `Jake-Network/benchbook` marketplace and installs the hook plugin `benchbook@benchbook`.
+`benchbook install [--harness claude-code|codex|cursor|gemini] [--mcp] [--no-cli] [--dry-run]` installs the CLI at its
+own version (`uv tool install benchbook==<version>` for a release; a development build installs from the git
+repository), adds the `Jake-Network/benchbook` marketplace and installs the hook plugin `benchbook@benchbook`.
 `--mcp` adds `benchbook-mcp@benchbook` and `--dry-run` prints the steps. Without a `claude` command it prints the
 plugin steps for you to run. For `codex`, `cursor` and `gemini` it merges that harness's packaged manifest into the
 user-level file instead ([harnesses](harnesses.md)).

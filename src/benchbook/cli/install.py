@@ -1,6 +1,7 @@
 """`benchbook install` and `benchbook uninstall` (T07): one line in, one line out.
 
-install, for Claude Code (the default): the CLI at this version (`uv tool install benchbook==<version>`), the
+install, for Claude Code (the default): the CLI at this version (`uv tool install benchbook==<version>` for a release,
+the git repository for a development build, which is not on PyPI), the
 marketplace and the hook plugin (`benchbook@benchbook`; the MCP server is the separate `benchbook-mcp` plugin,
 installed only with --mcp). Without a `claude` command the Claude Code steps are printed instead of run. For Codex,
 Cursor and Gemini CLI, it merges the packaged hooks into the user's settings.
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -71,6 +73,17 @@ def version() -> str:
     from .. import __version__
 
     return str(__version__)
+
+
+GIT_SOURCE = "git+https://github.com/Jake-Network/benchbook"
+
+
+def cli_install_command(v: str | None = None) -> list[str]:
+    """A release is on PyPI under its version; a development build (`0.1.devN+g<commit>`) never is."""
+    v = version() if v is None else v
+    if re.fullmatch(r"\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?", v):
+        return ["uv", "tool", "install", f"benchbook=={v}"]
+    return ["uv", "tool", "install", "--from", GIT_SOURCE, "benchbook"]
 
 
 def manifest(harness: str) -> dict[str, Any]:
@@ -139,7 +152,7 @@ def install(harness: str = "claude-code", *, dry_run: bool = False, mcp: bool = 
         raise BenchbookError(f"--harness: one of {', '.join(HARNESSES)}")
     plan = Plan(dry_run)
     if cli:
-        plan.run(["uv", "tool", "install", f"benchbook=={version()}"], optional=True)
+        plan.run(cli_install_command(), optional=True)
     if harness == "claude-code":
         if plan.run(["claude", "plugin", "marketplace", "add", MARKETPLACE]):
             plan.run(["claude", "plugin", "install", PLUGINS[0]])

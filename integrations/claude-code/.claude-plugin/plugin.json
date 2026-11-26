@@ -1,6 +1,6 @@
 {
   "name": "benchbook",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Hooks only: declared check runs, subagent reports and boundary briefs go to the benchbook ledger with no tool for the agent to call. The MCP server is the separate benchbook-mcp plugin.",
   "license": "Apache-2.0",
   "keywords": [

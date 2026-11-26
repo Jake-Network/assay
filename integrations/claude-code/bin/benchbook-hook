@@ -11,7 +11,7 @@ if command -v assay >/dev/null 2>&1; then
 fi
 dir="${CLAUDE_PLUGIN_DATA:-${XDG_STATE_HOME:-$HOME/.local/state}/benchbook}"
 if mkdir -p "$dir" 2>/dev/null; then
-    printf '%s benchbook is not on PATH; hook %s skipped (install: uv tool install benchbook)\n' \
+    printf '%s benchbook is not on PATH; hook %s skipped (install: uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook)\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$dir/missing-cli" 2>/dev/null
 fi
 cat >/dev/null 2>&1
