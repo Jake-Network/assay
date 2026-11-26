@@ -270,11 +270,11 @@ def render(states: Sequence[PieceState], *, project: str, agent: str, token: boo
                       "no spaces)."]
     lines += ["", "<details><summary>What the states mean</summary>", "",
               "- **verified**: every declared check passed in a re-run of that commit by an agent other than the "
-              "implementer, nothing guarded was touched, `[checks]` is unchanged and no run of the commit failed "
+              "implementer, no test was weakened, `[checks]` is unchanged and no run of the commit failed "
               "(the code pack's rule; a lead may not have decided the claim yet), or a lead or a person decided it "
               "verified. It does not mean the code is correct or that the checks test the piece.",
               "- **claimed only**: a completion was reported and nothing has confirmed it: no independent re-run "
-              "yet, or the commit changed tests, which a person decides.",
+              "yet, or the commit weakened tests or changed `[checks]`, which a person decides.",
               "- **re-run disagrees**: a run of that commit failed, or the claim was decided refuted or inconclusive.",
               "- **not reported**: the commit carries the trailer, but the ledger has no completion claim for it.",
               "", "</details>", ""]

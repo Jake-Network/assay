@@ -464,8 +464,10 @@ bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boun
   database or a shared directory would fail from the overlap in a way that reads as the commit's, so the default is
   sequential. The early run is used only when both runs counted the same JUnit checks, and an interruption stops it and
   removes its worktree.
-- **Measured** (`scripts/measure_rerun_queue.py`, eight pieces at once): the merge-base run is 47% to 50% of a verify,
-  and a fresh worktree's missing `__pycache__` is not where the time goes. docs/code.md, "In a swarm", has the numbers.
+- **Measured** (`scripts/measure_rerun_queue.py`, eight pieces at once, a check suite of about 11 s): the first
+  verdict came after 23 s and the last after 183 s, or 11 s and 92 s with `[verify] parallel_baseline`; for a suite
+  that waits more than it computes one verify went from 22.8 s to 11.5 s. The merge-base run is 47% to 50% of a verify
+  that needs one, and a fresh worktree's missing `__pycache__` is not where the time goes.
 
 ## CI and the GitHub Action
 
