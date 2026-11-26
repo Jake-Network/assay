@@ -11,7 +11,8 @@ worktree, and record the report and the re-run as a pair (spec §8, measurement 
    the attempt to the claim.
 5. Decide, only with lead authority (the verifier has the orchestrator or human role): verified (oracle rerun) when
    the pack's [verify] rule accepts the re-run, inconclusive when earlier attempts of the piece at the commit (the
-   implementer's own above all) disagree with it, nothing when a guarded path or [checks] changed: a person decides.
+   implementer's own above all) disagree with it, nothing when the commit weakened a test or changed [checks]: a
+   person decides.
 6. Report one row per check; the CLI exits 0 only when every check passed.
 
 The diff and the check output are never stored: the commit, the guarded paths it changed and the failure signature

@@ -335,7 +335,7 @@ class Ledger:
         s = ref.strip().lower()
         m = _SHORT_RE.match(s)
         if not m:
-            raise NotFound(f"not an benchbook id: {ref!r} (expected e:/c:/t:/s:/d:/l: + hex, or a uuid)")
+            raise NotFound(f"not a benchbook id: {ref!r} (expected e:/c:/t:/s:/d:/l: + hex, or a uuid)")
         pfx, body = m.groups()
         search = [KIND_BY_PREFIX[pfx]] if pfx else list(kinds or TABLE.keys())
         if kinds is not None:
@@ -512,7 +512,7 @@ class Ledger:
         Needs settings.worker_intents for workers. For each spec field named in `exclusive`, another live
         intent with the same value is a conflict (raises Conflict, CLI exit 2). Each field named in
         `exclusive_paths` holds a list of path globs (globs.py, a file escaped with globs.escape); another live
-        intent whose same field can match a common path is a conflict too (path occupancy, docs/code.md)."""
+        intent whose same field can match a common path is a conflict too (path occupancy, docs/code-pieces.md)."""
         with self._intent_transaction() as conn:
             return self._create_intent(conn, title, spec, tags, lease_seconds, exclusive, exclusive_paths)
 
@@ -1167,8 +1167,8 @@ class Ledger:
         (min_authors counts the implementer), that ran every declared check (metrics.checks_declared: a --checks run
         of some is partial) and passed them all, with guard_weakened and checks_changed false (T04: tests only
         added do not count; an attempt from before guard_weakened is read by guard_touched).
-        And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, touched a
-        guarded path or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
+        And no valid finished attempt of that piece and commit, cited or not, anyone's, failed a check, weakened a
+        test or changed [checks]: a commit that weakened a test is not verified by a green re-run, and runs
         that disagree are a person's call."""
         human = "a person decides with oracle human (benchbook decide CLAIM verified --oracle human --as human)"
         info = self._completion(conn, claim_id)

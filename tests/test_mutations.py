@@ -2,7 +2,8 @@
 Each row is a commit on a branch of the conftest repository (test_fixed fails until impl.txt says "fixed"; test_extra
 passes; value.txt must say "ok"). The lead verifies with lead authority, so a row ends verified, refuted (a refutes
 link and a discarded approach), sent to a person (guard_weakened or checks_changed), or as an environment failure.
-docs/code.md's trust table measures "decision accuracy" and "needless person decisions" with it."""
+docs/code-verify.md ("The verification worktree") cites it: every row comes out the same with
+[verify] parallel_baseline."""
 from __future__ import annotations
 
 import subprocess

@@ -8,15 +8,19 @@ lg = Ledger.open(project="lr-sweep", agent="worker-1")     # or BENCHBOOK_PROJEC
 lg = Ledger.open(project="lr-sweep", token="bbt_...")      # or BENCHBOOK_TOKEN: the token names the agent (docs/multi-machine.md)
 ```
 
+`init_project` defaults to the `core` pack; the CLI's `benchbook init` without `--metric` makes a `code` project.
+The code-mode commands (`check verify`, pieces, findings) are in [code.md](code.md).
+
 Workers:
 
 | call | returns |
 |---|---|
-| `next_task(tags=None, lease_seconds=900, spec_match=None)` | `Task` or `None`; skips tasks whose `spec.exclude_agents` lists you; `spec_match` keeps tasks whose spec contains that JSON |
-| `heartbeat(task_id, lease_seconds=900)` | new expiry; raises `LeaseLost` (also once the lease has run out) |
-| `brief(task_id=None, budget_tokens=2000)` | markdown |
+| `next_task(tags=None, lease_seconds=None, spec_match=None, task_id=None)` | `Task` or `None`; the lease defaults to `settings.lease_seconds` (900); skips tasks whose `spec.exclude_agents` lists you, and a task with `spec.distinct_agents_for = "<key>"` when you already claimed one with the same `spec[<key>]`; `spec_match` keeps tasks whose spec contains that JSON; `task_id` claims that one task if it is claimable |
+| `claim_task(task_id, lease_seconds=None)` | `Task`; raises `Conflict` when that task is not claimable by you |
+| `heartbeat(task_id, lease_seconds=None)` | new expiry (default lease as above); raises `LeaseLost` (also once the lease has run out) |
+| `brief(task_id=None, budget_tokens=2000, partition=None, tags=None, repo=None, max_chars=None)` | markdown; `tags`, `repo` and `max_chars` are for the code pack's brief ([code-brief.md](code-brief.md#the-brief)) |
 | `check_tried(config, code_ref=None)` | `TriedResult(exact, replicates, best_value, dedup_key)` |
-| `record_experiment(config, metrics, run_status="ok", seed=None, code_ref=None, notes=None, artifacts=None, task_id=None, trace_ref=None, duration_ms=None, tokens=None, cost_usd=None)` | `RecordResult(id, outcome, is_new_best, duplicate_of, notice)`; an exact duplicate has `id=None`, or with a `dedup_mode = "notify"` pack a new `id` plus `duplicate_of` and `notice` |
+| `record_experiment(config, metrics, run_status="ok", seed=None, code_ref=None, notes=None, artifacts=None, task_id=None, trace_ref=None, duration_ms=None, tokens=None, cost_usd=None)` | `RecordResult(id, outcome, is_new_best, duplicate_of, notice)`; an exact duplicate has `id=None`, or a new `id` plus `duplicate_of` and `notice` in a `dedup_mode = "notify"` pack ([concepts.md](concepts.md#duplicates-and-replicates)) |
 | `propose_claim(kind, statement, payload=None, tags=None, task_id=None, evidence=[(id, "supports")])` | `ClaimResult(id, duplicate_of)` |
 | `link(src, relation, dst, note=None)` | link id |
 | `add_source(uri, title=None, locator=None, sha256=None)` | source id |
@@ -39,7 +43,8 @@ A brief may shorten the displayed goal and task details to stay within the reque
 for the required brief structure raises `ValidationFailed`.
 
 Ids: every call accepts a short id (`e:91c0a2f1`) or a full UUID. Errors: `ValidationFailed` (with `.problems`, one
-line per bad field), `NotFound`, `Ambiguous`, `PermissionDenied`, `LeaseLost`, `InvalidTransition`, `Conflict`, all subclasses of
+line per bad field), `NotFound`, `Ambiguous`, `PermissionDenied` (and its subclass `InvalidAgentToken`: the database
+rejected the token for this project), `LeaseLost`, `InvalidTransition`, `Conflict`, all subclasses of
 `BenchbookError`.
 
 A full loop is in `examples/sdk-loop/loop.py`.

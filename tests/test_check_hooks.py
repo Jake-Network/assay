@@ -360,7 +360,7 @@ def test_coverage_counts_from_the_documented_query(gate_repo: Path, tmp_path: Pa
     lines = observed(tmp_path)
     assert [o["kind"] for o in lines] == ["direct", "unrecordable", "wrapped"]
     assert all(o["project"] == lg.project_id for o in lines)
-    doc = (ROOT / "docs" / "code.md").read_text()
+    doc = (ROOT / "docs" / "code-brief.md").read_text()
     section = doc[doc.index("## Record coverage"):]
     [query] = re.findall(r'benchbook sql "(.*?)"', section, re.S)
     rows = lg.sql(query.replace("<since>", "2000-01-01"))["rows"]
@@ -395,7 +395,7 @@ def test_plugin_and_manual_hooks_run_both_events() -> None:
 # The plugin's files as of its version. Claude Code keeps an installed version's cached files, so a change under
 # integrations/claude-code/ reaches users only with a new version in plugin.json: change a file, and this fails until
 # the version is bumped and the pair updated (docs/claude-code.md, "Bump version").
-PLUGIN_RELEASE = ("0.2.3", "feff0f0da7844048d7acd296c71e65c57c75966f4058df9475482b7c47819b8e")
+PLUGIN_RELEASE = ("0.2.5", "44c092d162a07e4b40b0e2d9915c55ae97af8fb2ef51566229e1f739e3c3d3ff")
 
 
 def test_the_plugin_version_moves_with_its_files() -> None:

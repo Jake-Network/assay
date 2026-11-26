@@ -95,7 +95,7 @@ steps 4 and 5 depend on the rename in step 3.
 ## Every release
 
 - [ ] `main` is green in CI, `smoke` included on both systems.
-- [ ] `CHANGELOG.md`: the `Unreleased` headings carry the version and the date.
+- [ ] `CHANGELOG.md`: the `Unreleased` heading carries the version and the date.
 - [ ] `uv build --no-sources && bash scripts/smoke_wheel.sh` passes locally.
 - [ ] **Owner confirms**, then tag the commit CI ran on and push only that tag:
 
@@ -113,9 +113,11 @@ real upload: it creates the PyPI project, and that version number is used for go
 pre-release only when asked for one or when the project has no final release.
 
 After the first release, the install lines that still say `uv tool install --from git+https://...` can use the
-PyPI name (`uv tool install benchbook`, `uvx benchbook`): `README.md`, `README.ko.md`, `docs/autoresearch.md`,
-`integrations/autoresearch/template/README.md` and the fix line of the PATH check in `src/benchbook/cli/doctor.py`.
-Change them only once the package is on PyPI, or they point at nothing.
+PyPI name (`uv tool install benchbook`, `uvx benchbook`): `README.md`, `README.ko.md`, `docs/claude-code.md`,
+`docs/autoresearch.md`, `integrations/autoresearch/template/README.md`, `integrations/codex/README.md`,
+`integrations/cursor/README.md`, the fix lines of the `path` and `hook cli` checks in `src/benchbook/cli/doctor.py`
+and the message in `integrations/claude-code/bin/benchbook-hook` (a plugin version bump). Change them only once the
+package is on PyPI, or they point at nothing. `benchbook install` needs no change: a release installs from PyPI.
 
 ## Phase 0 exit condition
 
@@ -134,9 +136,9 @@ The first `doctor` exits 1 on such a machine, by design of `doctor`: the databas
 has no project yet, and it prints the fix (`benchbook migrate`, `benchbook init`) for each. What it already proves
 is that the package installed and that the embedded Postgres started. The second `doctor` is the one that passes.
 
-CI runs these commands from the built wheel on `ubuntu-latest` and `macos-latest` for every pull request and push to main, which covers the
-packaging and the Postgres dependency. It does not cover installing by name from PyPI, an Intel Mac (the `test` job
-runs there, from a checkout and not from the wheel) or a Linux that is not glibc-based. The exit condition is
+CI runs these commands from the built wheel on `ubuntu-latest` and `macos-latest` (Apple silicon) for every pull
+request and push to main, which covers the packaging and the Postgres dependency. It does not cover installing by
+name from PyPI, an Intel Mac (no CI job runs there) or a Linux that is not glibc-based. The exit condition is
 checked by hand on real machines after the first upload.
 
 ## When a release goes wrong

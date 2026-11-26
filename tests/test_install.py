@@ -79,15 +79,95 @@ def path_with_fakes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return log
 
 
-def test_install_runs_uv_and_the_claude_plugin_commands(path_with_fakes: Path) -> None:
+def test_install_runs_uv_and_the_claude_plugin_commands(path_with_fakes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(install, "version", lambda: "0.1.0")
     plan = install.install()
     calls = path_with_fakes.read_text().splitlines()
-    assert calls == [f"uv tool install benchbook=={install.version()}",
+    assert calls == ["uv tool install benchbook==0.1.0",
                      "claude plugin marketplace add Jake-Network/benchbook",
                      "claude plugin install benchbook@benchbook"]
     assert any("benchbook init" in s for s in plan.done)
     install.install(mcp=True, cli=False)
     assert path_with_fakes.read_text().splitlines()[-1] == "claude plugin install benchbook-mcp@benchbook"
+
+
+def git_source(commit: str) -> dict[str, object]:
+    return {"url": "https://github.com/Jake-Network/benchbook", "vcs_info": {"vcs": "git", "commit_id": commit}}
+
+
+def test_the_cli_is_installed_again_only_from_a_source_that_reproduces_it() -> None:
+    cmd = install.cli_install_command
+    # A release comes from PyPI, whatever it was installed from.
+    assert cmd("0.1.0", None) == ["uv", "tool", "install", "benchbook==0.1.0"]
+    assert cmd("0.2.0rc1", git_source("a" * 40)) == ["uv", "tool", "install", "benchbook==0.2.0rc1"]
+    # Two development builds from different commits each reinstall their own commit, not the default branch.
+    feature = cmd("0.2.dev1+gaaaaaaa", git_source("a" * 40))
+    main = cmd("0.1.dev1+gbbbbbbb", git_source("b" * 40))
+    assert feature == ["uv", "tool", "install", "--from", f"git+https://github.com/Jake-Network/benchbook@{'a' * 40}",
+                       "benchbook"]
+    assert main is not None and main[4].endswith("@" + "b" * 40) and feature != main
+    # A local directory, an editable checkout, a modified one or an unknown source has nothing to pin.
+    for unknown in (None, {"url": "file:///home/me/benchbook", "dir_info": {"editable": True}},
+                    {"url": "https://github.com/Jake-Network/benchbook", "vcs_info": {"vcs": "git"}}):
+        assert cmd("0.1.dev3+gccccccc.d20261126", unknown) is None
+    assert cmd("0.0.0+action", None) is None
+
+
+def test_a_development_build_from_a_subdirectory_is_reinstalled_from_that_subdirectory() -> None:
+    # One commit holds a benchbook at the root (0.3.dev1) and another under nested/ (0.2.dev1). The nested one is
+    # reinstalled from nested/; dropping #subdirectory would replace it with the root's.
+    commit = "c" * 40
+    nested = {**git_source(commit), "subdirectory": "nested"}
+    assert install.cli_install_command("0.2.dev1+gccccccc", nested) == [
+        "uv", "tool", "install", "--from",
+        f"git+https://github.com/Jake-Network/benchbook@{commit}#subdirectory=nested", "benchbook"]
+    assert install.cli_install_command("0.3.dev1+gccccccc", git_source(commit))[4].endswith("@" + commit)  # type: ignore[index]
+    # A source that cannot be written back as a uv requirement keeps the current CLI.
+    for odd in ({**git_source(commit), "subdirectory": ["nested"]}, {**git_source(commit), "subdirectory": "a b"},
+                {**git_source(commit), "url": "https://example.com/repo#frag"},
+                {**git_source(commit), "vcs_info": {"vcs": "git", "commit_id": "main"}}):
+        assert install.cli_install_command("0.2.dev1+gccccccc", odd) is None
+
+
+def test_a_build_without_a_source_keeps_the_current_cli(path_with_fakes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(install, "version", lambda: "0.1.dev3+gccccccc.d20261126")
+    monkeypatch.setattr(install, "install_source", lambda: None)
+    plan = install.install()
+    assert not [c for c in path_with_fakes.read_text().splitlines() if c.startswith("uv ")]
+    assert any("kept the current benchbook CLI" in s and "--no-cli" in s for s in plan.done)
+
+
+def test_no_cli_runs_no_uv(path_with_fakes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(install, "version", lambda: "0.1.0")
+    plan = install.install(cli=False)
+    assert not [c for c in path_with_fakes.read_text().splitlines() if c.startswith("uv ")]
+    assert not any("kept the current" in s for s in plan.done)
+
+
+def test_without_claude_every_plugin_command_is_printed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    plan = install.install(mcp=True, cli=False)
+    [line] = [s for s in plan.done if s.startswith("run yourself: ")]
+    assert line == ("run yourself: claude plugin marketplace add Jake-Network/benchbook && claude plugin install "
+                    "benchbook@benchbook && claude plugin install benchbook-mcp@benchbook")
+
+
+def test_the_hook_cli_check_asks_for_an_install_only_when_benchbook_is_missing(
+        path_with_fakes: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from benchbook.config import state_dir
+
+    record = state_dir() / doctor.MISSING_CLI
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text("2026-11-26T00:00:00Z benchbook is not on PATH; hook bash-result skipped\n")
+    found = doctor.check_hook_cli()  # the fixture's fake benchbook is on PATH again
+    assert found is not None and not found.ok and "on this shell's PATH now" in found.detail
+    assert found.fix is not None and "uv tool install" not in found.fix and str(record) in found.fix
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    missing = doctor.check_hook_cli()
+    assert missing is not None and missing.fix is not None and "uv tool install --from git+" in missing.fix
+    record.unlink()
+    assert doctor.check_hook_cli() is None
 
 
 def test_dry_run_runs_nothing(path_with_fakes: Path) -> None:

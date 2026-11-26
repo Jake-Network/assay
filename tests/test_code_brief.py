@@ -1,5 +1,5 @@
 """The code pack's brief, discarded-approach claims and the "reads that changed a plan" count (PR 2-P0c,
-docs/code.md "Discarded approaches", "The brief", "Reads that changed a plan")."""
+docs/code-verify.md "Discarded approaches"; docs/code-brief.md "The brief", "Reads that changed a plan")."""
 from __future__ import annotations
 
 import re
@@ -26,7 +26,7 @@ from benchbook.packs.code.brief import FOOTER, UNCHANGED, rerun_reason, validity
 from tests.conftest import make_project
 from tests.writer import token_ledger
 
-DOC = Path(__file__).resolve().parent.parent / "docs" / "code.md"
+DOC = Path(__file__).resolve().parent.parent / "docs" / "code-brief.md"
 SCRIPT = str(Path(sys.executable).parent / "benchbook")
 FILES = ["src/app/modules/media/upload.py", "src/app/modules/media/store.py", "src/app/modules/auth/login.py",
          "tests/test_media.py"]
@@ -256,7 +256,7 @@ def test_without_tags_the_whole_project_and_an_unknown_tag_shows_none(db_url: st
 
 
 def test_a_discarded_approach_stays_when_the_piece_is_verified(db_url: str, code: str, ledger: dict[str, Any]) -> None:
-    """docs/code.md: the claim records that the approach failed; a verified commit does not undo that."""
+    """docs/code-verify.md: the claim records that the approach failed; a verified commit does not undo that."""
     lg = agent(db_url, code, "reader")
     [row] = lg.sql_internal("SELECT status FROM benchbook.v_claim_status WHERE id = %s", (ledger["d_hash"],))
     assert row["status"] == "proposed"

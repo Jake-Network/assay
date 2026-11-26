@@ -4,7 +4,7 @@ A composite action that re-runs, on every pull request, the declared checks of e
 request's commits complete, records the re-runs in the shared benchbook ledger, and keeps **one** comment on the
 pull request saying, per piece, whether an independent re-run confirmed the completion. A reviewer sees which
 completions are verified without opening the ledger. What is recorded, and what *verified* means, is in
-[docs/code.md](../../docs/code.md#ci-evidence-and-the-pr-summary).
+[docs/code-ci.md](../../docs/code-ci.md#ci-evidence-and-the-pr-summary).
 
 ## What it does
 

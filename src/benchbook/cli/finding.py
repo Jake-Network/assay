@@ -1,5 +1,5 @@
 """`benchbook finding accept`: accept an out-of-scope finding the hook captured, with its follow-up issue
-(docs/code.md).
+(docs/code-findings.md).
 
 Rejecting needs nothing new: `benchbook decide <claim> refuted --oracle ... --rationale ...`. Accepting is
 `supported` with the follow-up issue linked as a source, and no other command creates a source; this one adds the

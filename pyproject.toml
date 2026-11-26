@@ -1,7 +1,7 @@
 [project]
 name = "benchbook"
 dynamic = ["version"]
-description = "Your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence."
+description = "A Postgres ledger for agent swarms: subagents write results to the database instead of the lead's context, and the lead reads them back by SQL."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

@@ -1,5 +1,5 @@
-"""What benchbook keeps of a piece's failed attempts (spec §8 P0, docs/code.md "Failure signatures and discarded
-approaches").
+"""What benchbook keeps of a piece's failed attempts (spec §8 P0; docs/code-verify.md "Failure signatures",
+"Seen before", "Discarded approaches").
 
 - Seen before: when a check fails with a signature that an earlier attempt of the same piece already has, the run
   names that first attempt and the approaches tried. A match is a notice and never refuses anything. Two attempts

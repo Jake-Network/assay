@@ -42,7 +42,7 @@ def run(
     stays queued and "benchbook hook replay" records it. With uncommitted or
     untracked files the run is recorded with worktree_dirty=true: it is not a
     run of that commit, and the completion gate does not count it. A failed run
-    of a clean checkout also leaves a discarded-approach claim (docs/code.md).
+    of a clean checkout also leaves a discarded-approach claim (docs/code-verify.md).
 
     Exit code: the check's own; 124 after its timeout; 128+N after signal N
     (130 for Ctrl-C); 2 when the check did not start (no such check, no

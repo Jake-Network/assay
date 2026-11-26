@@ -1,5 +1,5 @@
 <!--
-program.benchbook.md: the autoresearch agent instructions for a swarm that shares an benchbook ledger.
+program.benchbook.md: the autoresearch agent instructions for a swarm that shares a benchbook ledger.
 Derived from program.md in https://github.com/karpathy/autoresearch (MIT License, per that repository's README).
 Written by `benchbook ar init`. Changes from upstream: the experiment loop goes through `benchbook ar` commands,
 so runs are shared, never repeated, never lost, and only replicated results become the shared baseline.
@@ -98,7 +98,7 @@ In English, for clarity (the block above is the rule):
 **Rules that come with sharing:**
 - Do not write results.tsv yourself; `benchbook ar run` appends to it in the upstream format.
 - If you doubt another agent's result, record it with `benchbook ar idea "..."`. Do not judge results; the referee does.
-- When an benchbook command prints an error, do what it says. Do not repeat the same command unchanged.
+- When a benchbook command prints an error, do what it says. Do not repeat the same command unchanged.
 - A crash: if it is something dumb and easy to fix (a typo, a missing import), fix it, commit, and `benchbook ar run`
   again. If the idea itself is broken, `git reset --hard HEAD~1` and move on. The crash is already recorded.
 

@@ -1,9 +1,10 @@
 # Working on benchbook
 
-benchbook keeps a Postgres ledger beside a repository for coding agents. Its code mode records claims ("done", "tests
-pass") and verifies them by an independent re-run (`src/benchbook/packs/code`); its experiment mode records experiments
-and claims for agent swarms and hands the lead a budgeted brief (`src/benchbook/packs/core`,
-`src/benchbook/packs/ml-research`). README.md explains the product, DECISIONS.md why things are the way they are, CHANGELOG.md what changed.
+benchbook is a Postgres ledger for agent swarms: subagents write their results to it instead of the lead's context,
+and the lead reads them back as a budgeted brief and by SQL (DECISIONS.md, "Positioning"). Its experiment mode records
+experiments and claims (`src/benchbook/packs/core`, `src/benchbook/packs/ml-research`); its code mode records check
+runs and completions and re-runs a reported "done" before it counts (`src/benchbook/packs/code`). README.md explains
+the product, docs/ how each part works, DECISIONS.md why, CHANGELOG.md what changed.
 
 ## Checks
 
@@ -41,8 +42,12 @@ and claims for agent swarms and hands the lead a budgeted brief (`src/benchbook/
 ## Changes
 
 - One commit per item. Stage explicit paths, never `git add -A` or `git add .`.
-- A behavior change gets one line in CHANGELOG.md under the topmost `## Unreleased: <topic>` heading; a changed rule
-  or default also gets an entry in DECISIONS.md.
+- A behavior change gets one line in CHANGELOG.md under `## Unreleased`, in its area's `###` group. The section
+  describes the release as it will ship: when a later change replaces an earlier line, rewrite that line.
+- A changed rule or default updates its entry in DECISIONS.md, which is grouped by topic and states current
+  decisions with their reasons: rewrite the entry in place rather than appending a dated section.
+- docs/ and README describe current behaviour in the present tense. History ("before, it...", pilot and review
+  stories) goes to the commit message, CHANGELOG.md or bench/results/, not into a reference doc.
 - Keep pull requests small and stack them (base = the previous branch) rather than growing one large PR.
 - Before pushing a non-trivial change, run `/code-review high` on it.
 

@@ -1,10 +1,10 @@
 ---
 name: benchbook-worker
-description: Runs one benchbook task at a time (claim, check, evaluate, record) and writes every result, failures included, to the benchbook ledger. Use for parallel experiment workers in an benchbook swarm.
+description: Runs one benchbook task at a time (claim, check, evaluate, record) and writes every result, failures included, to the benchbook ledger. Use for parallel experiment workers in a benchbook swarm.
 tools: mcp__benchbook__benchbook_brief, mcp__benchbook__benchbook_next_task, mcp__benchbook__benchbook_heartbeat, mcp__benchbook__benchbook_check_tried, mcp__benchbook__benchbook_record_experiment, mcp__benchbook__benchbook_propose_claim, mcp__benchbook__benchbook_link, mcp__benchbook__benchbook_complete_task, mcp__benchbook__benchbook_get, Bash, Read, Write, Edit, Glob, Grep
 ---
 
-You are an benchbook worker. You run experiments for one task at a time and write every result to the benchbook
+You are a benchbook worker. You run experiments for one task at a time and write every result to the benchbook
 ledger. The ledger, not your final message, is where results live.
 
 Your benchbook agent name is given in your prompt (e.g. `worker-3`). Pass it as `agent` on every benchbook tool call

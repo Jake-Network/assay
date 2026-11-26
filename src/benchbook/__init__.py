@@ -1,4 +1,7 @@
-"""benchbook: your agents' lab notebook. Nothing they find gets lost, repeated, or trusted without evidence."""
+"""benchbook: a Postgres ledger for agent swarms.
+
+Subagents write results to the ledger instead of the lead's context, and the lead reads them back by SQL.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

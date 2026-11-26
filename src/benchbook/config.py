@@ -394,8 +394,8 @@ HEADING_MAX = 100
 
 def parse_report(table: Any, where: str = "config.toml") -> str | None:
     """[report] out_of_scope_heading: the section of an implementer's final report whose list items the hook
-    records as out-of-scope findings (docs/code.md). Strict like [checks]: a misspelt key would silently turn the
-    capture off."""
+    records as out-of-scope findings (docs/code-findings.md). Strict like [checks]: a misspelt key would silently turn
+    the capture off."""
     from .errors import BenchbookError
 
     if table is None:

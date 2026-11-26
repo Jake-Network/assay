@@ -1,4 +1,4 @@
-"""Out-of-scope findings in an implementer's final report (spec §8 P1, docs/code.md).
+"""Out-of-scope findings in an implementer's final report (spec §8 P1, docs/code-findings.md).
 
 When .benchbook/config.toml sets [report] out_of_scope_heading, the result-capture hook (hooks.process) reads the
 section of the subagent's final report under that heading and records one observation claim per top-level list
@@ -31,7 +31,7 @@ from ..core.dedup import normalize_statement
 if TYPE_CHECKING:
     from ..core.ledger import Ledger
 
-# Tags (docs/code.md "Out-of-scope findings"): the brief and the PR summary select findings by these.
+# Tags (docs/code-findings.md "Out-of-scope findings"): the brief and the PR summary select findings by these.
 FINDING_TAG = "out-of-scope"
 FILE_TAG = "file:"
 PIECE_TAG = "piece:"
@@ -218,7 +218,7 @@ def _items(lines: list[str], want: str) -> list[tuple[str, list[str]]]:
 
 
 def _paths(text: str, root: str | None) -> tuple[str, ...]:
-    """Repository-relative paths named in text, in order (docs/code.md defines what counts as one)."""
+    """Repository-relative paths named in text, in order (docs/code-findings.md defines what counts as one)."""
     out: list[str] = []
     ticked = [(m.group(1).strip(), True) for m in _TICKED.finditer(text)]
     bare = [(m.group(0), False) for m in _BARE.finditer(_TICKED.sub(" ", text))]

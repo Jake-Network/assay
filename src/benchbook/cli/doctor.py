@@ -1,8 +1,9 @@
 """`benchbook doctor` checks for the Claude Code connection. Each failing check carries the one command that fixes it.
 
 Claude Code starts `benchbook mcp` and `benchbook hook` itself, with its own PATH and the `env` of its settings
-files. When those differ from the shell the user tests in, the MCP server does not connect or the hook exits 127 at
-every subagent stop, and Claude Code does not say why. These checks compare the two sides.
+files. When those differ from the shell the user tests in, the MCP server does not connect or every hook is skipped
+(the plugin's script notes it in missing-cli and exits 0), and Claude Code does not say why. These checks compare
+the two sides.
 """
 from __future__ import annotations
 
@@ -402,9 +403,14 @@ def check_hook_cli() -> Check | None:
     if not found:
         return None
     lines = [x for p in found for x in p.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
-    return Check("hook cli", False, f"{len(lines)} hook run(s) found no benchbook command on PATH ({found[0]}); "
-                                    "nothing was recorded for them",
-                 f"uv tool install benchbook (then remove {found[0]})")
+    detail = f"{len(lines)} hook run(s) found no benchbook command on PATH ({found[0]}); nothing was recorded for them"
+    if (cli := shutil.which("benchbook")) is not None:
+        # The CLI is here now: what is left is the record, or a PATH the harness does not share with this shell.
+        return Check("hook cli", False, f"{detail}; benchbook is on this shell's PATH now ({cli})",
+                     f"start Claude Code from a shell where `command -v benchbook` finds it, then remove {found[0]}")
+    return Check("hook cli", False, detail,
+                 "uv tool install --from git+https://github.com/Jake-Network/benchbook benchbook "
+                 f"(then remove {found[0]})")
 
 
 def check_plugin_hooks() -> Check | None:
@@ -457,7 +463,7 @@ def claude_code_checks(root: Path) -> list[Check]:
     else:
         checks.append(Check("claude code", True, f"{claude_dir()} not found; connection checks skipped"))
     checks += _guarded("hook failures", check_hook_log, root.resolve())
-    checks += _guarded("harness hook input", check_harness_input)  # Codex, Cursor, Gemini (docs/harnesses.md)
+    checks += _guarded("harness hook input", check_harness_input)  # every harness but Claude Code (docs/harnesses.md)
     return checks
 
 

@@ -1,4 +1,4 @@
-"""Pieces of coding work and the paths they occupy (spec §8 "P1 path occupancy", docs/code.md).
+"""Pieces of coding work and the paths they occupy (spec §8 "P1 path occupancy", docs/code-pieces.md).
 
 A piece is a worker intent (Ledger.create_intent): a task tagged `intent`, `piece` and `piece:<name>`, held by
 the agent that started it, with spec {"piece", "paths", "declared"}. `declared` is what --paths was given; `paths`

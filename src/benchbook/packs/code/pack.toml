@@ -7,7 +7,7 @@ dedup_ignore = ["approach", "paths", "notes"]
 dedup_mode = "notify"
 ok_metrics_required = ["checks_passed", "checks_total"]
 # Per module tag (benchbook brief --tags mod:media): discarded approaches, open out-of-scope findings, occupied paths
-# and the last verified commit per piece (docs/code.md, "The brief").
+# and the last verified commit per piece (docs/code-brief.md, "The brief").
 brief_compiler = "benchbook.packs.code.brief:compile_brief"
 
 # What verifies a completion by oracle rerun (docs/code.md, "Verified completion"): at least min_runs re-runs of the
@@ -39,7 +39,7 @@ occupied = 8
 verified = 8
 rerun = 8
 
-# What follows "checked:" on a brief line and in benchbook get, per decision oracle (docs/code.md, "The brief").
+# What follows "checked:" on a brief line and in benchbook get, per decision oracle (docs/code-brief.md, "The brief").
 [brief.labels]
 rerun = "re-run"
 pytest = "re-run"

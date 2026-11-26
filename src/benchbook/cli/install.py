@@ -1,6 +1,7 @@
 """`benchbook install` and `benchbook uninstall` (T07): one line in, one line out.
 
-install, for Claude Code (the default): the CLI at this version (`uv tool install benchbook==<version>`), the
+install, for Claude Code (the default): the CLI at this version (`uv tool install benchbook==<version>` for a release,
+the git repository for a development build, which is not on PyPI), the
 marketplace and the hook plugin (`benchbook@benchbook`; the MCP server is the separate `benchbook-mcp` plugin,
 installed only with --mcp). Without a `claude` command the Claude Code steps are printed instead of run. For Codex,
 Cursor and Gemini CLI, it merges the packaged hooks into the user's settings.
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -71,6 +73,49 @@ def version() -> str:
     from .. import __version__
 
     return str(__version__)
+
+
+GIT_SOURCE = "git+https://github.com/Jake-Network/benchbook"
+RELEASE = re.compile(r"\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?")
+_UNREAD = object()
+
+
+def install_source() -> dict[str, Any] | None:
+    """Where this benchbook was installed from (PEP 610 direct_url.json); None for an index install or when unknown."""
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        raw = distribution("benchbook").read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def cli_install_command(v: str | None = None, source: Any = _UNREAD) -> list[str] | None:
+    """The command that installs this build's CLI again, or None when no source reproduces it.
+
+    A release is on PyPI under its version. A development build (`0.1.devN+g<commit>`) never is: it is reinstalled
+    from the git repository and commit it was installed from, and from the same subdirectory when the package was not
+    at the repository's root. A build from a local directory, a modified checkout or a source this function cannot
+    write back as a uv requirement has nothing to pin, and its CLI is left as it is."""
+    v = version() if v is None else v
+    if RELEASE.fullmatch(v):
+        return ["uv", "tool", "install", f"benchbook=={v}"]
+    src = install_source() if source is _UNREAD else source
+    vcs = (src or {}).get("vcs_info") or {}
+    url, commit, subdir = (src or {}).get("url"), vcs.get("commit_id"), (src or {}).get("subdirectory")
+    if not (vcs.get("vcs") == "git" and isinstance(url, str) and url and "#" not in url
+            and isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,64}", commit)):
+        return None
+    if subdir is None:
+        return ["uv", "tool", "install", "--from", f"git+{url}@{commit}", "benchbook"]
+    if isinstance(subdir, str) and re.fullmatch(r"[\w.\-/]+", subdir) and ".." not in subdir.split("/"):
+        return ["uv", "tool", "install", "--from", f"git+{url}@{commit}#subdirectory={subdir}", "benchbook"]
+    return None
 
 
 def manifest(harness: str) -> dict[str, Any]:
@@ -139,14 +184,20 @@ def install(harness: str = "claude-code", *, dry_run: bool = False, mcp: bool = 
         raise BenchbookError(f"--harness: one of {', '.join(HARNESSES)}")
     plan = Plan(dry_run)
     if cli:
-        plan.run(["uv", "tool", "install", f"benchbook=={version()}"], optional=True)
+        if (cmd := cli_install_command()) is not None:
+            plan.run(cmd, optional=True)
+        else:
+            plan.done.append(f"kept the current benchbook CLI: build {version()} has no source to install it from "
+                             f"again (a local or modified checkout); install one with uv tool install --from "
+                             f"{GIT_SOURCE} benchbook, or pass --no-cli")
     if harness == "claude-code":
+        plugins = [PLUGINS[0], *([PLUGINS[1]] if mcp else [])]
         if plan.run(["claude", "plugin", "marketplace", "add", MARKETPLACE]):
-            plan.run(["claude", "plugin", "install", PLUGINS[0]])
-            if mcp:
-                plan.run(["claude", "plugin", "install", PLUGINS[1]])
+            for name in plugins:
+                plan.run(["claude", "plugin", "install", name])
         elif not dry_run:
-            plan.done.append(f"run yourself: claude plugin install {PLUGINS[0]}")
+            plan.done.append("run yourself: " + " && ".join(
+                [f"claude plugin marketplace add {MARKETPLACE}", *(f"claude plugin install {n}" for n in plugins)]))
     else:
         target = manifest_target(harness)
         current = json.loads(target.read_text(encoding="utf-8")) if target.is_file() else {}
