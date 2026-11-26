@@ -7,7 +7,7 @@ benchbook install --no-cli --harness cursor    # merges hooks.json into ~/.curso
 
 To install in one project only, copy [hooks.json](hooks.json) to `.cursor/hooks.json` when the project has none (the
 whole file, `"version": 1` included); when it has one, add benchbook's entries to its `hooks` and keep its `version`
-and its other hooks.
+and its other hooks. Cursor runs project hooks only in a trusted workspace.
 Cursor reloads `hooks.json` on save; the Hooks tab in Customize and the Hooks output channel show what ran.
 
 Run `benchbook init` in the project, and start Cursor from a shell where `benchbook doctor` passes, or set the
