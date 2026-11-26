@@ -5,6 +5,17 @@ change followed repeated findings of one kind, the entry keeps one sentence on w
 (CLAUDE.md, "Review findings"). What changed when, and the reviews and pilots behind it, are in git, CHANGELOG.md and
 bench/results/. Pn is a product principle, §n a section of the spec, Tnn a boundary-mode task.
 
+## Positioning
+
+- **A ledger for agent swarms first.** The README and the package summary present benchbook as a Postgres ledger
+  for agent swarms: subagents write their results to the database instead of the lead's context, and the lead reads
+  them back as a budgeted brief and by SQL, so a swarm can grow without filling the lead's context window. That is
+  the problem benchbook was built for. Re-running a reported "done" and replicating experiment results are presented
+  as what makes those results safe to build on, not as the headline. From 2026-11-22 to 2026-11-26 the README led
+  with verification, because the SWE-bench run supported it (17.9% of reported completions failed a re-run) while
+  the H5 fan-in sweep missed its gate; the owner chose the swarm framing on 2026-11-26. The README states H5 as
+  measured: report tokens to the lead fell by more than half, peak lead context did not.
+
 ## Name
 
 - **benchbook.** The notebook kept next to the bench. `assay` was dropped because four PyPI packages (`assay-ai`,
