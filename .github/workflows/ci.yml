@@ -42,7 +42,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-groups
-      - run: uv run pytest -q
+      # in parallel, then the 50 ms hook timing tests alone: under the load of the other workers they measure the load
+      - run: uv run pytest -q -n auto -k "not within_50ms"
+      - run: uv run pytest -q tests/test_hooks.py -k within_50ms
       # first run from an empty directory; its data dir contains a space, like macOS's default
       - run: bash scripts/qa_first_experiment.sh
 
