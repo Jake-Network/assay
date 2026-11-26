@@ -420,6 +420,9 @@ def test_a_nameless_rerun_names_what_decides_only_when_it_can(repo: Path, vtmp: 
     _, rec = checks.verify(harness, "broken", bad, repo=repo, reported_by="impl")
     assert rec.relation == "refutes" and rec.outcome is not None
     assert rec.outcome.reason.endswith("(orchestrator or human role)")  # a lead's re-run would not decide either
+    worker = open_as(db_url, code_project, "impl-2")  # a named worker is not handed the lead's command
+    _, rec = checks.verify(worker, "peer", good, repo=repo, reported_by="impl")
+    assert rec.outcome is not None and rec.outcome.reason.endswith("(orchestrator or human role)")
 
 
 def test_cli_verify_under_a_lead_token(repo: Path, vtmp: Path, db_url: str, code_project: str) -> None:

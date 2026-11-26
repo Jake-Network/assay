@@ -29,8 +29,7 @@ WITH reports AS (
          CASE WHEN bool_or(r.status = 'refuted' OR (r.status = 'inconclusive' AND r.last_oracle = 'rerun')
                            OR (r.status <> 'verified' AND r.n_refute > 0)) THEN 'rerun_mismatch'
               WHEN bool_or(r.status = 'verified' AND NOT r.evidence_invalidated) THEN 'verified'
-              WHEN bool_or(r.status IN ('proposed', 'supported', 'inconclusive') AND r.n_support > 0)
-                THEN 'rerun_undecided'
+              WHEN bool_or(r.status IN ('proposed', 'inconclusive') AND r.n_support > 0) THEN 'rerun_undecided'
               ELSE 'reported_only' END AS state
   FROM reports r JOIN latest l USING (piece, commit)
   GROUP BY r.piece

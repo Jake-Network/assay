@@ -816,7 +816,8 @@ by hand, not a live session). Four are fixed; the fourth is not.
 
 - **A re-run without lead authority says what decides it.** The README's first lead command, run as written, ended
   in "recorded without a decision" and left `status` at 0 verified; a pilot's lead stopped at the same line. The
-  rule stays (CI depends on a nameless run only recording); the line now ends with the command to run next: the
+  rule stays (CI depends on a nameless run only recording); for the nameless `verifier@<host>` (harness role; a
+  named worker is not shown how to decide as the lead) the line now ends with the command to run next: the
   same `check verify` with `--agent lead` (repeating `--base` and `--project`, so it reads the same merge-base
   and project), but only when that run would decide verified: this run passed every declared check, no run of the
   commit failed, and the claim is proposed or supported. When an attempt weakened tests or the lead is an
@@ -834,8 +835,10 @@ by hand, not a live session). Four are fixed; the fourth is not.
 - **status names an undecided re-run as the brief does.** A piece whose latest completion is `proposed` or
   `inconclusive` with at least one supporting re-run was "reported only" in `status` and "Re-run, not decided" in
   the brief, so the two screens disagreed about the same piece. status now uses the brief's condition (the RERUN
-  query of the code pack's brief: an open completion with a supporting re-run, `supported` included) as a fourth
-  state between verified and reported only; a refutation still counts as a rerun mismatch first. status still looks
-  at each piece's latest reported commit only, so a re-run of an older commit that the brief lists does not count.
+  query of the code pack's brief: `proposed` or `inconclusive` with a supporting re-run) as a fourth state between
+  verified and reported only; a refutation still counts as a rerun mismatch first. A `supported` completion (the
+  first of the two rerun decisions) is in neither, and stays "reported only" until both change together. status
+  still looks at each piece's latest reported commit only, so a re-run of an older commit that the brief lists does
+  not count.
   A code project's `init` names the code commands next; the experiment mode's `exp record` line is kept for the
   other packs.

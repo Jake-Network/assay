@@ -638,12 +638,13 @@ def _discard(lg: Ledger, v: Verification, rec: Recorded) -> None:
 
 
 def _next_step(lg: Ledger, v: Verification, rec: Recorded, info: dict[str, Any], human: str) -> str:
-    """What decides a completion that a run without lead authority recorded: the same re-run as the lead when that
-    run would decide verified, a person when a re-run cannot (weakened tests, or the lead is an implementer), and
-    nothing more after a failed or partial run. Not under a token: it names one agent, which --agent lead would
-    contradict. A re-run, not decide --oracle rerun on the stored attempts, which takes two steps (DECISIONS.md)."""
-    if lg.token is not None or not rec.reported_by:
-        return ""
+    """What decides a completion that the nameless verifier (harness role) recorded: the same re-run as the lead
+    when that run would decide verified, a person when a re-run cannot (weakened tests, or the lead is an
+    implementer), and nothing more after a failed or partial run. Not under a token: it names one agent, which
+    --agent lead would contradict. A re-run, not decide --oracle rerun on the stored attempts, which takes two steps
+    (DECISIONS.md)."""
+    if lg.role != "harness" or lg.token is not None or not rec.reported_by:
+        return ""  # only the nameless verifier@<host>: a worker is not shown how to decide a piece as the lead
     attempts = info["attempts"]
     if any(a["guard_weakened"] is True or a["checks_changed"] is True for a in attempts) \
             or "lead" in info["implementers"]:
