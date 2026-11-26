@@ -26,10 +26,10 @@ export BENCHBOOK_AGENT=gpu0-$(hostname -s) CUDA_VISIBLE_DEVICES=0
 benchbook ar init && claude "Read program.benchbook.md and start."
 ```
 
-With the owner's URL anyone who connects can write; give machines the writer login and per-agent tokens
-([Several machines](https://github.com/Jake-Network/benchbook/blob/main/docs/multi-machine.md#per-agent-tokens)) so
-every write is bound to its agent. Replication still keeps a single fabricated value from becoming the shared
-baseline.
+`benchbook ar` runs on the owner's URL: it does not support the writer login and per-agent tokens yet. `ar init`
+creates the project, which the writer login may not, every agent is named by `BENCHBOOK_AGENT` rather than by its
+token, and the referee writes under its own name, which a token connection refuses. Keep the database on a network
+only the GPU machines reach. Replication still keeps a single fabricated value from becoming the shared baseline.
 
 ## Files
 
