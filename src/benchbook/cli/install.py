@@ -99,16 +99,22 @@ def cli_install_command(v: str | None = None, source: Any = _UNREAD) -> list[str
     """The command that installs this build's CLI again, or None when no source reproduces it.
 
     A release is on PyPI under its version. A development build (`0.1.devN+g<commit>`) never is: it is reinstalled
-    from the git repository and commit it was installed from. A build from a local directory, a modified checkout or
-    an unknown source has nothing to pin, and its CLI is left as it is."""
+    from the git repository and commit it was installed from, and from the same subdirectory when the package was not
+    at the repository's root. A build from a local directory, a modified checkout or a source this function cannot
+    write back as a uv requirement has nothing to pin, and its CLI is left as it is."""
     v = version() if v is None else v
     if RELEASE.fullmatch(v):
         return ["uv", "tool", "install", f"benchbook=={v}"]
     src = install_source() if source is _UNREAD else source
     vcs = (src or {}).get("vcs_info") or {}
-    url, commit = (src or {}).get("url"), vcs.get("commit_id")
-    if vcs.get("vcs") == "git" and isinstance(url, str) and url and isinstance(commit, str) and commit:
+    url, commit, subdir = (src or {}).get("url"), vcs.get("commit_id"), (src or {}).get("subdirectory")
+    if not (vcs.get("vcs") == "git" and isinstance(url, str) and url and "#" not in url
+            and isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{7,64}", commit)):
+        return None
+    if subdir is None:
         return ["uv", "tool", "install", "--from", f"git+{url}@{commit}", "benchbook"]
+    if isinstance(subdir, str) and re.fullmatch(r"[\w.\-/]+", subdir) and ".." not in subdir.split("/"):
+        return ["uv", "tool", "install", "--from", f"git+{url}@{commit}#subdirectory={subdir}", "benchbook"]
     return None
 
 
