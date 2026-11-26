@@ -194,6 +194,10 @@ quarantined with the `.invalid` suffix. An entry without a recorded capture deci
 replay` captures it. After an outage or a fix, `benchbook hook replay` retries pending and dead reports once in the
 foreground using the same database settings. See `~/.local/state/benchbook/hook.log` for capture and retry status.
 
+Reports queued by a build from before the per-target spool folders sit at the root of the spool directory, where
+`hook replay` does not look. To record one, run `python -m benchbook.hooks /path/to/entry.json` with the Python
+environment benchbook is installed in and the original session's project and database settings.
+
 When there are dead or overdue spool entries or recent hook failures, the code brief opens with a recording warning
 and the replay command (docs/code.md, "The brief").
 

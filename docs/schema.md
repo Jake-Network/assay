@@ -31,7 +31,7 @@ checks only compare experiments whose `config[partition_key]` is equal.
 
 ## Roles
 
-Revision 0008 creates the two login roles and the per-agent tokens.
+Revision 0003 creates `benchbook_reader`; revision 0008 adds the `benchbook_writer` login and the per-agent tokens.
 
 | role | can | used by |
 |---|---|---|

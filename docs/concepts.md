@@ -54,7 +54,7 @@ attempt is a commit of a piece judged by the declared checks ([code.md](code.md)
 | a piece | a task: a worker intent tagged `intent`, `piece` and `piece:<name>`, whose spec holds the paths it occupies |
 | a check run (`check verify`, `check run`) | an experiment: config `{"piece", "checks"}`, code_ref the commit, metrics `checks_passed` and `checks_total`; the piece is the partition |
 | a re-run of a commit already checked | an experiment too: the code pack's `dedup_mode` is `notify`, so it is stored and names the first run |
-| a worker's `DONE <sha>` | a `completion` claim `<piece> is complete at <sha12>`, tagged `piece:` and `commit:`, in the implementer's name |
+| a worker's `DONE <sha>` | a `completion` claim `<piece> is complete at <sha12>`, tagged `piece:` and `commit:`, in the implementer's name (under a token, in the verifier's name with the implementer in `payload.reported_by`) |
 | verifying it | a decision `verified`, oracle `rerun`, under the pack's `all_pass` rule |
 | the checks pinned for a project or piece | a `note` claim tagged `checks-pin` |
 | a discarded approach | an `observation` claim tagged `discarded` and `piece:<piece>`, with the failure signature |
@@ -99,8 +99,8 @@ Decisions store the values checked in `oracle_detail.rerun_check`. `llm_judge` c
 
 This is the default `rerun` rule (`[verify] rule = "replication"` in pack.toml). The code pack declares
 `rule = "all_pass"` instead: a completion is verified by passing, clean re-runs of its piece at its commit by
-agents other than its implementer, and a commit that touched a guarded path or changed `[checks]` needs a person
-([code.md](code.md#verified-completion)).
+agents other than its implementer, and a commit that weakened a test or changed `[checks]` needs a person; one that
+only adds tests does not ([code.md](code.md#verified-completion)).
 
 An experiment's only status change is `invalidated` (an evaluator bug or exploit was found). Invalidated
 experiments are excluded from best, outcome calculation, "already tried", and recent brief activity. Claims
