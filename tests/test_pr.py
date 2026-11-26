@@ -72,6 +72,19 @@ def test_pieces_come_from_the_trailer_and_the_last_commit_carrying_it_wins(tmp_p
     assert pr.pieces(repo, "HEAD", "HEAD") == ([], [])
 
 
+def test_whole_as_names_the_head_only_when_no_trailer_does(tmp_path: Path) -> None:
+    repo = new_repo(tmp_path / "repo")
+    base = git(repo, "rev-parse", "HEAD")
+    commit(repo, "no trailer", {"a.txt": "1\n"})
+    head = commit(repo, "a bad value only\n\nBenchbook-Piece: has a space", {"a.txt": "2\n"})
+    assert pr.pieces(repo, base, "HEAD", whole_as="pr-7") == ([pr.Piece("pr-7", head)], ["has a space"])
+    with_trailer = commit(repo, "x\n\nBenchbook-Piece: alpha", {"a.txt": "3\n"})
+    assert pr.pieces(repo, base, "HEAD", whole_as="pr-7")[0] == [pr.Piece("alpha", with_trailer)]  # ignored
+    with pytest.raises(pr.BenchbookError, match="not a piece name"):
+        pr.pieces(repo, base, "HEAD", whole_as="pr 7")
+    assert pr.pieces(repo, "HEAD", "HEAD", whole_as="pr-7") == ([], [])  # no commit, no piece
+
+
 def test_pieces_cli_prints_tab_separated_lines(tmp_path: Path) -> None:
     repo = new_repo(tmp_path / "repo")
     base = git(repo, "rev-parse", "HEAD")
@@ -434,17 +447,57 @@ def test_action_says_why_it_does_nothing(tmp_path: Path, gh: Path, case: str) ->
         env["BB_HEAD_REPO"] = "someone/fork"
     elif case == "dependabot":
         env.update(BB_DATABASE_URL="", GITHUB_ACTOR="dependabot[bot]")
-    elif case == "missing secret":
+    elif case == "missing secret":  # a ledger of the run's own, but no config committed at the merge-base
         env["BB_DATABASE_URL"] = ""
     else:
         env["GITHUB_EVENT_NAME"] = "pull_request_target"
     r = run_action(repo, env)
     if case in ("fork", "dependabot"):
         assert r.returncode == 0 and "::notice title=benchbook::" in r.stdout and "no secrets" in r.stdout
+    elif case == "missing secret":
+        assert r.returncode == 0 and "::notice title=benchbook::" in r.stdout
+        assert "no config committed at the merge-base" in r.stdout and "git add -f .benchbook/config.toml" in r.stdout
     else:
         assert r.returncode == 1 and "::error title=benchbook::" in r.stdout
     assert not gh.exists()  # nothing was commented
     assert "secret-password" not in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("change", ["code only", "weakened test"])
+def test_action_without_a_ledger_rereruns_the_pull_request_as_one_piece(tmp_path: Path, gh: Path, change: str) -> None:
+    """No database-url: a ledger of this run only, the whole pull request as piece pr-<number>, reported by its
+    author, with the checks committed at the merge-base. Starts an embedded Postgres in RUNNER_TEMP."""
+    repo = new_repo(tmp_path / "repo", CHECKS.replace("{env_dump}", ""))
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "feature")
+    files = ({"a.txt": "changed\n"} if change == "code only" else
+             {"tests/test_a.py": "def test_a():\n    assert True\n"})
+    head = commit(repo, "no trailer", files)
+    exclude = (repo / ".git" / "info" / "exclude").read_text()
+    # a pre-rename variable must not lead the run back to a shared ledger (this one would refuse the connection)
+    env = action_env(tmp_path, {"base": base, "head": head}, BB_DATABASE_URL="", BB_PR_AUTHOR="octo-agent[bot]",
+                     ASSAY_DATABASE_URL="postgresql://u@127.0.0.1:1/legacy")
+    # conftest moved the state and data folders into a temporary one, and the action inherits them: a run that
+    # misses BENCHBOOK_DATA_DIR still does not write to the developer's real folders
+    data = Path(env["XDG_DATA_HOME"])
+    assert env["XDG_DATA_HOME"] == os.environ["XDG_DATA_HOME"] and not data.is_relative_to(Path.home())
+    r = run_action(repo, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "::notice title=benchbook::no database-url" in r.stdout
+    # init ran outside the checkout: no config rewritten, no exclude line, nothing pinned from the pull request
+    assert git(repo, "status", "--porcelain") == "" and (repo / ".git" / "info" / "exclude").read_text() == exclude
+    [c] = comments(gh)
+    body = c["body"]
+    assert body.startswith(pr.MARKER + "\n")
+    state = "verified" if change == "code only" else "claimed only"
+    assert re.search(rf"^\| `pr-7` \| `{head[:12]}` \| \*\*{state}\*\*", body, re.M), body
+    assert ("tests weakened: `tests/test_a.py`" in body) is (change == "weakened test")
+    assert "no shared ledger (no `database-url`)" in body and "this workflow run only" in body
+    assert (tmp_path / "runner-temp" / "benchbook-ledger").is_dir()  # the run's own embedded ledger
+    assert ("independent: `ci:41`" in body) is (change == "code only")
+    again = run_action(repo, {**env, "GITHUB_RUN_ID": "42"})
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert [x["id"] for x in comments(gh)] == [c["id"]]  # still one comment
 
 
 def test_action_files_keep_inputs_out_of_the_script_text() -> None:

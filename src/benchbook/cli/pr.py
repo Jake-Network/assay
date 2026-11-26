@@ -14,6 +14,9 @@ pr_app = typer.Typer(no_args_is_help=True, help="Pull requests: the pieces their
 
 BASE = typer.Option("--base", help="The pull request's base commit (its commits are BASE..HEAD)")
 HEAD = typer.Option("--head", help="The pull request's head commit")
+WHOLE_AS = typer.Option("--whole-as", metavar="NAME",
+                        help="When no commit of BASE..HEAD carries a trailer, take HEAD as the commit of piece NAME "
+                             "(the GitHub Action without a ledger passes pr-<number>)")
 
 
 @pr_app.command("pieces")
@@ -23,13 +26,14 @@ def pieces_cmd(
     claims: Annotated[bool, typer.Option(
         "--claims", help="Add two columns from the ledger: the reporter of the piece's completion claim at that "
                          "commit and the claim's id, for check verify --claim ('-' when nobody reported it)")] = False,
+    whole_as: Annotated[str | None, WHOLE_AS] = None,
 ) -> None:
     """One line per piece a commit of BASE..HEAD names in a Benchbook-Piece trailer: piece, commit (tab separated).
     The last commit carrying a piece's trailer is that piece's commit."""
     from ..code.pr import completion, pieces
     from .main import emit, ledger
 
-    found, skipped = pieces(Path.cwd(), base, head)
+    found, skipped = pieces(Path.cwd(), base, head, whole_as=whole_as)
     _warn(skipped)
     rows: list[dict[str, str | None]] = [{"piece": p.piece, "commit": p.commit} for p in found]
     if claims and found:
@@ -52,6 +56,7 @@ def summary_cmd(
     base: Annotated[str, BASE],
     head: Annotated[str, HEAD] = "HEAD",
     run_url: Annotated[str | None, typer.Option("--run-url", help="Link to the CI run, shown in the summary")] = None,
+    whole_as: Annotated[str | None, WHOLE_AS] = None,
 ) -> None:
     """Print the markdown summary of BASE..HEAD's pieces: per piece its state (verified, claimed only, re-run
     disagrees, not reported), the runs of its commit, discarded approaches, open out-of-scope findings and whether
@@ -59,7 +64,7 @@ def summary_cmd(
     from ..code.pr import describe, pieces, render
     from .main import emit, ledger
 
-    found, skipped = pieces(Path.cwd(), base, head)
+    found, skipped = pieces(Path.cwd(), base, head, whole_as=whole_as)
     _warn(skipped)
     lg = ledger(read_only=True)
     states = describe(lg, found)

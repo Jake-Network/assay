@@ -2,6 +2,10 @@
 
 ## Unreleased: code pack
 
+- The GitHub Action runs without `database-url`: it keeps a ledger of that workflow run only, re-runs the checks
+  committed at the merge-base (a notice when there are none), treats a pull request without trailers as one piece
+  `pr-<number>` reported by its author, and says in the comment that there was no shared ledger. Before, it failed
+  with "no ledger". `pr pieces` and `pr summary` take `--whole-as NAME` for that piece.
 - `benchbook status` counts a piece whose re-run passed but was not decided (a weakened test waiting for a person,
   or a re-run without lead authority) as "re-run not decided", as the brief does, not as "reported only"; `--json`
   has `pieces.rerun_undecided`, and the status line's total includes it. `init` of a code project ends with

@@ -68,7 +68,8 @@ benchbook piece start media-upload --paths 'src/media/**'   # occupy paths so tw
 
 `benchbook statusline` prints a one-line count for a status line. The [GitHub Action](integrations/github-action/README.md)
 re-runs each piece a pull request completes and keeps one comment saying which completions an independent re-run
-confirmed.
+confirmed. Without `database-url` it runs with a ledger of that workflow run only and needs nothing but the
+`[checks]` committed in `.benchbook/config.toml`.
 
 ## Other harnesses
 

@@ -818,8 +818,8 @@ request completes and keeps one comment on the pull request that says which comp
 confirmed. The logic is in three commands, which run anywhere:
 
 ```bash
-benchbook pr pieces --base BASE [--head HEAD] [--claims]   # piece<TAB>commit[<TAB>reporter<TAB>claim], one per piece
-benchbook pr summary --base BASE [--head HEAD] [--run-url URL]   # the markdown, starting with the marker
+benchbook pr pieces --base BASE [--head HEAD] [--claims] [--whole-as NAME]   # piece<TAB>commit[<TAB>reporter<TAB>claim]
+benchbook pr summary --base BASE [--head HEAD] [--run-url URL] [--whole-as NAME]   # the markdown, starting with the marker
 benchbook pr comment --repo OWNER/NAME --pr N --body-file F [--author LOGIN] [--update-only]
 ```
 
@@ -838,6 +838,16 @@ tags and its payload names that piece and commit; with several, a verified one, 
 reported*: CI never reports a completion on someone's behalf. Then `pr summary` and `pr comment`. The job fails when
 a re-run failed a check. A pull request rebased after the lead's `check verify` has new commit ids, so its pieces
 have no claim at the new commits until someone reports them there.
+
+**Without a ledger.** With no `database-url` the action creates a ledger for the workflow run only (an embedded
+Postgres in `RUNNER_TEMP`, `benchbook init --pack code` run in an empty repository there, so nothing is pinned from
+the pull request's files), and when no commit carries a trailer it passes
+`--whole-as pr-<number>` to `pr pieces` and `pr summary`, so the whole pull request is one piece at its head,
+reported by the pull request's author. The checks still come only from the config committed at the merge-base;
+without one the action ends with a notice (commit it with `git add -f .benchbook/config.toml`, see
+[Set up](#set-up)). It always records with `--no-decide`, and the comment says the run had no shared ledger, so
+no discarded approach or finding from agent sessions shows. What it adds to a plain CI test run is the weakened-test
+mark (the action's README, "Without a ledger").
 
 **The summary**, per piece: the state, the runs of its commit (passed, failed, and the independent authors), the
 number of discarded approaches (`observation` claims tagged `discarded` and `piece:<piece>`, any status), the open

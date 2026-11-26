@@ -842,3 +842,17 @@ by hand, not a live session). Four are fixed; the fourth is not.
   not count.
   A code project's `init` names the code commands next; the experiment mode's `exp record` line is kept for the
   other packs.
+- **The GitHub Action without a ledger.** Trying the action meant a shared Postgres, a secret and a commit trailer
+  in every agent's commits; without them it failed or commented nothing. The part of benchbook that is worth having
+  from CI alone, an independent re-run that also marks weakened tests, needs none of that. Without `database-url`
+  the action now creates a ledger for the workflow run and, when no commit has a trailer, treats the pull request as
+  one piece `pr-<number>` at its head, reported by its author (so the summary has a claim to show as verified or
+  claimed only). The checks come from the config committed at the merge-base only, as `check verify` reads them;
+  proposing them from the pull request's files or falling back to a ledger pin would let the pull request choose
+  its own checks, so a repository without a committed config gets a notice instead. For the same reason init runs in
+  an empty repository under `RUNNER_TEMP`, not in the checkout, where it would pin the pull request's config, which
+  `check verify` falls back to for a piece whose own merge-base has no config (it also left the checkout modified);
+  and the pre-rename `ASSAY_*` variables are unset with the others, since benchbook still reads them and one would
+  lead back to a shared ledger (both from the review). Deciding and tokens are for a
+  shared ledger and are ignored with a warning. Fork and Dependabot pull requests are skipped as before, and the
+  shared ledger mode is unchanged, including not starting a comment on a pull request without trailers.

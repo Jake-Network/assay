@@ -63,7 +63,8 @@ benchbook piece start media-upload --paths 'src/media/**'   # 경로를 점유�
 ```
 
 `benchbook statusline`은 status line용 한 줄 집계를 출력한다. [GitHub Action](integrations/github-action/README.md)은
-PR이 완료한 조각을 다시 돌리고, 독립 재실행이 확인한 완료를 댓글 하나에 정리한다.
+PR이 완료한 조각을 다시 돌리고, 독립 재실행이 확인한 완료를 댓글 하나에 정리한다. `database-url`이 없으면 그
+workflow 실행만의 임시 ledger로 돌고, `.benchbook/config.toml`에 커밋된 `[checks]`만 있으면 된다.
 
 ## 다른 하네스
 
