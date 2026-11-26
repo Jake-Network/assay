@@ -1,8 +1,8 @@
 # Schema
 
 Postgres schema `benchbook` (migrations: Alembic revisions that run plain SQL files in
-`src/benchbook/db/alembic/sql/`). Knowledge tables are append-only; triggers reject UPDATE and DELETE for every
-role, superusers included.
+`src/benchbook/db/alembic/sql/`). Knowledge tables are append-only: triggers reject UPDATE, DELETE and TRUNCATE for
+every role, superusers included, until an owner disables them ([concepts.md](concepts.md#honest-limits)).
 
 A ledger made before the rename (schema `assay`, revision 0007 at most) is renamed to `benchbook` in one transaction
 before Alembic runs; there is no revision number for that step. See
@@ -26,33 +26,30 @@ before Alembic runs; there is no revision number for that step. See
 | `settings_events` | every settings change: agent, JSON merge patch, resulting settings | no |
 | `blobs` | small files by content (`benchbook://blob/<sha256>`), per project; 1 MB default limit (`blob_max_bytes`) | no |
 
-Partitions (Step 3): when `settings.partition_key` is set, outcomes, `v_best`, `v_leaderboard`, `v_progress`
-and duplicate checks only compare experiments whose `config[partition_key]` is equal. Projects without it behave as
-before.
+Partitions: when `settings.partition_key` is set, outcomes, `v_best`, `v_leaderboard`, `v_progress` and duplicate
+checks only compare experiments whose `config[partition_key]` is equal.
 
-## Roles and identity (migration 0008)
+## Roles
+
+Revision 0008 creates the two login roles and the per-agent tokens.
 
 | role | can | used by |
 |---|---|---|
 | owner (whoever ran the migrations) | everything; trusted: the identity triggers let its rows through unchanged | local mode, and the operator in team mode |
-| `benchbook_writer` (login, cluster-wide) | SELECT on every table and view (on `agents` every column but `token_hash`), INSERT on the record tables and `tasks`, UPDATE on `tasks` lease columns and `projects.settings`; nothing on `agents` rows, no UPDATE or DELETE on records | agents on a shared server, each with its token (docs/multi-machine.md) |
+| `benchbook_writer` (login, cluster-wide) | SELECT on every table and view (on `agents` every column but `token_hash`), INSERT on the record tables and `tasks`, UPDATE on `tasks` lease columns and `projects.settings`; nothing on `agents` rows, no UPDATE, DELETE or TRUNCATE on records | agents on a shared server, each with its token (docs/multi-machine.md) |
 | `benchbook_reader` | SELECT on the `benchbook_q` views only | `benchbook_sql` |
 
-A session is trusted when it may update `agents.token_hash` (the owner, a superuser). Every other session must bind
-an agent before it writes: `benchbook.authenticate(project, token)` (SECURITY DEFINER) checks the token against
-`agents.token_hash` and keeps it in the transaction-local setting `benchbook.token`;
-`benchbook.session_identity(project)` returns the agent and role that setting proves. The BEFORE triggers
-`*_identity` on `experiments`, `claims`, `sources`, `links`, `blobs`, `dedup_hits`, `brief_log`, `decisions`,
-`settings_events`, `tasks`, `task_events` and `projects` hash that setting again on every row, so a name or a hash
-set by hand proves nothing. The author column (`author`, `agent_id`, `decided_by`, `created_by`) must name the
-token's agent and is filled with it when left out; decisions, settings changes, open tasks and cancellations also
-need the agent's role to be orchestrator or human; task updates must be ones the SDK makes, by the lease holder
-(or, for an expired lease, by whoever takes it over). Refusals use SQLSTATE 42501 (`insufficient_privilege`).
+A connection as `benchbook_writer` writes only after it proves an agent's token, and every row it writes is bound to
+that agent and its role: [multi-machine.md](multi-machine.md#what-it-prevents-and-what-it-does-not).
 
 ## Views
 
 `benchbook_sql` (and `benchbook sql`) can read only these views, through the `benchbook_reader` role, already
-filtered to the current project, read-only, 2 s timeout, 200 rows / ~4,000 tokens.
+filtered to the current project, read-only, 2 s timeout, 200 rows / ~4,000 tokens. The reader cannot call
+`set_config` (revoked when the migration runs as a superuser), the query text may not use `set_config`, `U&`
+escapes, the `*_to_xml` functions or `pg_settings`, and a query that changes the project or role is discarded.
+When `benchbook_reader` cannot log in, the weaker `SET ROLE` fallback needs `BENCHBOOK_SQL_ALLOW_SET_ROLE=1`
+([multi-machine.md](multi-machine.md#the-read-only-role-required-step-for-a-shared-server)).
 
 | view | columns (main) |
 |---|---|
