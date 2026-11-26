@@ -7,9 +7,11 @@ and claims for agent swarms and hands the lead a budgeted brief (`src/benchbook/
 
 ## Checks
 
-- Run the tests for the files you touched: `uv run pytest -q tests/test_<area>.py`. The full suite takes over 20
-  minutes; run it once at the end of a piece of work, not after every edit. One throwaway Postgres serves the whole
-  session and each test gets a fresh project in it, so rows other tests wrote are still in the database.
+- Run the tests for the files you touched: `uv run pytest -q tests/test_<area>.py`. Run the full suite once at the
+  end of a piece of work, in parallel (about 2 minutes on 12 workers, over 20 serially), then the 50 ms hook timing
+  tests alone, since the other workers' load slows them: `uv run pytest -q -n auto -k "not within_50ms"` and
+  `uv run pytest -q tests/test_hooks.py -k within_50ms`. Each test process (each xdist worker) has one throwaway
+  Postgres and each test gets a fresh project in it, so rows other tests wrote are still in the database.
 - Before a commit: `uv run ruff check src tests bench examples scripts`, `uv run mypy src/benchbook`,
   `uv run pytest -q tests/test_docs.py`.
 - A timing- or order-sensitive test that fails once in a full run: re-run it alone before calling it a regression.
