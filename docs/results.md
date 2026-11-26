@@ -30,7 +30,8 @@ its API cost (B: 3.2x and 1.5x). Where C's tokens go is broken down in
 each re-reading its context, rather than large tool results.
 
 **Fan-in (H5, 2026-11-25).** The same task at 8, 16 and 30 requested workers per round, A against C, USD 5 cap per
-run (mean over completed runs: 3 per configuration at 8 and 16; at 30, 2 for A and 1 for C):
+run (mean over completed runs: 3 per configuration at 8 and 16; at 30, 2 for A, and for C one of its two completed
+runs, both under other conditions, see below):
 
 | workers | lead context (max), A | lead context (max), C | report tokens to the lead, A | report tokens to the lead, C |
 |---|---|---|---|---|
