@@ -72,6 +72,18 @@ paid call when `claude --version` says otherwise; without it `--execute` only wa
 itself between runs (2.1.330 to 2.1.331 on 2026-11-24, during the H5 sweep), so pass the registered version, and
 `--claude-bin ~/.local/share/claude/versions/2.1.330` to run that build whatever `claude` on PATH has become.
 
+Two options of `bench.boundary.run` make compaction happen in a run whose lead stays far below the window
+(`--compact-window` accepts no less than 100,000 tokens, as `CLAUDE_CODE_AUTO_COMPACT_WINDOW` does).
+`--force-compact` sends `/compact` in the same session right after each phase's work call, so every arm compacts
+once at the same point; the call is `phase-NN-compact-cmd` and its `compact_boundary` event (trigger `manual`)
+leads to the usual compaction probe. `--compact-pct N` sets `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1-100) so the
+automatic compaction comes earlier; without it the host's value is removed. Both are written to `metrics.json`.
+The `/compact` call has the probe's budget cap and turn limit, and a call that emits no `compact_boundary` with
+trigger `manual` stops the run. Its boundary, being the phase's last, is the phase's compaction sample; automatic
+compactions during the work call are kept as `auto_compactions` in the phase record. Whether a headless
+`claude -p --resume` call of `/compact` really compacts, and at which percentage a task compacts, is known only
+from a paid smoke run (one arm, one trial) before the registered matrix.
+
 The first command creates local command previews and does not start Claude or initialize a ledger. The second
 uses the same Claude dollar cap, worker count, model, turn limit and wall-clock limit for each run. With the
 shown settings, the nine requested runs have a nominal API budget of USD 45. Use a Claude Code version that

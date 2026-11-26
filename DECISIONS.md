@@ -856,3 +856,22 @@ by hand, not a live session). Four are fixed; the fourth is not.
   lead back to a shared ledger (both from the review). Deciding and tokens are for a
   shared ledger and are ignored with a warning. Fork and Dependabot pull requests are skipped as before, and the
   shared ledger mode is unchanged, including not starting a comment on a pull request without trailers.
+- **Pilot tools: compaction at a fixed point, an identifier-only question, a contains column.** The boundary
+  brief is meant for compaction, and four pilots had no compaction sample: the largest lead prompt was 27.4k tokens
+  of a 100k window, and the window cannot go below 100,000. `--compact-pct` makes automatic compaction come
+  earlier, but the pilot task compacts only at 25% or below, where little is left to summarise, and since each arm
+  carries a different context (F a brief, C its progress files) one percentage would compact them at different
+  points and mix that difference into the comparison. `--force-compact` sends `/compact` at the same point of
+  every phase in every arm, and the event's `trigger: manual` keeps it a real boundary event, which the
+  registration requires for a sample. Both are built because only a paid smoke run can tell whether headless
+  `/compact` compacts; the owner chooses. The `discarded` question asked "and why?", which led arms A and C to
+  answer in sentences that contain the right signature and are scored wrong by the exact match; the pilot READMEs
+  recounted them by hand. The question now asks for the signature only (the next pilot registers it in an
+  Amendment). Counting an answer that contains the identifier stays a sensitivity column, not the registered
+  measure: changing the measure after four pilots would let the measure follow the results, and the contains
+  column moves only A and C (pilot 1: A 6 to 8, C 6 to 7, F 1 to 1), so it does not change the comparison. It
+  matches the identifier as a whole token, so `control-1` is not found in `control-12`. From the review: the
+  /compact call runs with the probe's cap and turn limit (a work call's cap would reserve USD 3 of the total budget
+  per phase), a /compact that emits no `compact_boundary` with trigger `manual` stops the run instead of passing as
+  a work call without a sample, and a phase's own automatic compactions are kept as `auto_compactions`, since the
+  forced boundary, being the last, is the phase's sample (with `--force-compact` the delayed column stays empty).

@@ -2,6 +2,9 @@
 
 ## Unreleased: code pack
 
+- `bench.boundary.run` takes `--force-compact` (send `/compact` after each phase's work call, in every arm) and
+  `--compact-pct N` (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`); the `discarded` probe asks for the failure signature
+  only; the report adds an "H1 Session answers (contains)" sensitivity column, recomputed from stored answers.
 - The GitHub Action runs without `database-url`: it keeps a ledger of that workflow run only, re-runs the checks
   committed at the merge-base (a notice when there are none), treats a pull request without trailers as one piece
   `pr-<number>` reported by its author, and says in the comment that there was no shared ledger. Before, it failed

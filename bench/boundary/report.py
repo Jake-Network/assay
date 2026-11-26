@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from . import probes as questions
 from .arms import ARMS
 
 
@@ -16,6 +17,13 @@ def rate(n: int, d: int) -> str:
 
 def probe_rate(probes: list[dict[str, Any]], *kinds: str) -> str:
     grades = [correct for probe in probes if probe["boundary"] in kinds for correct in probe["correct"].values()]
+    return rate(sum(grades), len(grades))
+
+
+def contains_rate(probes: list[dict[str, Any]], *kinds: str) -> str:
+    """probe_rate under probes.contains, recomputed from the stored expected and answers (older runs too)."""
+    grades = [correct for probe in probes if probe["boundary"] in kinds
+              for correct in questions.contains(probe["expected"], probe["answers"]).values()]
     return rate(sum(grades), len(grades))
 
 
@@ -36,10 +44,10 @@ def write(out: Path) -> Path:
     lines.extend([
         "Comparative totals include only task repetitions completed by every selected arm.", "",
         "| Arm | Matched trials | H1 Compaction answers | H1 Delayed compaction answers | H1 Session answers |"
-        " H2 False completions |"
+        " H1 Session answers (contains) | H2 False completions |"
         " H2 Weakened merges | H3 Repeated failures | H4 Cost USD | H4 Session tokens | H4 Wall seconds |"
         " H4 Peak lead tokens | H4 Probe cost USD | H6 Trusted stale | H6 Misflagged fresh |",
-        "|" + "---|" * 15,
+        "|" + "---|" * 16,
     ])
     if not matched:
         lines.extend(["", "No matched trials completed."])
@@ -54,6 +62,7 @@ def write(out: Path) -> Path:
         compact = probe_rate(probes, "compaction")
         delayed = probe_rate(probes, "delayed compaction")
         restart = probe_rate(probes, "fresh session", "resumed session")
+        restart_contains = contains_rate(probes, "fresh session", "resumed session")
         merged = sum(p["merged"] for p in phases)
         false_done = sum(p["false_done"] for p in phases)
         weakened = sum(p["weakened"] for p in phases)
@@ -66,12 +75,14 @@ def write(out: Path) -> Path:
         trusted_stale = sum(p["trusted_stale"] for p in actions)
         misflagged_fresh = sum(p["misflagged_fresh"] for p in actions)
         lines.append(f"| {arm} {config.label} | {len(rows)} | {compact} |"
-                     f" {delayed} | {restart} | {rate(false_done, merged)} | {weakened}/{merged} |"
+                     f" {delayed} | {restart} | {restart_contains} | {rate(false_done, merged)} | {weakened}/{merged} |"
                      f" {repeated} | {cost:.4f} | {tokens} | {seconds:.2f} | {peak} | {probe_cost:.4f} |"
                      f" {rate(trusted_stale, len(actions))} | {rate(misflagged_fresh, len(actions))} |")
     lines.extend([
         "", "H1 scores the five fixed questions against the task oracle. Arm A resumes the original session;"
-        " the other arms start a new one at each session boundary.",
+        " the other arms start a new one at each session boundary. The contains column is a sensitivity column"
+        " (an identifier answer counts when it contains the expected identifier); the registered measure is the"
+        " exact match.",
         "Compaction samples require a Claude Code `compact_boundary` event. The first invocation after the work"
         " call is the resume probe. A lead response between those events puts the sample in the delayed column.",
         "H4 totals include probe calls. Wall seconds cover completed trials end to end. Claude-mem worker spending"

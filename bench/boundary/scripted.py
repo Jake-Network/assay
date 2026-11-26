@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,7 @@ def capture(prepared: PreparedRun, out: Path, _wall_clock: int) -> None:
     phase = out.name == f"phase-{n:02d}"
     restart = out.name.endswith("-restart")
     action = out.name.endswith("-action")
+    compact_cmd = out.name.endswith("-compact-cmd")  # run.py --force-compact: the /compact call
     if phase:
         path = prepared.work / f"control-{n}.txt"
         path.write_text("bad" if arm == "A" else "checked plus change\n", encoding="utf-8")
@@ -87,6 +89,9 @@ def capture(prepared: PreparedRun, out: Path, _wall_clock: int) -> None:
     usage = {"input_tokens": 1600 + n, "output_tokens": 50}
     events: list[dict[str, Any]] = [{"type": "system", "subtype": "init"}]
     events.append({"type": "assistant", "message": {"usage": usage}})
+    if compact_cmd and not os.environ.get("BENCH_SCRIPTED_COMPACT_IGNORED"):  # tests: a CLI that ignores /compact
+        events.append({"type": "system", "subtype": "compact_boundary",
+                       "compact_metadata": {"trigger": "manual", "pre_tokens": 30_000}})
     if phase:
         events.insert(n, {"type": "system", "subtype": "compact_boundary",
                           "compact_metadata": {"trigger": "auto", "pre_tokens": 100_000}})

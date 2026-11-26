@@ -17,15 +17,21 @@ from bench.run import worker_counts
 FIXTURES = Path(__file__).parent / "fixtures" / "bench"
 
 
-def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
+def dry_run(tmp_path: Path, *flags: str) -> Path:
+    """A --dry run with a claude on PATH that fails if anything calls it; returns the output folder."""
     forbidden = tmp_path / "claude"
     forbidden.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
     forbidden.chmod(0o755)
     out = tmp_path / "dry"
-    cli = subprocess.run([sys.executable, "-m", "bench.boundary.run", "--dry", "--out", str(out)],
+    cli = subprocess.run([sys.executable, "-m", "bench.boundary.run", "--dry", "--out", str(out), *flags],
                          env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
                          capture_output=True, text=True, check=True, timeout=60)
     assert str(out / "report.md") in cli.stdout
+    return out
+
+
+def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
+    out = dry_run(tmp_path)
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "(DRY RUN)" in report
     for column in ("H1 Compaction answers", "H1 Session answers", "H2 False completions", "H2 Weakened merges",
@@ -63,6 +69,56 @@ def test_dry_pipeline_measures_every_hypothesis(tmp_path: Path) -> None:
                          for d in calls)
     # The scripted receipts are cumulative per session, as Claude Code's are; each call counts only its own tokens.
     assert all(1650 < call["tokens"] < 1700 for trial in data["trials"] for call in trial["calls"])
+
+
+def test_force_compact_compacts_every_arm_after_each_work_call(tmp_path: Path) -> None:
+    out = dry_run(tmp_path, "--force-compact", "--arms", "A,C,F")
+    data = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    assert data["force_compact"] is True and data["compact_pct"] is None
+    for trial in data["trials"]:
+        folder = out / "scripted" / f"{trial['arm']}-1"
+        phases = sorted(p.name for p in folder.glob("phase-??") if p.is_dir())
+        assert phases and all((folder / f"{p}-compact-cmd" / "command.json").is_file() for p in phases)
+        # the /compact call's manual boundary is the last one, with no lead turn after it: a compaction sample
+        assert [p["boundary"] for p in trial["probes"] if "compaction" in p["boundary"]] == ["compaction"] * len(phases)
+        assert all((folder / f"{p}-compact" / "score.json").is_file() for p in phases)
+        # the work call's own (automatic) boundary is kept as a count; the /compact call has the probe's limits
+        assert [p["auto_compactions"] for p in trial["phases"]] == [1] * len(phases)
+        cmd = json.loads((folder / "phase-01-compact-cmd" / "command.json").read_text(encoding="utf-8"))["cmd"]
+        assert cmd[cmd.index("--max-turns") + 1] == "8" and "--json-schema" not in cmd
+        assert [c["kind"] for c in trial["calls"]].count("compact") == len(phases)
+
+
+def test_force_compact_stops_when_the_cli_does_not_compact(tmp_path: Path) -> None:
+    """A headless /compact that the CLI takes as plain text must not pass as a work call with no sample."""
+    cli = subprocess.run([sys.executable, "-m", "bench.boundary.run", "--dry", "--force-compact", "--arms", "A",
+                          "--out", str(tmp_path / "dry")],
+                         env={**os.environ, "BENCH_SCRIPTED_COMPACT_IGNORED": "1"}, capture_output=True, text=True,
+                         timeout=60)
+    assert cli.returncode == 1 and "emitted no compact_boundary with trigger manual" in cli.stderr
+
+
+@pytest.mark.parametrize("pct", [None, 40])
+def test_compact_pct_is_set_only_when_given(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pct: int | None) -> None:
+    monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "7")  # the host's value never leaks into a run
+    args = argparse.Namespace(compact_window=100_000, compact_pct=pct, model="m", dry=True)
+    env = run.compile_env("A", tmp_path, args)
+    assert env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") == (None if pct is None else "40")
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "100000"
+
+
+def test_contains_counts_a_sentence_with_the_identifier_and_score_does_not() -> None:
+    expected = {"verified": "split-camel", "discarded": "unit:a1b2c3", "finding": "f-race", "stale": "no",
+                "fresh": "yes"}
+    answers = {"verified": "split-camel", "discarded": "It failed with unit:A1B2C3 because of a race",
+               "finding": "f-race-2 is open", "stale": "No", "fresh": "yes, it still applies"}
+    assert probes.score(expected, answers) == {"verified": True, "discarded": False, "finding": False,
+                                               "stale": True, "fresh": False}
+    assert probes.contains(expected, answers) == {"verified": True, "discarded": True, "finding": False,
+                                                  "stale": True, "fresh": False}  # stale and fresh stay exact
+    # a whole identifier only: f-race is not f-race-2, and a sentence may end right after it
+    assert probes.contains(expected, {**answers, "verified": "It was split-camel."})["verified"] is True
+    assert probes.contains(expected, None) == dict.fromkeys(probes.QUESTIONS, False)
 
 
 @pytest.mark.parametrize(("session_cost", "exceeded"), [(0.40, False), (0.41, True)])
