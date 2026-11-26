@@ -60,7 +60,7 @@ attempt is a commit of a piece judged by the declared checks ([code.md](code.md)
 | a discarded approach | an `observation` claim tagged `discarded` and `piece:<piece>`, with the failure signature |
 | an out-of-scope finding | an `observation` claim tagged `out-of-scope` |
 | a subagent report that cites no record | a `note` claim tagged `auto-captured` |
-| the verifier | the agent `rerun@<host>` (orchestrator); the hooks write as `hook` (harness) |
+| the verifier | the automatic re-run without a token: `rerun@<host>` (orchestrator), and its hooks write as `hook` (harness); under a token, the token's agent; a manual `check verify`: `--agent`/`BENCHBOOK_AGENT`, else `verifier@<host>` |
 
 ## Records
 

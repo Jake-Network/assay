@@ -11,8 +11,10 @@ gate applies to those runs as to runs started with `benchbook ar run`:
   `rerun_min_seeds` runs from `rerun_min_authors` authors. `benchbook ar init` already sets these; `gate on` sets a
   value that is missing or below what the gate needs (`replicates` at least 1, `rerun_min_authors` at least 2,
   `rerun_min_seeds` at least 2) and keeps stricter ones. A candidate can be verified only when `replicates + 1`
-  reaches `rerun_min_seeds`: with `replicates = 1` and `rerun_min_seeds = 3` nothing is, so set `replicates` to at
-  least `rerun_min_seeds - 1`. `gate on` also creates the project when a skill's checkout has none (without
+  reaches both `rerun_min_seeds` and `rerun_min_authors`: with `replicates = 1` and `rerun_min_seeds = 3` nothing
+  is, so set `replicates` to at least `rerun_min_seeds - 1`. A partition's first baseline is verified by calibration,
+  which re-runs it twice whatever `replicates` is: at most three runs, so `rerun_min_seeds` and `rerun_min_authors`
+  above 3 leave a new partition without a baseline. `gate on` does not check either limit. `gate on` also creates the project when a skill's checkout has none (without
   `program.benchbook.md`: the skill's own loop stays).
 - **An imported run is a first run.** It is recorded with replication number 0, whoever imports it. A keep that
   beats the verified best becomes a candidate, and other agents re-run its `train.py` with
@@ -35,7 +37,8 @@ gate applies to those runs as to runs started with `benchbook ar run`:
   checked; `gate on` prints whether the check is on (`time_budget_s` 0 turns it off).
 - **Idempotent.** Every record has a key from its own fields (pi: run number, timestamp, commit, metric, status;
   uditgoenka: iteration, timestamp, commit, metric, status; codex: run id and sequence number). Importing the same
-  log again, or another agent importing it, adds nothing (for the same `--hw`). `--hw` is required, as for results.tsv.
+  log again, or another agent importing it, adds nothing (for the same `--hw`). `--hw` is required, as for results.tsv,
+  and so is an agent name (`--agent` or `BENCHBOOK_AGENT`).
 - Rows that measure another metric (a pi segment started for something else, a codex run with another metric
   name or direction) are skipped and counted; `--metric NAME` names the project's metric when the log calls it
   differently. An import is refused while the importing agent holds a replication task (the run would be
@@ -51,7 +54,7 @@ every `log_experiment` to `.auto/log.jsonl` (older sessions: `autoresearch.jsonl
 
 ```bash
 benchbook ar gate on --from pi-autoresearch      # once; add program.benchbook.pi-autoresearch.md to .auto/prompt.md
-benchbook ar import --from pi-autoresearch .auto/log.jsonl --hw h100-80gb
+benchbook ar import --from pi-autoresearch .auto/log.jsonl --hw h100-80gb --agent gpu0-$(hostname)
 ```
 
 ## uditgoenka/autoresearch
@@ -65,7 +68,7 @@ subcommands write TSVs with other columns). The TSV records the metric's directi
 
 ```bash
 benchbook ar gate on --from uditgoenka           # once; add program.benchbook.uditgoenka.md to CLAUDE.md
-benchbook ar import --from uditgoenka autoresearch/loop-261121-0930/ --hw h100-80gb
+benchbook ar import --from uditgoenka autoresearch/loop-261121-0930/ --hw h100-80gb --agent gpu0-$(hostname)
 ```
 
 ## codex-autoresearch
@@ -77,5 +80,5 @@ guard failed), `crash` → error. Other events (stopped, resumed, blocked, compl
 
 ```bash
 benchbook ar gate on --from codex-autoresearch   # once; add program.benchbook.codex-autoresearch.md to AGENTS.md
-benchbook ar import --from codex-autoresearch autoresearch-results --hw h100-80gb
+benchbook ar import --from codex-autoresearch autoresearch-results --hw h100-80gb --agent gpu0-$(hostname)
 ```
