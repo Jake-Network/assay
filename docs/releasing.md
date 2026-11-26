@@ -113,9 +113,9 @@ real upload: it creates the PyPI project, and that version number is used for go
 pre-release only when asked for one or when the project has no final release.
 
 After the first release, the install lines that still say `uv tool install --from git+https://...` can use the
-PyPI name (`uv tool install benchbook`, `uvx benchbook`): `README.md`, `README.ko.md`, `docs/autoresearch.md`,
-`integrations/autoresearch/template/README.md` and the fix line of the PATH check (`check_path`) in
-`src/benchbook/cli/doctor.py`. Change them only once the package is on PyPI, or they point at nothing. The fix line
+PyPI name (`uv tool install benchbook`, `uvx benchbook`): `README.md`, `README.ko.md`, `docs/claude-code.md`,
+`docs/autoresearch.md`, `integrations/autoresearch/template/README.md`, `integrations/codex/README.md`,
+`integrations/cursor/README.md` and the fix line of the PATH check (`check_path`) in `src/benchbook/cli/doctor.py`. Change them only once the package is on PyPI, or they point at nothing. The fix line
 of the `hook cli` check (`check_hook_cli`) already says `uv tool install benchbook`, which fails until then.
 
 ## Phase 0 exit condition
