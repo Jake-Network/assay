@@ -62,8 +62,9 @@ class PieceState:
 def pieces(repo: Path, base: str, head: str, *, whole_as: str | None = None) -> tuple[list[Piece], list[str]]:
     """The pieces the commits in base..head complete, oldest first, and the trailer values skipped as unusable. A
     piece's commit is the last commit of the range carrying its trailer (`git log --topo-order` lists no commit
-    before its descendants, so the first one met is the last). With whole_as, a range without any usable trailer is
-    one piece of that name at head (the GitHub Action without a ledger passes pr-<number>)."""
+    before its descendants, so the first one met is the last). With whole_as, head is also a piece of that name when
+    no trailer names head's commit, so every pull request's head is re-run (the GitHub Action without a ledger
+    passes pr-<number>)."""
     from ..checks.declarations import PIECE
     from ..checks.gitrepo import resolve_commit, toplevel
 
@@ -91,10 +92,13 @@ def pieces(repo: Path, base: str, head: str, *, whole_as: str | None = None) -> 
                 skipped.append(raw[:200])
             elif raw not in seen:
                 seen[raw] = (i, j, sha.strip())
-    if not seen and whole_as is not None and commits:  # a range without commits completes nothing
-        return [Piece(whole_as, h)], skipped
     order = sorted(seen.items(), key=lambda kv: (-kv[1][0], kv[1][1]))
-    return [Piece(name, sha) for name, (_, _, sha) in order], skipped
+    found = [Piece(name, sha) for name, (_, _, sha) in order]
+    # whole_as: the head is re-run too when no trailer names it (a fix after the last trailered commit); a range
+    # without commits completes nothing
+    if whole_as is not None and commits and h not in {p.commit for p in found}:
+        found.append(Piece(whole_as, h))
+    return found, skipped
 
 
 # ---------------------------------------------------------------------------------------------------- the ledger

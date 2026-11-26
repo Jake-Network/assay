@@ -845,9 +845,11 @@ by hand, not a live session). Four are fixed; the fourth is not.
 - **The GitHub Action without a ledger.** Trying the action meant a shared Postgres, a secret and a commit trailer
   in every agent's commits; without them it failed or commented nothing. The part of benchbook that is worth having
   from CI alone, an independent re-run that also marks weakened tests, needs none of that. Without `database-url`
-  the action now creates a ledger for the workflow run and, when no commit has a trailer, treats the pull request as
-  one piece `pr-<number>` at its head, reported by its author (so the summary has a claim to show as verified or
-  claimed only). The checks come from the config committed at the merge-base only, as `check verify` reads them;
+  the action now creates a ledger for the workflow run and re-runs the pull request's head as one piece
+  `pr-<number>`, reported by its author, whenever no trailer names the head commit (so the summary has a claim to
+  show as verified or claimed only; a second review found that a head after the last trailered commit was not re-run
+  at all). Each invocation keeps its ledger in a folder of its own, and a run with nothing to re-run updates an
+  earlier comment instead of leaving its old verdict standing. The checks come from the config committed at the merge-base only, as `check verify` reads them;
   proposing them from the pull request's files or falling back to a ledger pin would let the pull request choose
   its own checks, so a repository without a committed config gets a notice instead. For the same reason init runs in
   an empty repository under `RUNNER_TEMP`, not in the checkout, where it would pin the pull request's config, which
